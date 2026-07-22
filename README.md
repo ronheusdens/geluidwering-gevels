@@ -31,6 +31,8 @@ Override server location: `BPPSERVER_ROOT=/path/to/bppServer ./start.sh`
 
 UI `:4173`, WebSocket `:18080` (defaults).
 
-## Secure deploy
+## Docs
 
-See [`client/docs/secure-deployment.md`](client/docs/secure-deployment.md) and [`scripts/apache2/acoustics-https.conf`](scripts/apache2/acoustics-https.conf).
+- Architecture (suite / schema / App1–App2): [`docs/architecture/`](docs/architecture/)
+- Secure deploy: [`client/docs/secure-deployment.md`](client/docs/secure-deployment.md)
+- Apache template: [`scripts/apache2/acoustics-https.conf`](scripts/apache2/acoustics-https.conf)
