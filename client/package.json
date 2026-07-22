@@ -1,0 +1,17 @@
+{
+  "name": "acoustics-p0-client",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/app.ts src/admin.ts src/engineer.ts src/floormap.ts src/materials.ts src/ga.ts --bundle --outdir=public --format=esm --target=es2020",
+    "serve": "node serve.mjs",
+    "start": "npm run build && node serve.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.16.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

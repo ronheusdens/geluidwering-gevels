@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+   <title>Versie V4.3</title>
+   <meta name="generator" content="Help &amp; Manual" />
+   <meta name="keywords" content="" />
+   <meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1" />
+   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+   
+   <link type="text/css" href="default.css" rel="stylesheet" />
+   <style type="text/css">
+     body { margin: 0px; background: #FFFFFF; }
+   </style>
+
+   <script type="text/javascript" src="jquery.js"></script>
+   <script type="text/javascript" src="helpman_settings.js"></script>
+   <script type="text/javascript" src="helpman_topicinit.js"></script>
+
+
+</head>
+<body>
+
+
+<table style="width:100%; border:none; border-spacing:0px; padding:5px; background:#C0C0C0">
+  <tr style="vertical-align:middle">
+    <td style="text-align:left">
+      <h1 class="p_Heading1"><img alt="GL_64" style="margin:0;width:0.6667in;height:0.6667in;border:none" src="gl_64.png"/> &nbsp; &nbsp; &nbsp; &nbsp;<span class="f_Heading1" style="font-size: 24pt; font-weight: normal; color: #0000ff;">Versie V4.3</span></h1>
+
+    </td>
+    <td style="text-align:right">
+     <a href="inleiding2.htm">Top</a>&nbsp;
+     <a href="v4_4.htm">Previous</a>&nbsp;
+     <a href="v4_2.htm">Next</a>
+    </td>
+  </tr>
+</table>
+
+
+<!-- Placeholder for topic body. -->
+<table style="width:100%;border:none;border-spacing:0px"><tr style="vertical-align:top"><td style="text-align:left;padding:5px">
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold; color: #00007f;">VERSIE 4.31</span></p>
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold;">Fictief 'open gat'</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">De materialencatalogus is uitgebreid met het materiaal &quot;D03142 - Ventilatie RMG2012&quot;. Dit materiaal kan bij een vlak worden gebruikt, waarna u de Qvent erbij invult (voorheen werd de Qvent in de materialencatalogus ingevuld).</span></p>
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold;">Bugfix</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">De RAs en Lbi werden bij een materiaal van het type Ventilatie RMG2012 niet altijd correct berekend. Bij rekenmethode HRGG werd het fictieve open gat in de berekening niet als een ventilatievoorziening beschouwd.</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">Bij rekenmethode HRGG werd de correctiewaarde bij een vlakdeel niet meer in de berekening opgenomen.</span></p>
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold; color: #00007f;">VERSIE 4.30</span></p>
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold;">Fictief 'open gat'</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">In de RMG2012 wordt aangegeven hoe gerekend moet worden met een fictief ‘open gat’ in de gevel bij de bestaande situatie van gevelisolatieprojecten (bijv. saneringsprojecten). Eerst werd gerekend met een open gat (van qv * 50% * 0,0012 m2 en een RA = 0 dB(A)), maar nu moet worden gerekend met een Dn;e (40 – 10 log qv). Om dit te bewerkstelligen is een ventilatievoorziening toegevoegd, waarvoor bij een project een materiaal in de catalogus kan worden aangemaakt: </span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-style: italic;">rubriek 6.7 - Ventilatievoorziening RMG2012</span></p>
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold;">Bugfix</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">De toets bij &quot;Onderwijsfunctie Wgh&quot; was niet juist. Er is alleen een eis voor verblijfsruimte, niet voor verblijfsgebied.</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">Bij rekenmethode HRGG verkort werden de binnenniveaus in de boom niet direct bijgewerkt wanneer de geluidsbelasting werd aangepast.</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">De spectrumwaarden voor Cpositie werden niet altijd uit het hulpformulier overgenomen.</span></p>
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold;">Overige wijzigingen</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">De materialencatalogus is ge&uuml;pdatet met actuele gegevens van materialen. Voor de Sonair van Innosource zijn nieuwe producten aangemaakt met een lagere ventilatiecapaciteit waarbij aan de installatiegeluidseisen wordt voldaan. De oude producten zijn op ‘niet leverbaar’ gezet.</span></p>
+<p class="p_Normal">&nbsp;</p>
+
+</td></tr></table>
+
+</body>
+</html>

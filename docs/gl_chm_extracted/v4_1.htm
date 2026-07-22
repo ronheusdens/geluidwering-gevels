@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+   <title>Versie V4.1</title>
+   <meta name="generator" content="Help &amp; Manual" />
+   <meta name="keywords" content="" />
+   <meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1" />
+   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+   
+   <link type="text/css" href="default.css" rel="stylesheet" />
+   <style type="text/css">
+     body { margin: 0px; background: #FFFFFF; }
+   </style>
+
+   <script type="text/javascript" src="jquery.js"></script>
+   <script type="text/javascript" src="helpman_settings.js"></script>
+   <script type="text/javascript" src="helpman_topicinit.js"></script>
+
+
+</head>
+<body>
+
+
+<table style="width:100%; border:none; border-spacing:0px; padding:5px; background:#C0C0C0">
+  <tr style="vertical-align:middle">
+    <td style="text-align:left">
+      <h1 class="p_Heading1"><img alt="GL_64" style="margin:0;width:0.6667in;height:0.6667in;border:none" src="gl_64.png"/> &nbsp; &nbsp; &nbsp; &nbsp;<span class="f_Heading1" style="font-size: 24pt; font-weight: normal; color: #0000ff;">Versie V4.1</span></h1>
+
+    </td>
+    <td style="text-align:right">
+     <a href="inleiding2.htm">Top</a>&nbsp;
+     <a href="v4_2.htm">Previous</a>&nbsp;
+     <a href="v4_0.htm">Next</a>
+    </td>
+  </tr>
+</table>
+
+
+<!-- Placeholder for topic body. -->
+<table style="width:100%;border:none;border-spacing:0px"><tr style="vertical-align:top"><td style="text-align:left;padding:5px">
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold; color: #00007f;">VERSIE 4.14</span></p>
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold;">Bugfix</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">Probleem opgelost met Cpositie bij het wijzigen van een suskast in een ander materiaal (zoals glas). Cpositie is een correctie welke van toepassing is op ventilatievoorzieningen, zoals suskasten. Wanneer een vlak een vlakdeel bevat van het type suskast, waarvoor een Cpositie is opgegeven, en dit vlakdeel wordt gewijzigd in (bijvoorbeeld) glas, blijft de Cpositie behouden. De Cpositie wordt dan tevens in de berekening meegenomen, wat foutieve resultaten kan opleveren. Op de printuitvoer is deze correctie wel zichtbaar, maar op het scherm niet.</span></p>
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold; color: #00007f;">VERSIE 4.13</span></p>
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold;">Bugfix</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">Bij tussentijds opslaan van een project wordt een backupbestand met de naam &lt;projectnaam&gt;.BAK aangemaakt. Verdere wijzigingen in het project werden vervolgens echter alleen in het backupbestand opgeslagen, en niet meer in het oorspronkelijke project. Bij het afsluiten van GL wordt het backupbestand verwijderd, waarna alle wijzigingen ook verloren gingen.</span></p>
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold; color: #00007f;">VERSIE 4.12</span></p>
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold;">Algemeen</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">Bij het wisselen van de rekenmethode wordt voor ventilatievoorzieningen altijd een correctie van +1,5 dB gehanteerd, omdat bij ventilatievoorzieningen altijd sprake is van een negatieve correctie. Het invullen van +1.5 dB betekent dat er 1.5 dB van de geluidsisolatiewaarde wordt afgehaald. Voor de overige rubrieken (vlakken) wordt de ingevulde correctie behouden.</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">Bij rekenmethoden HRGG verkort, HRGG uitgebreid en GGG'97 dienen de overige correcties op materialen en ventilatievoorzieningen nu positief te worden ingevuld om een lagere geluidsisolatie te verkrijgen (dit was in oudere GL-versies al het geval bij rekenmethode NPR 5272). Oude projecten welke met deze rekenmethoden zijn aangemaakt, zullen derhalve worden ge&uuml;pdatet: negatieve correcties worden positief en vice versa. U dient deze projecten dus goed te controleren na de update!</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">Wanneer een project wordt geopend dat met een oudere versie van GL was aangemaakt, wordt eerst een kopie van het project gemaakt. De kopie krijgt de naam &quot;&lt;projectnaam&gt;_412.gl&quot;. Het oorspronkelijke project blijft in de oorspronkelijke GL-versie te openen.</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">GL bewaart om de 10 minuten een backup van het huidig geopende project. De backup heeft de naam &quot;&lt;projectnaam&gt;.BAK&quot;. Mocht het programma onverwachts sluiten, dan kunnen de laatste wijzigingen worden teruggezet door de backup te hernoemen naar &quot;&lt;projectnaam&gt;.gl&quot;. Wanneer het programma door de gebruiker wordt afgesloten, wordt het backup bestand weer verwijderd. Indien een nieuw project na 10 minuten nog niet is opgeslagen, wordt de vraag gesteld of het alsnog moet worden opgeslagen.</span></p>
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold;">Catalogus</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">Nieuwe rubriek toegevoegd: &quot;2.10 Drievoudig glas&quot;.</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">De materialencatalogus is ge&uuml;pdatet met actuele gegevens van materialen.</span></p>
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold; color: #00007f;">VERSIE 4.10</span></p>
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold;">Algemeen</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">Projecten welke in GL V4.01 of ouder zijn aangemaakt worden ge&uuml;pdatet. Wanneer een project eenmaal door GL V4.10 is ge&uuml;pdatet is deze niet meer in een oudere GL-versie te openen.</span></p>
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold;">Subsidiemodule</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">De toetsbedragen voor de subsidiemodule zijn aangepast voor 2010.</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">Op ruimteniveau kan met behulp van een vinkje worden aangegeven of het oppervlak van een hellend dak handmatig dient te worden ingevuld, danwel door het programma automatisch moet worden bepaald. </span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">Bij het updaten van oudere projecten wordt het oppervlak automatisch bepaald.</span></p>
+<p class="p_Normal">&nbsp;</p>
+<p class="p_Normal"><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold;">Catalogus</span></p>
+<p class="p_Normal" style="text-indent: 0; padding-left: 0.1354in; margin-left: 0;"><span style="display:inline-block;width:0.1354in;margin-left:-0.1354in;font-size:10pt;font-family:'Symbol';font-style:normal;color:#000000;text-decoration:none;">&#183;</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">De materialencatalogus is ge&uuml;pdatet met actuele gegevens van materialen.</span></p>
+<p class="p_Normal">&nbsp;</p>
+
+</td></tr></table>
+
+</body>
+</html>

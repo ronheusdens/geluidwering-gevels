@@ -1,0 +1,558 @@
+import { loadAuth, storeAuth as persistAuth, syncSessionCookie } from "./auth-store";
+import { resolveBppWsUrl } from "./ws-url";
+
+type Envelope = {
+  v: number;
+  type: string;
+  request_id: string;
+  session_id?: string;
+  payload?: Record<string, unknown>;
+};
+
+type AuthInfo = {
+  token: string;
+  username: string;
+  display_name: string;
+};
+
+type Material = {
+  material_id: string;
+  catalog_id: string;
+  material_no: number | string;
+  master_category: string;
+  name: string;
+  category: string;
+  thickness_mm: string;
+  weight_kg_m2: string;
+  ra_dba: string;
+  source_ref?: string;
+  glass_t1_mm?: string;
+  glass_cavity_mm?: string;
+  glass_t2_mm?: string;
+  spectrum_ok: string;
+  r_63_hz: string;
+  r_125_hz: string;
+  r_250_hz: string;
+  r_500_hz: string;
+  r_1000_hz: string;
+  r_2000_hz: string;
+  source: string;
+};
+
+const BPP_WS = resolveBppWsUrl();
+const AUTH_KEY = "acoustics_admin_auth";
+
+const connBarEl = document.getElementById("mat-conn-bar") as HTMLElement;
+const connLedEl = document.getElementById("mat-conn-led") as HTMLElement;
+const connStatusEl = document.getElementById("mat-conn-status") as HTMLElement;
+const loginPanelEl = document.getElementById("mat-login-panel") as HTMLElement;
+const loginForm = document.getElementById("mat-login-form") as HTMLFormElement;
+const loginBtn = document.getElementById("mat-login-btn") as HTMLButtonElement;
+const panelEl = document.getElementById("mat-panel") as HTMLElement;
+const userLabelEl = document.getElementById("mat-user-label") as HTMLElement;
+const logoutBtn = document.getElementById("mat-logout-btn") as HTMLButtonElement;
+const filterForm = document.getElementById("mat-filter-form") as HTMLFormElement;
+const qEl = document.getElementById("mat-q") as HTMLInputElement;
+const categoryEl = document.getElementById("mat-category") as HTMLSelectElement;
+const pagerLabelEl = document.getElementById("mat-pager-label") as HTMLElement;
+const prevBtn = document.getElementById("mat-prev-btn") as HTMLButtonElement;
+const nextBtn = document.getElementById("mat-next-btn") as HTMLButtonElement;
+const newBtn = document.getElementById("mat-new-btn") as HTMLButtonElement;
+const listboxEl = document.getElementById("mat-listbox") as HTMLElement;
+const tbodyEl = document.getElementById("mat-tbody") as HTMLTableSectionElement;
+const editorTitleEl = document.getElementById("mat-editor-title") as HTMLElement;
+const editorForm = document.getElementById("mat-editor-form") as HTMLFormElement;
+const idEl = document.getElementById("mat-id") as HTMLInputElement;
+const catalogIdEl = document.getElementById("mat-catalog-id") as HTMLInputElement;
+const noEl = document.getElementById("mat-no") as HTMLInputElement;
+const masterEl = document.getElementById("mat-master") as HTMLInputElement;
+const nameEl = document.getElementById("mat-name") as HTMLInputElement;
+const catEl = document.getElementById("mat-cat") as HTMLInputElement;
+const sourceRefEl = document.getElementById("mat-source-ref") as HTMLInputElement;
+const sourceEl = document.getElementById("mat-source") as HTMLInputElement;
+const spectrumOkEl = document.getElementById("mat-spectrum-ok") as HTMLInputElement;
+const thickEl = document.getElementById("mat-thick") as HTMLInputElement;
+const weightEl = document.getElementById("mat-weight") as HTMLInputElement;
+const raEl = document.getElementById("mat-ra") as HTMLInputElement;
+const t1El = document.getElementById("mat-t1") as HTMLInputElement;
+const cavEl = document.getElementById("mat-cav") as HTMLInputElement;
+const t2El = document.getElementById("mat-t2") as HTMLInputElement;
+const r63El = document.getElementById("mat-r63") as HTMLInputElement;
+const r125El = document.getElementById("mat-r125") as HTMLInputElement;
+const r250El = document.getElementById("mat-r250") as HTMLInputElement;
+const r500El = document.getElementById("mat-r500") as HTMLInputElement;
+const r1000El = document.getElementById("mat-r1000") as HTMLInputElement;
+const r2000El = document.getElementById("mat-r2000") as HTMLInputElement;
+const saveBtn = document.getElementById("mat-save-btn") as HTMLButtonElement;
+const deleteBtn = document.getElementById("mat-delete-btn") as HTMLButtonElement;
+const clearBtn = document.getElementById("mat-clear-btn") as HTMLButtonElement;
+
+let ws: WebSocket | null = null;
+let sessionId: string | null = null;
+let auth: AuthInfo | null = null;
+let reqCounter = 0;
+let offset = 0;
+let total = 0;
+let selectedId: string | null = null;
+let listRows: Material[] = [];
+const PAGE_SIZE = 10;
+const pending = new Map<string, { resolve: (env: Envelope) => void; reject: (err: Error) => void; want: string }>();
+
+function setStatus(text: string, kind: "busy" | "ok" | "err" = "busy"): void {
+  connStatusEl.textContent = text;
+  connBarEl.classList.remove("ok", "err", "busy", "status");
+  connBarEl.classList.add("status", kind);
+}
+
+function setConnLed(connected: boolean): void {
+  connLedEl.classList.toggle("connected", connected);
+  connLedEl.classList.toggle("disconnected", !connected);
+}
+
+function nextRequestId(prefix: string): string {
+  reqCounter += 1;
+  return `${prefix}_${reqCounter}_${Date.now()}`;
+}
+
+function storeAuth(info: AuthInfo | null): void {
+  persistAuth(AUTH_KEY, info);
+  void syncSessionCookie(info?.token ?? null);
+}
+
+function loadStoredAuth(): AuthInfo | null {
+  return loadAuth(AUTH_KEY);
+}
+
+function showLogin(): void {
+  auth = null;
+  storeAuth(null);
+  loginPanelEl.classList.remove("hidden");
+  panelEl.classList.add("hidden");
+}
+
+function showAdmin(info: AuthInfo): void {
+  auth = info;
+  storeAuth(info);
+  loginPanelEl.classList.add("hidden");
+  panelEl.classList.remove("hidden");
+  userLabelEl.textContent = `Signed in as ${info.display_name || info.username}`;
+}
+
+function send(type: string, payload: Record<string, unknown>, wantType: string): Promise<Envelope> {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    return Promise.reject(new Error("WebSocket not open"));
+  }
+  const request_id = nextRequestId(type.replace(".", "_"));
+  const env: Envelope = { v: 1, type, request_id, payload };
+  if (sessionId && type !== "session.open") env.session_id = sessionId;
+  return new Promise((resolve, reject) => {
+    pending.set(request_id, { resolve, reject, want: wantType });
+    ws!.send(JSON.stringify(env));
+  });
+}
+
+function onMessage(raw: string): void {
+  let env: Envelope;
+  try {
+    env = JSON.parse(raw) as Envelope;
+  } catch {
+    return;
+  }
+  if (env.type === "session.opened") {
+    const sid =
+      (typeof env.session_id === "string" && env.session_id) ||
+      (typeof env.payload?.session_id === "string" ? env.payload.session_id : null);
+    if (sid) sessionId = sid;
+  }
+  if (env.type === "error") {
+    const waiter = pending.get(env.request_id);
+    if (waiter) {
+      pending.delete(env.request_id);
+      waiter.reject(new Error(JSON.stringify(env.payload ?? env)));
+    }
+    return;
+  }
+  const waiter = pending.get(env.request_id);
+  if (!waiter) return;
+  if (env.type === waiter.want || env.type.endsWith(".completed") || env.type === "exec.completed") {
+    if (env.type === "invoke.accepted" || env.type === "exec.accepted") return;
+    pending.delete(env.request_id);
+    waiter.resolve(env);
+  }
+}
+
+async function invokeString(target: string, args: unknown[]): Promise<string> {
+  const inv = await send("invoke.request", { target_kind: "procedure", target, args }, "invoke.completed");
+  const ret = inv.payload?.return;
+  if (typeof ret !== "string") throw new Error(`Unexpected return from ${target}: ${JSON.stringify(inv.payload)}`);
+  return ret;
+}
+
+function esc(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function clearEditor(): void {
+  selectedId = null;
+  highlightSelection();
+  idEl.value = "";
+  catalogIdEl.value = "";
+  noEl.value = "";
+  masterEl.value = "Elementen";
+  nameEl.value = "";
+  catEl.value = "";
+  sourceRefEl.value = "";
+  sourceEl.value = "catalogusGG.pdf";
+  spectrumOkEl.checked = true;
+  thickEl.value = "";
+  weightEl.value = "";
+  raEl.value = "";
+  t1El.value = "";
+  cavEl.value = "";
+  t2El.value = "";
+  r63El.value = "";
+  r125El.value = "";
+  r250El.value = "";
+  r500El.value = "";
+  r1000El.value = "";
+  r2000El.value = "";
+  editorTitleEl.textContent = "New material";
+  deleteBtn.disabled = true;
+}
+
+function fillEditor(m: Material): void {
+  selectedId = m.material_id || null;
+  idEl.value = m.material_id || "";
+  catalogIdEl.value = m.catalog_id || "";
+  noEl.value = m.material_no === "" || m.material_no == null ? "" : String(m.material_no);
+  masterEl.value = m.master_category || "";
+  nameEl.value = m.name || "";
+  catEl.value = m.category || "";
+  sourceRefEl.value = m.source_ref || "";
+  sourceEl.value = m.source || "catalogusGG.pdf";
+  spectrumOkEl.checked = m.spectrum_ok === "true" || m.spectrum_ok === "t";
+  thickEl.value = m.thickness_mm || "";
+  weightEl.value = m.weight_kg_m2 || "";
+  raEl.value = m.ra_dba || "";
+  t1El.value = m.glass_t1_mm || "";
+  cavEl.value = m.glass_cavity_mm || "";
+  t2El.value = m.glass_t2_mm || "";
+  r63El.value = m.r_63_hz || "";
+  r125El.value = m.r_125_hz || "";
+  r250El.value = m.r_250_hz || "";
+  r500El.value = m.r_500_hz || "";
+  r1000El.value = m.r_1000_hz || "";
+  r2000El.value = m.r_2000_hz || "";
+  editorTitleEl.textContent = m.material_id ? `Edit · ${m.catalog_id || ""} · ${m.name}` : "New material";
+  deleteBtn.disabled = !m.material_id;
+  highlightSelection();
+}
+
+function highlightSelection(): void {
+  for (const tr of tbodyEl.querySelectorAll<HTMLTableRowElement>("tr[data-id]")) {
+    const on = !!selectedId && tr.dataset.id === selectedId;
+    tr.classList.toggle("selected", on);
+    tr.setAttribute("aria-selected", on ? "true" : "false");
+    if (on) tr.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function limit(): number {
+  return PAGE_SIZE;
+}
+
+function updatePager(): void {
+  const lim = limit();
+  const from = total === 0 ? 0 : offset + 1;
+  const to = Math.min(offset + lim, total);
+  pagerLabelEl.textContent = total === 0 ? "No materials match." : `Showing ${from}–${to} of ${total}`;
+  prevBtn.disabled = offset <= 0;
+  nextBtn.disabled = offset + lim >= total;
+}
+
+function selectFromList(id: string): void {
+  const row = listRows.find((m) => m.material_id === id);
+  if (!row) return;
+  fillEditor(row);
+  setStatus(`Selected ${row.name}`, "ok");
+  listboxEl.focus({ preventScroll: true });
+}
+
+function moveSelection(delta: number): void {
+  if (listRows.length === 0) return;
+  const idx = selectedId ? listRows.findIndex((m) => m.material_id === selectedId) : -1;
+  let next = idx + delta;
+  if (idx < 0) next = delta > 0 ? 0 : listRows.length - 1;
+  if (next < 0) next = 0;
+  if (next >= listRows.length) next = listRows.length - 1;
+  const row = listRows[next];
+  if (row) selectFromList(row.material_id);
+}
+
+async function loadList(preferId?: string | null): Promise<void> {
+  if (!auth?.token) return;
+  const lim = limit();
+  const ret = await invokeString("API_AdminListMaterials", [
+    auth.token,
+    qEl.value.trim(),
+    categoryEl.value,
+    String(lim),
+    String(offset),
+  ]);
+  if (ret.startsWith("ERROR")) {
+    setStatus(ret, "err");
+    if (ret.includes("login") || ret.includes("admin")) showLogin();
+    return;
+  }
+  const parsed = JSON.parse(ret) as { total: number; materials: Material[] };
+  total = Number(parsed.total) || 0;
+  listRows = parsed.materials ?? [];
+  tbodyEl.innerHTML = listRows
+    .map(
+      (m) => `
+      <tr data-id="${esc(m.material_id)}" role="option" tabindex="-1">
+        <td>${esc(m.catalog_id || "")}</td>
+        <td>${esc(m.master_category || "")}</td>
+        <td class="mat-name-cell">${esc(m.name)}</td>
+        <td>${esc(m.thickness_mm || "")}</td>
+        <td>${esc(m.weight_kg_m2 || "")}</td>
+        <td>${esc(m.ra_dba || "")}</td>
+        <td>${esc(m.r_63_hz || "")}</td>
+        <td>${esc(m.r_125_hz || "")}</td>
+        <td>${esc(m.r_250_hz || "")}</td>
+        <td>${esc(m.r_500_hz || "")}</td>
+        <td>${esc(m.r_1000_hz || "")}</td>
+        <td>${esc(m.r_2000_hz || "")}</td>
+      </tr>`,
+    )
+    .join("");
+  updatePager();
+
+  const want = preferId ?? selectedId;
+  const pick =
+    (want && listRows.find((m) => m.material_id === want)) || listRows[0] || null;
+  if (pick) {
+    fillEditor(pick);
+    setStatus(`Loaded ${listRows.length} · ${pick.name}`, "ok");
+  } else {
+    clearEditor();
+    setStatus(total === 0 ? "No materials match" : `Loaded ${listRows.length} materials`, "ok");
+  }
+}
+
+async function bootstrapSession(): Promise<void> {
+  setStatus(`Connecting to ${BPP_WS}…`, "busy");
+  ws = new WebSocket(BPP_WS);
+  setConnLed(false);
+  await new Promise<void>((resolve, reject) => {
+    const t = window.setTimeout(() => reject(new Error("WebSocket connect timeout")), 8000);
+    ws!.onopen = () => {
+      window.clearTimeout(t);
+      setConnLed(true);
+      resolve();
+    };
+    ws!.onerror = () => {
+      window.clearTimeout(t);
+      setConnLed(false);
+      reject(new Error("WebSocket connection failed — is bppServer running on port 18080?"));
+    };
+  });
+  ws.onmessage = (ev) => onMessage(String(ev.data));
+  ws.onclose = () => {
+    setConnLed(false);
+    setStatus("Disconnected from bppServer", "err");
+  };
+
+  await send("session.open", { client_name: "acoustics-materials-web", client_version: "0.2.12" }, "session.opened");
+  await send("exec.request", { code: 'INCLUDE "fixtures/acoustics/shared_building_api.basicpp"\n' }, "exec.completed");
+  const bootRet = await invokeString("API_Bootstrap", []);
+  if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap failed: ${bootRet}`);
+  setStatus(`Connected · session ${sessionId ?? "?"} · Postgres ready`, "ok");
+
+  const stored = loadStoredAuth();
+  if (stored?.token) {
+    const validated = await invokeString("API_ValidateSession", [stored.token]);
+    if (!validated.startsWith("ERROR")) {
+      const info = JSON.parse(validated) as AuthInfo;
+      if (info.username === "admin") {
+        showAdmin({ token: stored.token, username: info.username, display_name: info.display_name });
+        await loadList();
+        return;
+      }
+    }
+  }
+  showLogin();
+}
+
+loginForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  loginBtn.disabled = true;
+  setStatus("Signing in…", "busy");
+  try {
+    const fd = new FormData(loginForm);
+    const username = String(fd.get("username") ?? "").trim();
+    const password = String(fd.get("password") ?? "");
+    const ret = await invokeString("API_Login", [username, password]);
+    if (ret.startsWith("ERROR")) {
+      setStatus(ret, "err");
+      return;
+    }
+    const info = JSON.parse(ret) as AuthInfo;
+    if (info.username !== "admin") {
+      setStatus("Material editor is restricted to user 'admin'", "err");
+      return;
+    }
+    showAdmin(info);
+    offset = 0;
+    await loadList();
+    setStatus("Admin signed in", "ok");
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+  } finally {
+    loginBtn.disabled = false;
+  }
+});
+
+logoutBtn.addEventListener("click", async () => {
+  try {
+    if (auth?.token) await invokeString("API_Logout", [auth.token]);
+  } catch {
+    /* ignore */
+  }
+  showLogin();
+  setStatus("Signed out", "ok");
+});
+
+filterForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  offset = 0;
+  try {
+    await loadList();
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+  }
+});
+
+prevBtn.addEventListener("click", async () => {
+  offset = Math.max(0, offset - limit());
+  selectedId = null;
+  await loadList();
+});
+
+nextBtn.addEventListener("click", async () => {
+  offset = offset + limit();
+  selectedId = null;
+  await loadList();
+});
+
+newBtn.addEventListener("click", () => {
+  clearEditor();
+  nameEl.focus();
+});
+
+clearBtn.addEventListener("click", () => clearEditor());
+
+tbodyEl.addEventListener("click", (ev) => {
+  const tr = (ev.target as HTMLElement).closest("tr[data-id]");
+  if (!tr) return;
+  selectFromList(tr.getAttribute("data-id") || "");
+});
+
+listboxEl.addEventListener("keydown", (ev) => {
+  if (ev.key === "ArrowDown") {
+    ev.preventDefault();
+    moveSelection(1);
+    return;
+  }
+  if (ev.key === "ArrowUp") {
+    ev.preventDefault();
+    moveSelection(-1);
+    return;
+  }
+  if (ev.key === "Home") {
+    ev.preventDefault();
+    if (listRows[0]) selectFromList(listRows[0].material_id);
+    return;
+  }
+  if (ev.key === "End") {
+    ev.preventDefault();
+    const last = listRows[listRows.length - 1];
+    if (last) selectFromList(last.material_id);
+    return;
+  }
+  if (ev.key === "Enter" || ev.key === " ") {
+    ev.preventDefault();
+    if (selectedId) selectFromList(selectedId);
+    else if (listRows[0]) selectFromList(listRows[0].material_id);
+  }
+});
+
+editorForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  if (!auth?.token) return;
+  saveBtn.disabled = true;
+  setStatus("Saving material…", "busy");
+  try {
+    const ret = await invokeString("API_AdminSaveMaterial", [
+      auth.token,
+      idEl.value.trim(),
+      catalogIdEl.value.trim(),
+      masterEl.value.trim(),
+      noEl.value.trim(),
+      nameEl.value.trim(),
+      catEl.value.trim(),
+      thickEl.value.trim(),
+      weightEl.value.trim(),
+      raEl.value.trim(),
+      sourceRefEl.value.trim(),
+      spectrumOkEl.checked ? "true" : "false",
+      r63El.value.trim(),
+      r125El.value.trim(),
+      r250El.value.trim(),
+      r500El.value.trim(),
+      r1000El.value.trim(),
+      r2000El.value.trim(),
+      sourceEl.value.trim() || "catalogusGG.pdf",
+    ]);
+    if (ret.startsWith("ERROR")) {
+      setStatus(ret, "err");
+      return;
+    }
+    const saved = JSON.parse(ret) as { material_id: string; created: boolean };
+    setStatus(saved.created ? "Material created" : "Material updated", "ok");
+    await loadList(saved.material_id || null);
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+  } finally {
+    saveBtn.disabled = false;
+  }
+});
+
+deleteBtn.addEventListener("click", async () => {
+  if (!auth?.token || !idEl.value) return;
+  if (!window.confirm(`Delete material “${nameEl.value || idEl.value}”?`)) return;
+  deleteBtn.disabled = true;
+  setStatus("Deleting…", "busy");
+  try {
+    const ret = await invokeString("API_AdminDeleteMaterial", [auth.token, idEl.value]);
+    if (ret.startsWith("ERROR")) {
+      setStatus(ret, "err");
+      return;
+    }
+    selectedId = null;
+    await loadList();
+    setStatus("Material deleted", "ok");
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+  } finally {
+    deleteBtn.disabled = !idEl.value;
+  }
+});
+
+bootstrapSession().catch((err) => {
+  setStatus(err instanceof Error ? err.message : String(err), "err");
+});

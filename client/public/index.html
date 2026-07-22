@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Acoustics P0 — Login</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="page">
+    <header class="header">
+      <p class="eyebrow">Acoustics calculation service</p>
+      <h1 id="page-title">Sign in</h1>
+      <p class="lede" id="page-lede">Log in with your service credentials to manage acoustics projects.</p>
+    </header>
+
+    <section class="panel conn-bar" id="conn-bar" aria-live="polite">
+      <span class="conn-led disconnected" id="conn-led" aria-hidden="true"></span>
+      <span id="conn-status">Connecting…</span>
+    </section>
+
+    <section id="login-panel" class="panel">
+      <nav class="auth-tabs" role="tablist" aria-label="Authentication">
+        <button type="button" id="tab-signin" class="auth-tab active" role="tab" aria-selected="true">Sign in</button>
+        <button type="button" id="tab-register" class="auth-tab" role="tab" aria-selected="false">Request access</button>
+      </nav>
+
+      <form id="login-form" class="form auth-pane" novalidate>
+        <fieldset>
+          <legend>Service login</legend>
+          <label>Username <input name="username" required autocomplete="username" value="ronheusdens" /></label>
+          <label>Password <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
+        </fieldset>
+        <div class="actions">
+          <button type="submit" id="login-btn">Sign in</button>
+        </div>
+        <p class="hint">Existing accounts: <code>ronheusdens</code> / <code>demo</code> · <code>demo</code> / <code>demo</code></p>
+      </form>
+
+      <form id="register-form" class="form auth-pane hidden" novalidate>
+        <fieldset>
+          <legend>Request service access</legend>
+          <label>Username <input name="username" required autocomplete="username" pattern="[a-zA-Z0-9._-]{3,32}" title="3–32 letters, numbers, . _ -" /></label>
+          <label>Email <input name="email" type="email" required autocomplete="email" /></label>
+          <label>Display name <input name="display_name" autocomplete="name" placeholder="Optional" /></label>
+        </fieldset>
+        <div class="actions">
+          <button type="submit" id="register-btn">Request access</button>
+        </div>
+        <p class="hint">An access password will be issued for your first login. P0 shows it here; production sends it by email.</p>
+      </form>
+
+      <section id="register-result" class="panel register-result hidden" aria-live="polite">
+        <h2>Access granted</h2>
+        <p id="register-message"></p>
+        <p class="access-pw">Access password: <code id="access-password"></code></p>
+        <p class="hint">Sign in with this password, then change it under <strong>Profile</strong>.</p>
+        <button type="button" id="goto-signin-btn" class="secondary">Go to sign in</button>
+      </section>
+    </section>
+
+    <section id="app-panel" class="hidden">
+      <div class="panel user-bar">
+        <span id="user-label"></span>
+        <div class="user-actions">
+          <button type="button" id="profile-btn" class="secondary">Profile</button>
+          <button type="button" id="logout-btn" class="secondary">Sign out</button>
+        </div>
+      </div>
+
+      <section id="profile-panel" class="panel hidden">
+        <h2>Profile</h2>
+        <p id="profile-service-email" class="hint"></p>
+        <p id="profile-pw-warning" class="pw-warning hidden">Please set a new password before continuing.</p>
+
+        <form id="customer-profile-form" class="form" novalidate>
+          <fieldset>
+            <legend>Customer details</legend>
+            <label>Name <input name="name" required autocomplete="name" /></label>
+            <label>Email <input name="email" type="email" autocomplete="email" /></label>
+            <label>Phone <input name="phone" type="tel" autocomplete="tel" /></label>
+            <label>Notes <textarea name="notes" rows="2"></textarea></label>
+          </fieldset>
+          <fieldset>
+            <legend>Customer address (optional)</legend>
+            <label>Street <input name="cust_street" autocomplete="street-address" /></label>
+            <label>Postal code <input name="cust_postal" autocomplete="postal-code" /></label>
+            <label>City <input name="cust_city" autocomplete="address-level2" /></label>
+            <label>Municipality <input name="cust_municipality" /></label>
+            <label>Country <input name="cust_country" maxlength="2" value="NL" /></label>
+          </fieldset>
+          <div class="actions">
+            <button type="submit" id="save-profile-btn">Save customer profile</button>
+          </div>
+        </form>
+
+        <form id="password-form" class="form" novalidate>
+          <fieldset>
+            <legend>Change password</legend>
+            <label>Current password <input name="current_password" type="password" required autocomplete="current-password" /></label>
+            <label>New password <input name="new_password" type="password" required autocomplete="new-password" minlength="6" /></label>
+            <label>Confirm new password <input name="confirm_password" type="password" required autocomplete="new-password" minlength="6" /></label>
+          </fieldset>
+          <div class="actions">
+            <button type="submit" id="change-pw-btn">Update password</button>
+          </div>
+        </form>
+
+        <div class="actions">
+          <button type="button" id="profile-close-btn" class="secondary">Close</button>
+        </div>
+      </section>
+
+      <section class="panel" id="projects-panel">
+        <h2>Projects</h2>
+        <p class="hint">Your projects and progress toward the concept report. Select a project for details.</p>
+        <ul id="project-list" class="project-list" aria-label="Outstanding projects"></ul>
+        <p id="project-list-empty" class="hint hidden">No outstanding projects yet.</p>
+        <div class="actions">
+          <button type="button" id="new-project-btn">New project</button>
+          <button type="button" id="refresh-list-btn" class="secondary">Refresh list</button>
+        </div>
+      </section>
+
+      <section id="project-detail-panel" class="panel hidden">
+        <h2 id="project-detail-title">Project details</h2>
+        <p class="hint" id="project-status-view"></p>
+
+        <div class="project-progress" id="project-progress" aria-label="Project progress" hidden>
+          <ol class="progress-steps" id="project-progress-steps"></ol>
+          <p class="progress-caption" id="project-progress-caption"></p>
+          <div class="progress-report-slot" id="project-report-slot" hidden>
+            <p class="hint">Your acoustics report <strong>concept version 1.0</strong> is ready.</p>
+            <button type="button" id="download-report-btn">Download report (concept v1.0)</button>
+          </div>
+        </div>
+
+        <form id="project-form" class="form" novalidate>
+          <input type="hidden" name="project_id" id="project-id-input" value="" />
+          <fieldset>
+            <legend>Dwelling address</legend>
+            <label>Street <input name="dwell_street" required /></label>
+            <label>Postal code <input name="dwell_postal" required /></label>
+            <label>City <input name="dwell_city" required /></label>
+            <label>Municipality <input name="dwell_municipality" /></label>
+            <label>Country <input name="dwell_country" maxlength="2" value="NL" /></label>
+          </fieldset>
+          <fieldset>
+            <legend>Drawings (PDF, DWG)</legend>
+            <label class="block-label">
+              Upload files
+              <input type="file" id="drawing-file-input" accept=".pdf,.dwg,application/pdf" multiple />
+            </label>
+            <p class="hint" id="drawing-upload-hint">Select one or more PDF or DWG files for this project.</p>
+            <ul id="drawing-list" class="drawing-list" aria-label="Uploaded drawings"></ul>
+            <div class="actions">
+              <button type="button" id="submit-drawings-btn" class="secondary" disabled>Submit drawings for review</button>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Project</legend>
+            <label>Label <input name="label" placeholder="e.g. Nieuwbouw Lot 12" /></label>
+            <label>External ref <input name="external_ref" /></label>
+          </fieldset>
+          <div class="actions">
+            <button type="submit" id="save-btn">Save project</button>
+            <button type="button" id="reload-btn" class="secondary" disabled>Reload project</button>
+            <button type="button" id="delete-project-btn" class="secondary" disabled>Delete project</button>
+          </div>
+        </form>
+      </section>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

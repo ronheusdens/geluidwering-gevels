@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Acoustics Engineer — Drawing review</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body class="engineer-body">
+  <main class="page page-engineer">
+    <header class="header header-compact">
+      <p class="eyebrow">Acoustics calculation service</p>
+      <h1>Engineer drawing review</h1>
+    </header>
+
+    <section class="panel conn-bar" id="engineer-conn-bar" aria-live="polite">
+      <span class="conn-led disconnected" id="engineer-conn-led" aria-hidden="true"></span>
+      <span id="engineer-conn-status">Connecting…</span>
+    </section>
+
+    <section class="panel" id="engineer-login-panel">
+      <form id="engineer-login-form" class="form" novalidate>
+        <fieldset>
+          <legend>Engineer login</legend>
+          <label>Username <input name="username" required autocomplete="username" value="engineer" /></label>
+          <label>Password <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
+        </fieldset>
+        <div class="actions">
+          <button type="submit" id="engineer-login-btn">Sign in</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="engineer-panel" class="hidden">
+      <div class="panel user-bar">
+        <span id="engineer-user-label"></span>
+        <button type="button" id="engineer-logout-btn" class="secondary">Sign out</button>
+        <button type="button" id="engineer-refresh-btn" class="secondary">Refresh queue</button>
+        <a id="engineer-ga-link" class="secondary-link hidden" href="/ga.html">GA-model</a>
+      </div>
+
+      <section class="panel engineer-queue-panel">
+        <h2>Review queue</h2>
+        <div id="engineer-queue-list" class="admin-projects-list"></div>
+      </section>
+
+      <section class="panel hidden engineer-workspace-panel" id="engineer-review-panel">
+        <div class="engineer-workspace-head">
+          <div>
+            <h2 id="engineer-project-title">Project</h2>
+            <p class="hint" id="engineer-project-meta"></p>
+          </div>
+        </div>
+
+        <div class="engineer-layout">
+          <div class="engineer-viewer-wrap">
+            <div class="engineer-viewer-toolbar">
+              <button type="button" id="engineer-page-prev" class="secondary">Prev</button>
+              <span id="engineer-page-label">Page 1 / 1</span>
+              <button type="button" id="engineer-page-next" class="secondary">Next</button>
+              <span class="toolbar-sep" aria-hidden="true"></span>
+              <button type="button" id="engineer-zoom-out" class="secondary" title="Zoom out">−</button>
+              <button type="button" id="engineer-zoom-btn">Zoom</button>
+              <button type="button" id="engineer-zoom-in" class="secondary" title="Zoom in">+</button>
+              <span id="engineer-zoom-label">100%</span>
+              <button type="button" id="engineer-zoom-fit" class="secondary">Fit</button>
+              <span class="toolbar-sep" aria-hidden="true"></span>
+              <button type="button" id="engineer-scale-btn" class="secondary">Set scale</button>
+            </div>
+
+            <section class="scale-bar panel-inset" id="engineer-scale-bar">
+              <strong>Drawing scale</strong>
+              <span id="engineer-scale-status">Select a section, then Set scale</span>
+              <div class="scale-mm-popup hidden" id="engineer-scale-mm-wrap">
+                <label class="discovery-inline">
+                  Real length of marked line (mm)
+                  <input id="engineer-scale-mm" type="number" min="1" step="1" value="1000" />
+                </label>
+                <button type="button" id="engineer-scale-apply-btn">Apply</button>
+                <button type="button" id="engineer-scale-repick-btn" class="secondary">Repick points</button>
+              </div>
+              <p class="hint" id="engineer-scale-hint">Click Set scale when you are ready to calibrate a floormap, facade, or section.</p>
+            </section>
+
+            <section class="tools-panel panel-inset" id="engineer-tools-bar">
+              <div class="tools-panel-head">
+                <strong>Tools</strong>
+                <div class="tools-mode-btns" role="group" aria-label="Measure tools">
+                  <button type="button" id="tool-btn-off" class="secondary tool-mode-btn active" data-tool="off">Off</button>
+                  <button type="button" id="tool-btn-length" class="secondary tool-mode-btn" data-tool="length">1. Length (m)</button>
+                  <button type="button" id="tool-btn-polyline" class="secondary tool-mode-btn" data-tool="polyline">2. Circumference (m)</button>
+                  <button type="button" id="tool-btn-polyline-area" class="secondary tool-mode-btn" data-tool="polyline">3. Area (m²)</button>
+                </div>
+                <button type="button" id="engineer-tool-clear-btn" class="secondary">Clear measure</button>
+              </div>
+              <!-- Hidden selects kept for sync / programmatic control -->
+              <select id="engineer-tool-select" class="hidden" aria-hidden="true">
+                <option value="off">Off</option>
+                <option value="length">Length</option>
+                <option value="polyline">Polyline</option>
+              </select>
+              <div class="tools-readouts">
+                <label class="discovery-inline">Length (m)
+                  <input id="tool-length-mm" type="text" readonly value="—" />
+                </label>
+                <label class="discovery-inline">Circumference (m)
+                  <input id="tool-circ-mm" type="text" readonly value="—" />
+                </label>
+                <label class="discovery-inline">Area (m²)
+                  <input id="tool-area-mm2" type="text" readonly value="—" />
+                </label>
+              </div>
+              <p class="hint" id="engineer-tool-hint">Select a scaled section, then click a tool button above.</p>
+            </section>
+
+            <!-- Stays fixed under toolbar; only the PDF pane scrolls -->
+            <section class="discovery-dock hidden" id="discovery-review-panel">
+              <div class="discovery-dock-top">
+                <strong>Discovered section <span id="discovery-progress"></span></strong>
+                <p class="hint" id="discovery-hint">Adjust on the drawing or with H/V controls. Accept when ready.</p>
+              </div>
+              <div class="discovery-dock-body">
+                <label class="discovery-inline">Label <input id="discovery-label-input" /></label>
+                <label class="discovery-inline">Type
+                  <select id="discovery-kind-select">
+                    <option value="FACADE">Façade</option>
+                    <option value="CROSS_SECTION">Cross-section</option>
+                    <option value="FLOORMAP">Floormap</option>
+                    <option value="SECTION">Building section</option>
+                    <option value="OTHER">Other</option>
+                  </select>
+                </label>
+                <div class="discovery-adjust compact" aria-label="Adjust box">
+                  <span class="discovery-adjust-label">H</span>
+                  <button type="button" id="disc-nudge-left" class="secondary" title="Move left">←</button>
+                  <button type="button" id="disc-nudge-right" class="secondary" title="Move right">→</button>
+                  <button type="button" id="disc-shrink-h" class="secondary" title="Narrow">−</button>
+                  <button type="button" id="disc-grow-h" class="secondary" title="Widen">+</button>
+                  <span class="discovery-adjust-label">V</span>
+                  <button type="button" id="disc-nudge-up" class="secondary" title="Move up">↑</button>
+                  <button type="button" id="disc-nudge-down" class="secondary" title="Move down">↓</button>
+                  <button type="button" id="disc-shrink-v" class="secondary" title="Shorter">−</button>
+                  <button type="button" id="disc-grow-v" class="secondary" title="Taller">+</button>
+                </div>
+                <div class="discovery-dock-actions">
+                  <button type="button" id="discovery-accept-btn">Accept</button>
+                  <button type="button" id="discovery-skip-btn" class="secondary">Skip</button>
+                  <button type="button" id="discovery-cancel-btn" class="secondary">Cancel</button>
+                </div>
+              </div>
+            </section>
+
+            <div id="engineer-pdf-scroll" class="engineer-pdf-scroll">
+              <div id="engineer-pdf-stage" class="engineer-pdf-stage">
+                <canvas id="engineer-pdf-canvas"></canvas>
+                <canvas id="engineer-overlay-canvas" class="engineer-overlay-canvas"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <aside class="engineer-sidebar">
+            <fieldset id="engineer-tools-fieldset">
+              <legend>Tools</legend>
+              <div class="tools-mode-btns tools-mode-btns-stack" role="group" aria-label="Measure tools sidebar">
+                <button type="button" class="secondary tool-mode-btn active" data-tool="off" id="tool-btn-off-side">Off</button>
+                <button type="button" class="secondary tool-mode-btn" data-tool="length" id="tool-btn-length-side">1. Length (m)</button>
+                <button type="button" class="secondary tool-mode-btn" data-tool="polyline" id="tool-btn-polyline-side">2. Circumference (m)</button>
+                <button type="button" class="secondary tool-mode-btn" data-tool="polyline" id="tool-btn-area-side">3. Area (m²)</button>
+              </div>
+              <select id="engineer-tool-select-sidebar" class="hidden" aria-hidden="true">
+                <option value="off">Off</option>
+                <option value="length">Length</option>
+                <option value="polyline">Polyline</option>
+              </select>
+              <button type="button" id="engineer-tool-clear-btn-sidebar" class="secondary" style="width:100%;margin-top:0.4rem">Clear measure</button>
+              <p class="hint">Needs a selected section with scale. Readouts are above the drawing.</p>
+            </fieldset>
+
+            <fieldset id="analyze-components-fieldset" class="hidden">
+              <legend id="analyze-components-legend">Components</legend>
+              <p class="hint" id="analyze-components-hint">
+                Draw, discover, and <strong>save</strong> marked planes on the cropped section — same menu as floormap rooms.
+              </p>
+              <div class="actions actions-stack">
+                <button type="button" id="analyze-open-btn">Open analysis workspace</button>
+                <button type="button" id="analyze-discover-btn" class="secondary">Discover…</button>
+                <button type="button" id="analyze-draw-btn" class="secondary">Draw &amp; save…</button>
+              </div>
+            </fieldset>
+
+            <label class="block-label">
+              Drawing
+              <select id="engineer-doc-select"></select>
+            </label>
+            <p class="hint" id="engineer-doc-hint">Select a PDF. DWG preview is not supported in-browser.</p>
+
+            <fieldset id="mark-section-fieldset">
+              <legend>Mark a section</legend>
+              <label>Label <input id="region-label-input" placeholder="e.g. North façade" /></label>
+              <label>Type
+                <select id="region-kind-select">
+                  <option value="FACADE">Façade</option>
+                  <option value="CROSS_SECTION">Cross-section</option>
+                  <option value="FLOORMAP">Floormap</option>
+                  <option value="SECTION">Building section</option>
+                  <option value="OTHER">Other</option>
+                </select>
+              </label>
+              <p class="hint">Page <strong id="region-page-display">1</strong></p>
+              <input type="hidden" id="region-page-input" value="1" />
+              <p class="hint" id="region-pending-hint">Drag on the PDF, or Discover.</p>
+              <div class="actions actions-stack">
+                <button type="button" id="region-discover-btn" class="secondary">Discover sections</button>
+                <button type="button" id="region-save-btn" disabled>Save marked section</button>
+                <button type="button" id="region-clear-btn" class="secondary" disabled>Clear mark</button>
+              </div>
+            </fieldset>
+
+            <div class="saved-sections-block">
+              <h3>Saved sections <span id="region-count-badge" class="region-count-badge">0</span></h3>
+              <label class="block-label">
+                Filter type
+                <select id="region-filter-kind">
+                  <option value="">All types</option>
+                  <option value="FLOORMAP">Floormaps</option>
+                  <option value="FACADE">Façades</option>
+                  <option value="CROSS_SECTION">Cross-sections</option>
+                  <option value="SECTION">Building sections</option>
+                  <option value="OTHER">Other</option>
+                </select>
+              </label>
+              <div class="actions" style="margin-bottom: 0.5rem">
+                <button type="button" id="region-clear-all-btn" class="secondary" disabled>Remove all</button>
+              </div>
+              <ul id="engineer-region-list" class="drawing-list"></ul>
+            </div>
+
+            <form id="engineer-review-form" class="form engineer-review-form">
+              <fieldset>
+                <legend>Drawing review</legend>
+                <label><input type="checkbox" id="review-legible" /> Legible</label>
+                <label><input type="checkbox" id="review-sufficient" /> Sufficient to proceed</label>
+                <label>Notes <textarea id="review-notes" rows="2" placeholder="Missing scale, unclear labels…"></textarea></label>
+              </fieldset>
+              <div class="actions">
+                <button type="submit" id="engineer-submit-review-btn">Save review</button>
+              </div>
+            </form>
+          </aside>
+        </div>
+      </section>
+    </section>
+  </main>
+  <script type="module" src="/engineer.js?v=analyze-panel"></script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+# Local HTTPS staging for Acoustics checklist (macOS / no Apache).
+# Backends: ./start.sh already on 127.0.0.1:4173 (UI) and :18080 (bppServer).
+#
+# Run: caddy run --config Caddyfile.local-https
+# Open: https://localhost/
+
+{
+	# Local-only; Caddy issues an internal CA cert for localhost
+	auto_https disable_redirects
+}
+
+localhost {
+	encode gzip
+
+	# bppServer WebSocket (must use HTTP/1.1 for Upgrade)
+	handle /ws* {
+		reverse_proxy 127.0.0.1:18080 {
+			transport http {
+				versions 1.1
+			}
+		}
+	}
+
+	# Node UI + /api/*
+	handle {
+		reverse_proxy 127.0.0.1:4173
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+	}
+}

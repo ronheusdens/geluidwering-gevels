@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Acoustics — Geluidwering (GA-model)</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="page page-wide">
+    <header class="header">
+      <p class="eyebrow">Acoustics — nieuwbouw</p>
+      <h1>Geluidwering gevels — projectmodel</h1>
+      <p class="lede">
+        Variant → verblijfsgebied → verblijfsruimte (floormap) → vlak (gevel).
+        <a href="/engineer.html">← Drawing review</a>
+        ·
+        <a id="ga-floormap-link" href="/floormap.html">Floormap</a>
+      </p>
+    </header>
+
+    <section class="panel conn-bar" id="ga-conn-bar" aria-live="polite">
+      <span class="conn-led disconnected" id="ga-conn-led" aria-hidden="true"></span>
+      <span id="ga-conn-status">Connecting…</span>
+    </section>
+
+    <section class="panel" id="ga-login-panel">
+      <form id="ga-login-form" class="form" novalidate>
+        <fieldset>
+          <legend>Engineer login</legend>
+          <label>Username <input name="username" required autocomplete="username" value="engineer" /></label>
+          <label>Password <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
+        </fieldset>
+        <div class="actions">
+          <button type="submit" id="ga-login-btn">Sign in</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="ga-panel" class="hidden">
+      <div class="panel user-bar">
+        <span id="ga-user-label"></span>
+        <button type="button" id="ga-logout-btn" class="secondary">Sign out</button>
+      </div>
+
+      <section class="panel">
+        <form id="ga-building-form" class="form mat-filter-row">
+          <label>Building id
+            <input id="ga-building-id" name="building_id" required placeholder="uuid" />
+          </label>
+          <div class="actions mat-filter-actions">
+            <button type="submit">Open project</button>
+            <button type="button" id="ga-queue-btn" class="secondary">Kies uit queue</button>
+          </div>
+        </form>
+        <div id="ga-queue-list" class="admin-projects-list hidden"></div>
+        <p class="hint" id="ga-building-meta">—</p>
+      </section>
+
+      <section class="panel hidden" id="ga-model-panel">
+        <div class="ga-grid">
+          <div class="ga-col">
+            <h2>Variant</h2>
+            <form id="ga-variant-form" class="form">
+              <label>Omschrijving <input id="ga-variant-name" required maxlength="80" value="Hoofdvariant" /></label>
+              <label>Gebruiksfunctie
+                <select id="ga-variant-functie">
+                  <option>Woonfunctie</option>
+                  <option>Bijeenkomst voor kinderopvang</option>
+                  <option>Gezondheidszorgfunctie</option>
+                  <option>Onderwijsfunctie</option>
+                  <option>Wgh, gezondheidszorg geluidgevoelig</option>
+                  <option>Wgh, onderwijsfunctie geluidgevoelig</option>
+                  <option>Overig</option>
+                </select>
+              </label>
+              <label>Geluidsbelasting [dB(A)] <input id="ga-variant-lb" type="number" min="0" max="140" step="0.1" value="55" /></label>
+              <label>Spectrum
+                <select id="ga-variant-spectrum">
+                  <option value="SPECTRUM_1">Spectrum 1</option>
+                  <option value="SPECTRUM_2">Spectrum 2</option>
+                </select>
+              </label>
+              <div class="actions">
+                <button type="submit">Opslaan variant</button>
+                <button type="button" id="ga-variant-new-btn" class="secondary">Nieuwe variant</button>
+                <button type="button" id="ga-variant-del-btn" class="secondary">Verwijder</button>
+              </div>
+            </form>
+            <ul id="ga-variant-list" class="drawing-list"></ul>
+          </div>
+
+          <div class="ga-col">
+            <h2>Verblijfsgebied / -ruimte</h2>
+            <p class="hint">Elk VG heeft ≥1 VR. VR is altijd een floormap-room.</p>
+            <form id="ga-vg-form" class="form">
+              <label>VG-omschrijving <input id="ga-vg-name" maxlength="80" placeholder="bijv. VG woonkamer" /></label>
+              <label>Floormap-ruimte
+                <select id="ga-vg-room"></select>
+              </label>
+              <label>VR-omschrijving <input id="ga-vr-name" maxlength="80" placeholder="overgenomen van room" /></label>
+              <div class="mat-row">
+                <label>Hoogte [m] <input id="ga-vr-hoogte" type="number" min="0" step="0.01" value="2.6" /></label>
+                <label>T0 [s] <input id="ga-vr-t0" type="number" min="0" max="10" step="0.1" value="0.5" /></label>
+              </div>
+              <div class="actions">
+                <button type="submit">Nieuw VG + VR</button>
+                <button type="button" id="ga-vr-add-btn" class="secondary">Extra VR in geselecteerd VG</button>
+              </div>
+            </form>
+            <ul id="ga-vg-list" class="drawing-list"></ul>
+            <ul id="ga-vr-list" class="drawing-list"></ul>
+            <form id="ga-vr-edit-form" class="form hidden">
+              <h3>Geselecteerde VR</h3>
+              <label>Omschrijving <input id="ga-vr-edit-name" maxlength="80" /></label>
+              <div class="mat-row">
+                <label>Vloer [m²] <input id="ga-vr-edit-vloer" type="number" min="0" step="0.01" /></label>
+                <label>Hoogte [m] <input id="ga-vr-edit-hoogte" type="number" min="0" step="0.01" /></label>
+                <label>Volume [m³] <input id="ga-vr-edit-volume" type="number" min="0" step="0.01" /></label>
+                <label>T0 [s] <input id="ga-vr-edit-t0" type="number" min="0" max="10" step="0.1" /></label>
+              </div>
+              <div class="actions">
+                <button type="submit">Bewaar VR</button>
+                <button type="button" id="ga-vr-del-btn" class="secondary">Verwijder VR</button>
+                <button type="button" id="ga-vg-del-btn" class="secondary">Verwijder VG</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="ga-col">
+            <h2>Vlakken</h2>
+            <p class="hint">Koppel een façade-component of voer S handmatig in.</p>
+            <form id="ga-vlak-form" class="form">
+              <label>Omschrijving <input id="ga-vlak-name" maxlength="80" placeholder="Voorzijde" /></label>
+              <label>Façade-component
+                <select id="ga-vlak-facade"><option value="">— handmatig —</option></select>
+              </label>
+              <label>S [m²] <input id="ga-vlak-area" type="number" min="0" step="0.01" value="0" /></label>
+              <label class="inline-check"><input id="ga-vlak-gak" type="checkbox" checked /> Meenemen in GA;k (Stot)</label>
+              <div class="actions">
+                <button type="submit">Vlak toevoegen</button>
+              </div>
+            </form>
+            <ul id="ga-vlak-list" class="drawing-list"></ul>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+  <script type="module" src="/ga.js"></script>
+</body>
+</html>

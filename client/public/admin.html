@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Acoustics Admin</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="page">
+    <header class="header">
+      <p class="eyebrow">Acoustics administration</p>
+      <h1>Admin project queue</h1>
+      <p class="lede">Visible only to the <code>admin</code> account. Select a customer to review all projects and update client-facing status. <a href="/materials.html">Material catalog →</a></p>
+    </header>
+
+    <section class="panel conn-bar" id="admin-conn-bar" aria-live="polite">
+      <span class="conn-led disconnected" id="admin-conn-led" aria-hidden="true"></span>
+      <span id="admin-conn-status">Connecting…</span>
+    </section>
+
+    <section class="panel" id="admin-login-panel">
+      <form id="admin-login-form" class="form" novalidate>
+        <fieldset>
+          <legend>Admin login</legend>
+          <label>Username <input name="username" required autocomplete="username" value="admin" /></label>
+          <label>Password <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
+        </fieldset>
+        <div class="actions">
+          <button type="submit" id="admin-login-btn">Sign in</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="admin-panel" class="hidden">
+      <div class="panel user-bar">
+        <span id="admin-user-label"></span>
+        <button type="button" id="admin-logout-btn" class="secondary">Sign out</button>
+      </div>
+
+      <section class="panel">
+        <label class="block-label">
+          Customer
+          <select id="admin-customer-select">
+            <option value="">— select a customer —</option>
+          </select>
+        </label>
+        <div class="actions">
+          <button type="button" id="admin-refresh-btn" class="secondary">Refresh customer list</button>
+        </div>
+      </section>
+
+      <section class="panel hidden" id="admin-projects-panel">
+        <h2 id="admin-customer-title">Projects</h2>
+        <div id="admin-projects-list" class="admin-projects-list"></div>
+      </section>
+    </section>
+  </main>
+  <script type="module" src="/admin.js"></script>
+</body>
+</html>

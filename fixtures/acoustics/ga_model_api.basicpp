@@ -1,0 +1,1194 @@
+REM =============================================================================
+REM Acoustics P0 — GA model CRUD (DDL 0.2.16)
+REM variant → verblijfsgebied → verblijfsruimte → vlak → vlak_element
+REM Engineer APIs. VG+VR: create together; cannot delete last VR (delete VG).
+REM VR always linked to floormap drawing_subsection.
+REM =============================================================================
+
+PROCEDURE API_GaPing() AS STRING
+    RETURN "pong"
+END PROCEDURE
+
+
+
+REM ---------------------------------------------------------------------------
+REM Variant
+REM ---------------------------------------------------------------------------
+
+PROCEDURE API_ListVariants(session_token$, building_id$) AS STRING
+    DIM sql$, rid%, n%, i%, out$, t$, b_id$
+    DIM id$, omschr$, functie$, lb$, kind$, sort$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    REM --- auth (inlined) ---
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    b_id$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + b_id$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    omschr$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    functie$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF omschr$ <> "engineer" AND omschr$ <> "admin" AND functie$ <> "true" AND functie$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF building_id$ = "" THEN
+        RETURN "ERROR: building_id is required"
+    END IF
+    b_id$ = SUBSTITUTE$(building_id$, "'", "''")
+
+    sql$ = "SELECT id::text AS id, omschrijving, gebruiksfunctie, "
+    sql$ = sql$ + "geluidsbelasting_dba::text AS geluidsbelasting_dba, spectrum_kind, "
+    sql$ = sql$ + "sort_order::text AS sort_order "
+    sql$ = sql$ + "FROM acoustics.variant WHERE building_id = '" + b_id$ + "'::uuid "
+    sql$ = sql$ + "ORDER BY sort_order ASC, created_at ASC"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    n% = POSTGRES_NUM_ROWS(rid%)
+
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "building_id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "variants" + CHR$(34) + ":["
+    i% = 0
+    WHILE i% < n%
+        IF i% > 0 THEN
+            out$ = out$ + ","
+        END IF
+        id$ = POSTGRES_GET_BY_NAME$(rid%, i%, "id")
+        omschr$ = SUBSTITUTE$(SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "omschrijving"), CHR$(34), ""), CHR$(10), " ")
+        functie$ = SUBSTITUTE$(SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "gebruiksfunctie"), CHR$(34), ""), CHR$(10), " ")
+        lb$ = POSTGRES_GET_BY_NAME$(rid%, i%, "geluidsbelasting_dba")
+        kind$ = POSTGRES_GET_BY_NAME$(rid%, i%, "spectrum_kind")
+        sort$ = POSTGRES_GET_BY_NAME$(rid%, i%, "sort_order")
+        out$ = out$ + "{" + CHR$(34) + "variant_id" + CHR$(34) + ":" + CHR$(34) + id$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "omschrijving" + CHR$(34) + ":" + CHR$(34) + omschr$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "gebruiksfunctie" + CHR$(34) + ":" + CHR$(34) + functie$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "geluidsbelasting_dba" + CHR$(34) + ":" + lb$
+        out$ = out$ + "," + CHR$(34) + "spectrum_kind" + CHR$(34) + ":" + CHR$(34) + kind$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "sort_order" + CHR$(34) + ":" + sort$ + "}"
+        i% = i% + 1
+    WEND
+    out$ = out$ + "]}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_SaveVariant(session_token$, building_id$, variant_id$, omschrijving$, gebruiksfunctie$, geluidsbelasting$, spectrum_kind$, sort_order$) AS STRING
+    DIM sql$, rid%, t$, b_id$, v_id$, omschr$, functie$, lb$, kind$, sort$, out$, created$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF building_id$ = "" OR omschrijving$ = "" THEN
+        RETURN "ERROR: building_id and omschrijving are required"
+    END IF
+
+    b_id$ = SUBSTITUTE$(building_id$, "'", "''")
+    v_id$ = SUBSTITUTE$(variant_id$, "'", "''")
+    omschr$ = SUBSTITUTE$(omschrijving$, "'", "''")
+    functie$ = SUBSTITUTE$(gebruiksfunctie$, "'", "''")
+    IF functie$ = "" THEN
+        functie$ = "Woonfunctie"
+    END IF
+    lb$ = SUBSTITUTE$(geluidsbelasting$, "'", "''")
+    IF lb$ = "" THEN
+        lb$ = "0"
+    END IF
+    kind$ = SUBSTITUTE$(spectrum_kind$, "'", "''")
+    IF kind$ = "" THEN
+        kind$ = "SPECTRUM_1"
+    END IF
+    sort$ = SUBSTITUTE$(sort_order$, "'", "''")
+    IF sort$ = "" THEN
+        sort$ = "0"
+    END IF
+
+    IF variant_id$ = "" THEN
+        sql$ = "INSERT INTO acoustics.variant (building_id, omschrijving, gebruiksfunctie, geluidsbelasting_dba, spectrum_kind, sort_order) "
+        sql$ = sql$ + "VALUES ('" + b_id$ + "'::uuid, '" + omschr$ + "', '" + functie$ + "', " + lb$ + "::double precision, "
+        sql$ = sql$ + "'" + kind$ + "', " + sort$ + "::integer) RETURNING id::text AS id"
+        created$ = "true"
+    ELSE
+        sql$ = "UPDATE acoustics.variant SET omschrijving = '" + omschr$ + "', gebruiksfunctie = '" + functie$ + "', "
+        sql$ = sql$ + "geluidsbelasting_dba = " + lb$ + "::double precision, spectrum_kind = '" + kind$ + "', "
+        sql$ = sql$ + "sort_order = " + sort$ + "::integer, updated_at = now() "
+        sql$ = sql$ + "WHERE id = '" + v_id$ + "'::uuid AND building_id = '" + b_id$ + "'::uuid "
+        sql$ = sql$ + "RETURNING id::text AS id"
+        created$ = "false"
+    END IF
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: variant save failed (check gebruiksfunctie/spectrum_kind/building_id)"
+    END IF
+    v_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "id")
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "variant_id" + CHR$(34) + ":" + CHR$(34) + v_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "created" + CHR$(34) + ":" + created$ + "}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_DeleteVariant(session_token$, variant_id$) AS STRING
+    DIM sql$, rid%, t$, v_id$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF variant_id$ = "" THEN
+        RETURN "ERROR: variant_id is required"
+    END IF
+    v_id$ = SUBSTITUTE$(variant_id$, "'", "''")
+    sql$ = "DELETE FROM acoustics.variant WHERE id = '" + v_id$ + "'::uuid RETURNING id::text AS id"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: variant not found"
+    END IF
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "variant_id" + CHR$(34) + ":" + CHR$(34) + v_id$ + CHR$(34) + "}"
+    RETURN out$
+END PROCEDURE
+
+REM ---------------------------------------------------------------------------
+REM Verblijfsgebied + Verblijfsruimte (samen)
+REM ---------------------------------------------------------------------------
+
+PROCEDURE API_ListVerblijfsgebieden(session_token$, variant_id$) AS STRING
+    DIM sql$, rid%, n%, i%, out$, t$, v_id$
+    DIM id$, omschr$, sort$, nvr$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF variant_id$ = "" THEN
+        RETURN "ERROR: variant_id is required"
+    END IF
+    v_id$ = SUBSTITUTE$(variant_id$, "'", "''")
+
+    sql$ = "SELECT g.id::text AS id, g.omschrijving, g.sort_order::text AS sort_order, "
+    sql$ = sql$ + "(SELECT COUNT(*)::text FROM acoustics.verblijfsruimte r WHERE r.verblijfsgebied_id = g.id) AS vr_count "
+    sql$ = sql$ + "FROM acoustics.verblijfsgebied g WHERE g.variant_id = '" + v_id$ + "'::uuid "
+    sql$ = sql$ + "ORDER BY g.sort_order ASC, g.created_at ASC"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    n% = POSTGRES_NUM_ROWS(rid%)
+
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "variant_id" + CHR$(34) + ":" + CHR$(34) + v_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "verblijfsgebieden" + CHR$(34) + ":["
+    i% = 0
+    WHILE i% < n%
+        IF i% > 0 THEN
+            out$ = out$ + ","
+        END IF
+        id$ = POSTGRES_GET_BY_NAME$(rid%, i%, "id")
+        omschr$ = SUBSTITUTE$(SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "omschrijving"), CHR$(34), ""), CHR$(10), " ")
+        sort$ = POSTGRES_GET_BY_NAME$(rid%, i%, "sort_order")
+        nvr$ = POSTGRES_GET_BY_NAME$(rid%, i%, "vr_count")
+        out$ = out$ + "{" + CHR$(34) + "verblijfsgebied_id" + CHR$(34) + ":" + CHR$(34) + id$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "omschrijving" + CHR$(34) + ":" + CHR$(34) + omschr$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "sort_order" + CHR$(34) + ":" + sort$
+        out$ = out$ + "," + CHR$(34) + "vr_count" + CHR$(34) + ":" + nvr$ + "}"
+        i% = i% + 1
+    WEND
+    out$ = out$ + "]}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_CreateVerblijfsgebied(session_token$, variant_id$, omschrijving$, subsection_id$, vr_omschrijving$, vloer_m2$, hoogte_m$, t0_s$) AS STRING
+    DIM sql$, rid%, t$, v_id$, omschr$, sub_id$, vr_omschr$, vloer$, hoogte$, t0$, vol$, out$
+    DIM vg_id$, vr_id$, b_id$, area$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF variant_id$ = "" OR omschrijving$ = "" OR subsection_id$ = "" THEN
+        RETURN "ERROR: variant_id, omschrijving and subsection_id are required"
+    END IF
+
+    v_id$ = SUBSTITUTE$(variant_id$, "'", "''")
+    omschr$ = SUBSTITUTE$(omschrijving$, "'", "''")
+    sub_id$ = SUBSTITUTE$(subsection_id$, "'", "''")
+    vr_omschr$ = SUBSTITUTE$(vr_omschrijving$, "'", "''")
+    IF vr_omschr$ = "" THEN
+        vr_omschr$ = omschr$
+    END IF
+    vloer$ = SUBSTITUTE$(vloer_m2$, "'", "''")
+    hoogte$ = SUBSTITUTE$(hoogte_m$, "'", "''")
+    t0$ = SUBSTITUTE$(t0_s$, "'", "''")
+    IF hoogte$ = "" THEN
+        hoogte$ = "0"
+    END IF
+    IF t0$ = "" THEN
+        t0$ = "0.5"
+    END IF
+
+    REM Verify variant + subsection same building; subsection unused
+    sql$ = "SELECT v.building_id::text AS building_id, "
+    sql$ = sql$ + "COALESCE(s.area_m2::text,'') AS area_m2, "
+    sql$ = sql$ + "CASE WHEN s.id IS NULL THEN 'missing' "
+    sql$ = sql$ + "WHEN s.building_id IS DISTINCT FROM v.building_id THEN 'building_mismatch' "
+    sql$ = sql$ + "WHEN EXISTS (SELECT 1 FROM acoustics.verblijfsruimte r WHERE r.subsection_id = s.id) THEN 'subsection_in_use' "
+    sql$ = sql$ + "ELSE 'ok' END AS status "
+    sql$ = sql$ + "FROM acoustics.variant v "
+    sql$ = sql$ + "LEFT JOIN acoustics.drawing_subsection s ON s.id = '" + sub_id$ + "'::uuid "
+    sql$ = sql$ + "WHERE v.id = '" + v_id$ + "'::uuid"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: variant not found"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "status") = "missing" THEN
+        RETURN "ERROR: subsection not found"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "status") = "building_mismatch" THEN
+        RETURN "ERROR: subsection belongs to another building"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "status") = "subsection_in_use" THEN
+        RETURN "ERROR: subsection already linked to a verblijfsruimte"
+    END IF
+    b_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "building_id")
+    area$ = POSTGRES_GET_BY_NAME$(rid%, 0, "area_m2")
+    IF vloer$ = "" THEN
+        IF area$ = "" THEN
+            vloer$ = "0"
+        ELSE
+            vloer$ = area$
+        END IF
+    END IF
+    vol$ = "0"
+    IF VAL(vloer$) > 0 AND VAL(hoogte$) > 0 THEN
+        vol$ = STR$(VAL(vloer$) * VAL(hoogte$))
+    END IF
+
+    sql$ = "WITH vg AS ("
+    sql$ = sql$ + "INSERT INTO acoustics.verblijfsgebied (variant_id, building_id, omschrijving) "
+    sql$ = sql$ + "VALUES ('" + v_id$ + "'::uuid, '" + b_id$ + "'::uuid, '" + omschr$ + "') "
+    sql$ = sql$ + "RETURNING id, building_id"
+    sql$ = sql$ + "), vr AS ("
+    sql$ = sql$ + "INSERT INTO acoustics.verblijfsruimte "
+    sql$ = sql$ + "(verblijfsgebied_id, building_id, subsection_id, omschrijving, vloer_m2, hoogte_m, volume_m3, t0_s) "
+    sql$ = sql$ + "SELECT vg.id, vg.building_id, '" + sub_id$ + "'::uuid, '" + vr_omschr$ + "', "
+    sql$ = sql$ + vloer$ + "::double precision, " + hoogte$ + "::double precision, "
+    sql$ = sql$ + vol$ + "::double precision, " + t0$ + "::double precision FROM vg "
+    sql$ = sql$ + "RETURNING id, verblijfsgebied_id"
+    sql$ = sql$ + ") SELECT vg.id::text AS verblijfsgebied_id, vr.id::text AS verblijfsruimte_id FROM vg, vr"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: create verblijfsgebied failed"
+    END IF
+    vg_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "verblijfsgebied_id")
+    vr_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "verblijfsruimte_id")
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true"
+    out$ = out$ + "," + CHR$(34) + "verblijfsgebied_id" + CHR$(34) + ":" + CHR$(34) + vg_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "verblijfsruimte_id" + CHR$(34) + ":" + CHR$(34) + vr_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "subsection_id" + CHR$(34) + ":" + CHR$(34) + sub_id$ + CHR$(34) + "}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_SaveVerblijfsgebied(session_token$, verblijfsgebied_id$, omschrijving$, sort_order$) AS STRING
+    DIM sql$, rid%, t$, vg_id$, omschr$, sort$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF verblijfsgebied_id$ = "" OR omschrijving$ = "" THEN
+        RETURN "ERROR: verblijfsgebied_id and omschrijving are required"
+    END IF
+    vg_id$ = SUBSTITUTE$(verblijfsgebied_id$, "'", "''")
+    omschr$ = SUBSTITUTE$(omschrijving$, "'", "''")
+    sort$ = SUBSTITUTE$(sort_order$, "'", "''")
+    IF sort$ = "" THEN
+        sort$ = "0"
+    END IF
+    sql$ = "UPDATE acoustics.verblijfsgebied SET omschrijving = '" + omschr$ + "', "
+    sql$ = sql$ + "sort_order = " + sort$ + "::integer, updated_at = now() "
+    sql$ = sql$ + "WHERE id = '" + vg_id$ + "'::uuid RETURNING id::text AS id"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: verblijfsgebied not found"
+    END IF
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "verblijfsgebied_id" + CHR$(34) + ":" + CHR$(34) + vg_id$ + CHR$(34) + "}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_DeleteVerblijfsgebied(session_token$, verblijfsgebied_id$) AS STRING
+    DIM sql$, rid%, t$, vg_id$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF verblijfsgebied_id$ = "" THEN
+        RETURN "ERROR: verblijfsgebied_id is required"
+    END IF
+    vg_id$ = SUBSTITUTE$(verblijfsgebied_id$, "'", "''")
+    sql$ = "DELETE FROM acoustics.verblijfsgebied WHERE id = '" + vg_id$ + "'::uuid RETURNING id::text AS id"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: verblijfsgebied not found"
+    END IF
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "verblijfsgebied_id" + CHR$(34) + ":" + CHR$(34) + vg_id$ + CHR$(34) + "}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_ListVerblijfsruimten(session_token$, verblijfsgebied_id$) AS STRING
+    DIM sql$, rid%, n%, i%, out$, t$, vg_id$
+    DIM id$, omschr$, sub$, vloer$, hoogte$, vol$, t0$, sort$, ga$, lbi$, gak$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF verblijfsgebied_id$ = "" THEN
+        RETURN "ERROR: verblijfsgebied_id is required"
+    END IF
+    vg_id$ = SUBSTITUTE$(verblijfsgebied_id$, "'", "''")
+
+    sql$ = "SELECT id::text AS id, omschrijving, subsection_id::text AS subsection_id, "
+    sql$ = sql$ + "vloer_m2::text AS vloer_m2, hoogte_m::text AS hoogte_m, volume_m3::text AS volume_m3, "
+    sql$ = sql$ + "t0_s::text AS t0_s, sort_order::text AS sort_order, "
+    sql$ = sql$ + "COALESCE(ga_dba::text,'') AS ga_dba, COALESCE(lbi_dba::text,'') AS lbi_dba, "
+    sql$ = sql$ + "COALESCE(gak_dba::text,'') AS gak_dba "
+    sql$ = sql$ + "FROM acoustics.verblijfsruimte WHERE verblijfsgebied_id = '" + vg_id$ + "'::uuid "
+    sql$ = sql$ + "ORDER BY sort_order ASC, created_at ASC"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    n% = POSTGRES_NUM_ROWS(rid%)
+
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "verblijfsgebied_id" + CHR$(34) + ":" + CHR$(34) + vg_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "verblijfsruimten" + CHR$(34) + ":["
+    i% = 0
+    WHILE i% < n%
+        IF i% > 0 THEN
+            out$ = out$ + ","
+        END IF
+        id$ = POSTGRES_GET_BY_NAME$(rid%, i%, "id")
+        omschr$ = SUBSTITUTE$(SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "omschrijving"), CHR$(34), ""), CHR$(10), " ")
+        sub$ = POSTGRES_GET_BY_NAME$(rid%, i%, "subsection_id")
+        vloer$ = POSTGRES_GET_BY_NAME$(rid%, i%, "vloer_m2")
+        hoogte$ = POSTGRES_GET_BY_NAME$(rid%, i%, "hoogte_m")
+        vol$ = POSTGRES_GET_BY_NAME$(rid%, i%, "volume_m3")
+        t0$ = POSTGRES_GET_BY_NAME$(rid%, i%, "t0_s")
+        sort$ = POSTGRES_GET_BY_NAME$(rid%, i%, "sort_order")
+        ga$ = POSTGRES_GET_BY_NAME$(rid%, i%, "ga_dba")
+        lbi$ = POSTGRES_GET_BY_NAME$(rid%, i%, "lbi_dba")
+        gak$ = POSTGRES_GET_BY_NAME$(rid%, i%, "gak_dba")
+        out$ = out$ + "{" + CHR$(34) + "verblijfsruimte_id" + CHR$(34) + ":" + CHR$(34) + id$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "omschrijving" + CHR$(34) + ":" + CHR$(34) + omschr$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "subsection_id" + CHR$(34) + ":" + CHR$(34) + sub$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "vloer_m2" + CHR$(34) + ":" + vloer$
+        out$ = out$ + "," + CHR$(34) + "hoogte_m" + CHR$(34) + ":" + hoogte$
+        out$ = out$ + "," + CHR$(34) + "volume_m3" + CHR$(34) + ":" + vol$
+        out$ = out$ + "," + CHR$(34) + "t0_s" + CHR$(34) + ":" + t0$
+        out$ = out$ + "," + CHR$(34) + "sort_order" + CHR$(34) + ":" + sort$
+        out$ = out$ + "," + CHR$(34) + "ga_dba" + CHR$(34) + ":"
+        IF ga$ = "" THEN
+            out$ = out$ + "null"
+        ELSE
+            out$ = out$ + ga$
+        END IF
+        out$ = out$ + "," + CHR$(34) + "lbi_dba" + CHR$(34) + ":"
+        IF lbi$ = "" THEN
+            out$ = out$ + "null"
+        ELSE
+            out$ = out$ + lbi$
+        END IF
+        out$ = out$ + "," + CHR$(34) + "gak_dba" + CHR$(34) + ":"
+        IF gak$ = "" THEN
+            out$ = out$ + "null"
+        ELSE
+            out$ = out$ + gak$
+        END IF
+        out$ = out$ + "}"
+        i% = i% + 1
+    WEND
+    out$ = out$ + "]}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_AddVerblijfsruimte(session_token$, verblijfsgebied_id$, subsection_id$, omschrijving$, vloer_m2$, hoogte_m$, t0_s$) AS STRING
+    DIM sql$, rid%, t$, vg_id$, sub_id$, omschr$, vloer$, hoogte$, t0$, vol$, out$, vr_id$, b_id$, area$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF verblijfsgebied_id$ = "" OR subsection_id$ = "" OR omschrijving$ = "" THEN
+        RETURN "ERROR: verblijfsgebied_id, subsection_id and omschrijving are required"
+    END IF
+
+    vg_id$ = SUBSTITUTE$(verblijfsgebied_id$, "'", "''")
+    sub_id$ = SUBSTITUTE$(subsection_id$, "'", "''")
+    omschr$ = SUBSTITUTE$(omschrijving$, "'", "''")
+    vloer$ = SUBSTITUTE$(vloer_m2$, "'", "''")
+    hoogte$ = SUBSTITUTE$(hoogte_m$, "'", "''")
+    t0$ = SUBSTITUTE$(t0_s$, "'", "''")
+    IF hoogte$ = "" THEN
+        hoogte$ = "0"
+    END IF
+    IF t0$ = "" THEN
+        t0$ = "0.5"
+    END IF
+
+    sql$ = "SELECT g.building_id::text AS building_id, "
+    sql$ = sql$ + "COALESCE(s.area_m2::text,'') AS area_m2, "
+    sql$ = sql$ + "CASE WHEN s.id IS NULL THEN 'missing' "
+    sql$ = sql$ + "WHEN s.building_id IS DISTINCT FROM g.building_id THEN 'building_mismatch' "
+    sql$ = sql$ + "WHEN EXISTS (SELECT 1 FROM acoustics.verblijfsruimte r WHERE r.subsection_id = s.id) THEN 'subsection_in_use' "
+    sql$ = sql$ + "ELSE 'ok' END AS status "
+    sql$ = sql$ + "FROM acoustics.verblijfsgebied g "
+    sql$ = sql$ + "LEFT JOIN acoustics.drawing_subsection s ON s.id = '" + sub_id$ + "'::uuid "
+    sql$ = sql$ + "WHERE g.id = '" + vg_id$ + "'::uuid"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: verblijfsgebied not found"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "status") <> "ok" THEN
+        RETURN "ERROR: " + POSTGRES_GET_BY_NAME$(rid%, 0, "status")
+    END IF
+    b_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "building_id")
+    area$ = POSTGRES_GET_BY_NAME$(rid%, 0, "area_m2")
+    IF vloer$ = "" THEN
+        IF area$ = "" THEN
+            vloer$ = "0"
+        ELSE
+            vloer$ = area$
+        END IF
+    END IF
+    vol$ = "0"
+    IF VAL(vloer$) > 0 AND VAL(hoogte$) > 0 THEN
+        vol$ = STR$(VAL(vloer$) * VAL(hoogte$))
+    END IF
+
+    sql$ = "INSERT INTO acoustics.verblijfsruimte "
+    sql$ = sql$ + "(verblijfsgebied_id, building_id, subsection_id, omschrijving, vloer_m2, hoogte_m, volume_m3, t0_s) "
+    sql$ = sql$ + "VALUES ('" + vg_id$ + "'::uuid, '" + b_id$ + "'::uuid, '" + sub_id$ + "'::uuid, '" + omschr$ + "', "
+    sql$ = sql$ + vloer$ + "::double precision, " + hoogte$ + "::double precision, "
+    sql$ = sql$ + vol$ + "::double precision, " + t0$ + "::double precision) "
+    sql$ = sql$ + "RETURNING id::text AS id"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: add verblijfsruimte failed"
+    END IF
+    vr_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "id")
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "verblijfsruimte_id" + CHR$(34) + ":" + CHR$(34) + vr_id$ + CHR$(34) + "}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_SaveVerblijfsruimte(session_token$, verblijfsruimte_id$, omschrijving$, vloer_m2$, hoogte_m$, volume_m3$, t0_s$, sort_order$) AS STRING
+    DIM sql$, rid%, t$, vr_id$, omschr$, vloer$, hoogte$, vol$, t0$, sort$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF verblijfsruimte_id$ = "" OR omschrijving$ = "" THEN
+        RETURN "ERROR: verblijfsruimte_id and omschrijving are required"
+    END IF
+    vr_id$ = SUBSTITUTE$(verblijfsruimte_id$, "'", "''")
+    omschr$ = SUBSTITUTE$(omschrijving$, "'", "''")
+    vloer$ = SUBSTITUTE$(vloer_m2$, "'", "''")
+    hoogte$ = SUBSTITUTE$(hoogte_m$, "'", "''")
+    vol$ = SUBSTITUTE$(volume_m3$, "'", "''")
+    t0$ = SUBSTITUTE$(t0_s$, "'", "''")
+    sort$ = SUBSTITUTE$(sort_order$, "'", "''")
+    IF vloer$ = "" THEN
+        vloer$ = "0"
+    END IF
+    IF hoogte$ = "" THEN
+        hoogte$ = "0"
+    END IF
+    IF t0$ = "" THEN
+        t0$ = "0.5"
+    END IF
+    IF sort$ = "" THEN
+        sort$ = "0"
+    END IF
+    IF vol$ = "" THEN
+        IF VAL(vloer$) > 0 AND VAL(hoogte$) > 0 THEN
+            vol$ = STR$(VAL(vloer$) * VAL(hoogte$))
+        ELSE
+            vol$ = "0"
+        END IF
+    END IF
+
+    sql$ = "UPDATE acoustics.verblijfsruimte SET omschrijving = '" + omschr$ + "', "
+    sql$ = sql$ + "vloer_m2 = " + vloer$ + "::double precision, hoogte_m = " + hoogte$ + "::double precision, "
+    sql$ = sql$ + "volume_m3 = " + vol$ + "::double precision, t0_s = " + t0$ + "::double precision, "
+    sql$ = sql$ + "sort_order = " + sort$ + "::integer, updated_at = now() "
+    sql$ = sql$ + "WHERE id = '" + vr_id$ + "'::uuid RETURNING id::text AS id"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: verblijfsruimte not found"
+    END IF
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "verblijfsruimte_id" + CHR$(34) + ":" + CHR$(34) + vr_id$ + CHR$(34) + "}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_DeleteVerblijfsruimte(session_token$, verblijfsruimte_id$) AS STRING
+    DIM sql$, rid%, t$, vr_id$, out$, n$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF verblijfsruimte_id$ = "" THEN
+        RETURN "ERROR: verblijfsruimte_id is required"
+    END IF
+    vr_id$ = SUBSTITUTE$(verblijfsruimte_id$, "'", "''")
+
+    sql$ = "SELECT COUNT(*)::text AS n FROM acoustics.verblijfsruimte "
+    sql$ = sql$ + "WHERE verblijfsgebied_id = (SELECT verblijfsgebied_id FROM acoustics.verblijfsruimte WHERE id = '" + vr_id$ + "'::uuid)"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: verblijfsruimte not found"
+    END IF
+    n$ = POSTGRES_GET_BY_NAME$(rid%, 0, "n")
+    IF VAL(n$) <= 1 THEN
+        RETURN "ERROR: cannot delete last verblijfsruimte — delete verblijfsgebied instead"
+    END IF
+
+    sql$ = "DELETE FROM acoustics.verblijfsruimte WHERE id = '" + vr_id$ + "'::uuid RETURNING id::text AS id"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: verblijfsruimte not found"
+    END IF
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "verblijfsruimte_id" + CHR$(34) + ":" + CHR$(34) + vr_id$ + CHR$(34) + "}"
+    RETURN out$
+END PROCEDURE
+
+REM ---------------------------------------------------------------------------
+REM Vlak
+REM ---------------------------------------------------------------------------
+
+PROCEDURE API_ListVlakken(session_token$, verblijfsruimte_id$) AS STRING
+    DIM sql$, rid%, n%, i%, out$, t$, vr_id$
+    DIM id$, omschr$, area$, cl$, cg$, gak$, sort$, fac$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF verblijfsruimte_id$ = "" THEN
+        RETURN "ERROR: verblijfsruimte_id is required"
+    END IF
+    vr_id$ = SUBSTITUTE$(verblijfsruimte_id$, "'", "''")
+
+    sql$ = "SELECT id::text AS id, omschrijving, area_m2::text AS area_m2, "
+    sql$ = sql$ + "cl_db::text AS cl_db, cg_db::text AS cg_db, meenemen_gak::text AS meenemen_gak, "
+    sql$ = sql$ + "sort_order::text AS sort_order, COALESCE(facade_subsection_id::text,'') AS facade_subsection_id "
+    sql$ = sql$ + "FROM acoustics.vlak WHERE verblijfsruimte_id = '" + vr_id$ + "'::uuid "
+    sql$ = sql$ + "ORDER BY sort_order ASC, created_at ASC"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    n% = POSTGRES_NUM_ROWS(rid%)
+
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "verblijfsruimte_id" + CHR$(34) + ":" + CHR$(34) + vr_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "vlakken" + CHR$(34) + ":["
+    i% = 0
+    WHILE i% < n%
+        IF i% > 0 THEN
+            out$ = out$ + ","
+        END IF
+        id$ = POSTGRES_GET_BY_NAME$(rid%, i%, "id")
+        omschr$ = SUBSTITUTE$(SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "omschrijving"), CHR$(34), ""), CHR$(10), " ")
+        area$ = POSTGRES_GET_BY_NAME$(rid%, i%, "area_m2")
+        cl$ = POSTGRES_GET_BY_NAME$(rid%, i%, "cl_db")
+        cg$ = POSTGRES_GET_BY_NAME$(rid%, i%, "cg_db")
+        gak$ = POSTGRES_GET_BY_NAME$(rid%, i%, "meenemen_gak")
+        sort$ = POSTGRES_GET_BY_NAME$(rid%, i%, "sort_order")
+        fac$ = POSTGRES_GET_BY_NAME$(rid%, i%, "facade_subsection_id")
+        out$ = out$ + "{" + CHR$(34) + "vlak_id" + CHR$(34) + ":" + CHR$(34) + id$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "omschrijving" + CHR$(34) + ":" + CHR$(34) + omschr$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "area_m2" + CHR$(34) + ":" + area$
+        out$ = out$ + "," + CHR$(34) + "cl_db" + CHR$(34) + ":" + cl$
+        out$ = out$ + "," + CHR$(34) + "cg_db" + CHR$(34) + ":" + cg$
+        out$ = out$ + "," + CHR$(34) + "meenemen_gak" + CHR$(34) + ":"
+        IF gak$ = "t" OR gak$ = "true" THEN
+            out$ = out$ + "true"
+        ELSE
+            out$ = out$ + "false"
+        END IF
+        out$ = out$ + "," + CHR$(34) + "sort_order" + CHR$(34) + ":" + sort$
+        out$ = out$ + "," + CHR$(34) + "facade_subsection_id" + CHR$(34) + ":"
+        IF fac$ = "" THEN
+            out$ = out$ + "null"
+        ELSE
+            out$ = out$ + CHR$(34) + fac$ + CHR$(34)
+        END IF
+        out$ = out$ + "}"
+        i% = i% + 1
+    WEND
+    out$ = out$ + "]}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_SaveVlak(session_token$, verblijfsruimte_id$, vlak_id$, omschrijving$, area_m2$, cl_db$, cg_db$, meenemen_gak$, sort_order$, facade_subsection_id$) AS STRING
+    DIM sql$, rid%, t$, vr_id$, vl_id$, omschr$, area$, cl$, cg$, gak$, sort$, fac$, out$, created$, b_id$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF verblijfsruimte_id$ = "" OR omschrijving$ = "" THEN
+        RETURN "ERROR: verblijfsruimte_id and omschrijving are required"
+    END IF
+
+    vr_id$ = SUBSTITUTE$(verblijfsruimte_id$, "'", "''")
+    vl_id$ = SUBSTITUTE$(vlak_id$, "'", "''")
+    omschr$ = SUBSTITUTE$(omschrijving$, "'", "''")
+    area$ = SUBSTITUTE$(area_m2$, "'", "''")
+    cl$ = SUBSTITUTE$(cl_db$, "'", "''")
+    cg$ = SUBSTITUTE$(cg_db$, "'", "''")
+    gak$ = meenemen_gak$
+    sort$ = SUBSTITUTE$(sort_order$, "'", "''")
+    fac$ = SUBSTITUTE$(facade_subsection_id$, "'", "''")
+    IF area$ = "" THEN
+        area$ = "0"
+    END IF
+    IF cl$ = "" THEN
+        cl$ = "0"
+    END IF
+    IF cg$ = "" THEN
+        cg$ = "0"
+    END IF
+    IF sort$ = "" THEN
+        sort$ = "0"
+    END IF
+    IF gak$ = "" OR gak$ = "1" OR gak$ = "true" OR gak$ = "t" OR gak$ = "True" OR gak$ = "yes" THEN
+        gak$ = "true"
+    ELSE
+        gak$ = "false"
+    END IF
+
+    sql$ = "SELECT building_id::text AS building_id FROM acoustics.verblijfsruimte WHERE id = '" + vr_id$ + "'::uuid"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: verblijfsruimte not found"
+    END IF
+    b_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "building_id")
+
+    IF vlak_id$ = "" THEN
+        sql$ = "INSERT INTO acoustics.vlak (verblijfsruimte_id, building_id, omschrijving, area_m2, cl_db, cg_db, meenemen_gak, sort_order, facade_subsection_id) "
+        sql$ = sql$ + "VALUES ('" + vr_id$ + "'::uuid, '" + b_id$ + "'::uuid, '" + omschr$ + "', "
+        sql$ = sql$ + area$ + "::double precision, " + cl$ + "::double precision, " + cg$ + "::double precision, "
+        sql$ = sql$ + gak$ + "::boolean, " + sort$ + "::integer, "
+        IF fac$ = "" THEN
+            sql$ = sql$ + "NULL"
+        ELSE
+            sql$ = sql$ + "'" + fac$ + "'::uuid"
+        END IF
+        sql$ = sql$ + ") RETURNING id::text AS id"
+        created$ = "true"
+    ELSE
+        sql$ = "UPDATE acoustics.vlak SET omschrijving = '" + omschr$ + "', area_m2 = " + area$ + "::double precision, "
+        sql$ = sql$ + "cl_db = " + cl$ + "::double precision, cg_db = " + cg$ + "::double precision, "
+        sql$ = sql$ + "meenemen_gak = " + gak$ + "::boolean, sort_order = " + sort$ + "::integer, "
+        sql$ = sql$ + "facade_subsection_id = "
+        IF fac$ = "" THEN
+            sql$ = sql$ + "NULL"
+        ELSE
+            sql$ = sql$ + "'" + fac$ + "'::uuid"
+        END IF
+        sql$ = sql$ + ", updated_at = now() WHERE id = '" + vl_id$ + "'::uuid AND verblijfsruimte_id = '" + vr_id$ + "'::uuid "
+        sql$ = sql$ + "RETURNING id::text AS id"
+        created$ = "false"
+    END IF
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: vlak save failed"
+    END IF
+    vl_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "id")
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "vlak_id" + CHR$(34) + ":" + CHR$(34) + vl_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "created" + CHR$(34) + ":" + created$ + "}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_DeleteVlak(session_token$, vlak_id$) AS STRING
+    DIM sql$, rid%, t$, vl_id$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF vlak_id$ = "" THEN
+        RETURN "ERROR: vlak_id is required"
+    END IF
+    vl_id$ = SUBSTITUTE$(vlak_id$, "'", "''")
+    sql$ = "DELETE FROM acoustics.vlak WHERE id = '" + vl_id$ + "'::uuid RETURNING id::text AS id"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: vlak not found"
+    END IF
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "vlak_id" + CHR$(34) + ":" + CHR$(34) + vl_id$ + CHR$(34) + "}"
+    RETURN out$
+END PROCEDURE
+
+REM ---------------------------------------------------------------------------
+REM Vlak-element
+REM ---------------------------------------------------------------------------
+
+PROCEDURE API_ListVlakElementen(session_token$, vlak_id$) AS STRING
+    DIM sql$, rid%, n%, i%, out$, t$, vl_id$
+    DIM id$, mat$, omschr$, area$, len$, qv$, sort$, cat$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF vlak_id$ = "" THEN
+        RETURN "ERROR: vlak_id is required"
+    END IF
+    vl_id$ = SUBSTITUTE$(vlak_id$, "'", "''")
+
+    sql$ = "SELECT e.id::text AS id, COALESCE(e.material_id::text,'') AS material_id, e.omschrijving, "
+    sql$ = sql$ + "e.area_m2::text AS area_m2, e.length_m::text AS length_m, e.qvent::text AS qvent, "
+    sql$ = sql$ + "e.sort_order::text AS sort_order, COALESCE(m.catalog_id,'') AS catalog_id "
+    sql$ = sql$ + "FROM acoustics.vlak_element e "
+    sql$ = sql$ + "LEFT JOIN acoustics.material m ON m.id = e.material_id "
+    sql$ = sql$ + "WHERE e.vlak_id = '" + vl_id$ + "'::uuid "
+    sql$ = sql$ + "ORDER BY e.sort_order ASC, e.created_at ASC"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    n% = POSTGRES_NUM_ROWS(rid%)
+
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "vlak_id" + CHR$(34) + ":" + CHR$(34) + vl_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "elementen" + CHR$(34) + ":["
+    i% = 0
+    WHILE i% < n%
+        IF i% > 0 THEN
+            out$ = out$ + ","
+        END IF
+        id$ = POSTGRES_GET_BY_NAME$(rid%, i%, "id")
+        mat$ = POSTGRES_GET_BY_NAME$(rid%, i%, "material_id")
+        omschr$ = SUBSTITUTE$(SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "omschrijving"), CHR$(34), ""), CHR$(10), " ")
+        area$ = POSTGRES_GET_BY_NAME$(rid%, i%, "area_m2")
+        len$ = POSTGRES_GET_BY_NAME$(rid%, i%, "length_m")
+        qv$ = POSTGRES_GET_BY_NAME$(rid%, i%, "qvent")
+        sort$ = POSTGRES_GET_BY_NAME$(rid%, i%, "sort_order")
+        cat$ = SUBSTITUTE$(SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "catalog_id"), CHR$(34), ""), CHR$(10), " ")
+        out$ = out$ + "{" + CHR$(34) + "element_id" + CHR$(34) + ":" + CHR$(34) + id$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "material_id" + CHR$(34) + ":"
+        IF mat$ = "" THEN
+            out$ = out$ + "null"
+        ELSE
+            out$ = out$ + CHR$(34) + mat$ + CHR$(34)
+        END IF
+        out$ = out$ + "," + CHR$(34) + "catalog_id" + CHR$(34) + ":" + CHR$(34) + cat$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "omschrijving" + CHR$(34) + ":" + CHR$(34) + omschr$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "area_m2" + CHR$(34) + ":" + area$
+        out$ = out$ + "," + CHR$(34) + "length_m" + CHR$(34) + ":" + len$
+        out$ = out$ + "," + CHR$(34) + "qvent" + CHR$(34) + ":" + qv$
+        out$ = out$ + "," + CHR$(34) + "sort_order" + CHR$(34) + ":" + sort$ + "}"
+        i% = i% + 1
+    WEND
+    out$ = out$ + "]}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_SaveVlakElement(session_token$, vlak_id$, element_id$, material_id$, omschrijving$, area_m2$, length_m$, qvent$, sort_order$) AS STRING
+    DIM sql$, rid%, t$, vl_id$, el_id$, mat$, omschr$, area$, len$, qv$, sort$, out$, created$, b_id$, matname$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF vlak_id$ = "" THEN
+        RETURN "ERROR: vlak_id is required"
+    END IF
+
+    vl_id$ = SUBSTITUTE$(vlak_id$, "'", "''")
+    el_id$ = SUBSTITUTE$(element_id$, "'", "''")
+    mat$ = SUBSTITUTE$(material_id$, "'", "''")
+    omschr$ = SUBSTITUTE$(omschrijving$, "'", "''")
+    area$ = SUBSTITUTE$(area_m2$, "'", "''")
+    len$ = SUBSTITUTE$(length_m$, "'", "''")
+    qv$ = SUBSTITUTE$(qvent$, "'", "''")
+    sort$ = SUBSTITUTE$(sort_order$, "'", "''")
+    IF area$ = "" THEN
+        area$ = "0"
+    END IF
+    IF len$ = "" THEN
+        len$ = "0"
+    END IF
+    IF qv$ = "" THEN
+        qv$ = "0"
+    END IF
+    IF sort$ = "" THEN
+        sort$ = "0"
+    END IF
+
+    sql$ = "SELECT building_id::text AS building_id FROM acoustics.vlak WHERE id = '" + vl_id$ + "'::uuid"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: vlak not found"
+    END IF
+    b_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "building_id")
+
+    IF omschr$ = "" AND mat$ <> "" THEN
+        sql$ = "SELECT COALESCE(name,'') AS name FROM acoustics.material WHERE id = '" + mat$ + "'::uuid"
+        rid% = POSTGRES_QUERY(g_conn%, sql$)
+        IF POSTGRES_NUM_ROWS(rid%) >= 1 THEN
+            omschr$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "name"), "'", "''")
+        END IF
+    END IF
+    IF omschr$ = "" THEN
+        omschr$ = "onbekend"
+    END IF
+
+    IF element_id$ = "" THEN
+        sql$ = "INSERT INTO acoustics.vlak_element (vlak_id, building_id, material_id, omschrijving, area_m2, length_m, qvent, sort_order) "
+        sql$ = sql$ + "VALUES ('" + vl_id$ + "'::uuid, '" + b_id$ + "'::uuid, "
+        IF mat$ = "" THEN
+            sql$ = sql$ + "NULL"
+        ELSE
+            sql$ = sql$ + "'" + mat$ + "'::uuid"
+        END IF
+        sql$ = sql$ + ", '" + omschr$ + "', " + area$ + "::double precision, " + len$ + "::double precision, "
+        sql$ = sql$ + qv$ + "::double precision, " + sort$ + "::integer) RETURNING id::text AS id"
+        created$ = "true"
+    ELSE
+        sql$ = "UPDATE acoustics.vlak_element SET material_id = "
+        IF mat$ = "" THEN
+            sql$ = sql$ + "NULL"
+        ELSE
+            sql$ = sql$ + "'" + mat$ + "'::uuid"
+        END IF
+        sql$ = sql$ + ", omschrijving = '" + omschr$ + "', area_m2 = " + area$ + "::double precision, "
+        sql$ = sql$ + "length_m = " + len$ + "::double precision, qvent = " + qv$ + "::double precision, "
+        sql$ = sql$ + "sort_order = " + sort$ + "::integer, updated_at = now() "
+        sql$ = sql$ + "WHERE id = '" + el_id$ + "'::uuid AND vlak_id = '" + vl_id$ + "'::uuid "
+        sql$ = sql$ + "RETURNING id::text AS id"
+        created$ = "false"
+    END IF
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: element save failed (check material_id)"
+    END IF
+    el_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "id")
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "element_id" + CHR$(34) + ":" + CHR$(34) + el_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "created" + CHR$(34) + ":" + created$ + "}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_DeleteVlakElement(session_token$, element_id$) AS STRING
+    DIM sql$, rid%, t$, el_id$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF element_id$ = "" THEN
+        RETURN "ERROR: element_id is required"
+    END IF
+    el_id$ = SUBSTITUTE$(element_id$, "'", "''")
+    sql$ = "DELETE FROM acoustics.vlak_element WHERE id = '" + el_id$ + "'::uuid RETURNING id::text AS id"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: element not found"
+    END IF
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "element_id" + CHR$(34) + ":" + CHR$(34) + el_id$ + CHR$(34) + "}"
+    RETURN out$
+END PROCEDURE
+
+REM ---------------------------------------------------------------------------
+REM Geometrie-hulp: welke floormap-rooms al aan een VR hangen
+REM ---------------------------------------------------------------------------
+
+PROCEDURE API_ListLinkedSubsections(session_token$, building_id$) AS STRING
+    DIM sql$, rid%, n%, i%, out$, t$, b_id$
+    DIM sub$, vr$, omschr$, vg$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM acoustics.login_session s "
+    sql$ = sql$ + "JOIN acoustics.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF building_id$ = "" THEN
+        RETURN "ERROR: building_id is required"
+    END IF
+    b_id$ = SUBSTITUTE$(building_id$, "'", "''")
+
+    sql$ = "SELECT r.subsection_id::text AS subsection_id, r.id::text AS verblijfsruimte_id, "
+    sql$ = sql$ + "r.omschrijving, r.verblijfsgebied_id::text AS verblijfsgebied_id "
+    sql$ = sql$ + "FROM acoustics.verblijfsruimte r WHERE r.building_id = '" + b_id$ + "'::uuid "
+    sql$ = sql$ + "ORDER BY r.created_at ASC"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    n% = POSTGRES_NUM_ROWS(rid%)
+
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "building_id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "links" + CHR$(34) + ":["
+    i% = 0
+    WHILE i% < n%
+        IF i% > 0 THEN
+            out$ = out$ + ","
+        END IF
+        sub$ = POSTGRES_GET_BY_NAME$(rid%, i%, "subsection_id")
+        vr$ = POSTGRES_GET_BY_NAME$(rid%, i%, "verblijfsruimte_id")
+        omschr$ = SUBSTITUTE$(SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "omschrijving"), CHR$(34), ""), CHR$(10), " ")
+        vg$ = POSTGRES_GET_BY_NAME$(rid%, i%, "verblijfsgebied_id")
+        out$ = out$ + "{" + CHR$(34) + "subsection_id" + CHR$(34) + ":" + CHR$(34) + sub$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "verblijfsruimte_id" + CHR$(34) + ":" + CHR$(34) + vr$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "verblijfsgebied_id" + CHR$(34) + ":" + CHR$(34) + vg$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "omschrijving" + CHR$(34) + ":" + CHR$(34) + omschr$ + CHR$(34) + "}"
+        i% = i% + 1
+    WEND
+    out$ = out$ + "]}"
+    RETURN out$
+END PROCEDURE

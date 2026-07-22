@@ -1,0 +1,8 @@
+node_modules/
+client/node_modules/
+.DS_Store
+docs/__pycache__/
+*.pyc
+client/public/*.map
+.env
+.env.*

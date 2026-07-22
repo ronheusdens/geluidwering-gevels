@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Acoustics Engineer — Drawing analysis</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body class="engineer-body">
+  <main class="page page-engineer">
+    <header class="header header-compact">
+      <p class="eyebrow">Acoustics calculation service</p>
+      <h1>Drawing analysis</h1>
+      <p class="hint">
+        <a href="/engineer.html">← Back to drawing review</a>
+        ·
+        <a id="fm-ga-link" href="/ga.html">GA-model</a>
+      </p>
+    </header>
+
+    <section class="panel conn-bar" id="fm-conn-bar" aria-live="polite">
+      <span class="conn-led disconnected" id="fm-conn-led" aria-hidden="true"></span>
+      <span id="fm-conn-status">Connecting…</span>
+    </section>
+
+    <section class="panel" id="fm-login-panel">
+      <form id="fm-login-form" class="form" novalidate>
+        <fieldset>
+          <legend>Engineer login</legend>
+          <label>Username <input name="username" required autocomplete="username" value="engineer" /></label>
+          <label>Password <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
+        </fieldset>
+        <div class="actions">
+          <button type="submit" id="fm-login-btn">Sign in</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="fm-panel" class="hidden">
+      <div class="panel user-bar">
+        <span id="fm-user-label"></span>
+        <button type="button" id="fm-logout-btn" class="secondary">Sign out</button>
+        <label class="inline-label">Building id
+          <input id="fm-building-input" placeholder="uuid" size="36" />
+        </label>
+        <button type="button" id="fm-load-building-btn" class="secondary">Load sections</button>
+      </div>
+
+      <section class="panel" id="fm-picker-panel">
+        <h2>Scalable sections</h2>
+        <p class="hint">Pick a floormap, façade, or section to measure and mark components (same workflow for each).</p>
+        <div id="fm-section-list" class="admin-projects-list"></div>
+      </section>
+
+      <section class="panel hidden engineer-workspace-panel" id="fm-workspace-panel">
+        <div class="engineer-workspace-head">
+          <div>
+            <h2 id="fm-section-title">Section</h2>
+            <p class="hint" id="fm-section-meta"></p>
+          </div>
+          <button type="button" id="fm-back-picker-btn" class="secondary">All sections</button>
+        </div>
+
+        <div class="engineer-layout">
+          <div class="engineer-viewer-wrap">
+            <div class="engineer-viewer-toolbar">
+              <button type="button" id="fm-zoom-out" class="secondary" title="Zoom out">−</button>
+              <button type="button" id="fm-zoom-btn">Zoom</button>
+              <button type="button" id="fm-zoom-in" class="secondary" title="Zoom in">+</button>
+              <span id="fm-zoom-label">100%</span>
+              <button type="button" id="fm-zoom-fit" class="secondary">Fit</button>
+              <span class="toolbar-sep" aria-hidden="true"></span>
+              <button type="button" id="fm-discover-btn" class="secondary">Discover rooms</button>
+              <button type="button" id="fm-calibrate-btn" class="secondary">Calibrate scale</button>
+            </div>
+
+            <section class="scale-bar panel-inset" id="fm-scale-bar">
+              <strong>Drawing scale</strong>
+              <span id="fm-scale-status">Not set</span>
+              <div class="scale-mm-popup hidden" id="fm-calibrate-metres-wrap">
+                <label class="discovery-inline">
+                  Real length of marked line (mm)
+                  <input id="fm-calibrate-metres" type="number" min="1" step="1" value="5000" />
+                </label>
+                <button type="button" id="fm-calibrate-apply-btn">Apply</button>
+                <button type="button" id="fm-calibrate-repick-btn" class="secondary">Repick points</button>
+              </div>
+              <p class="hint" id="fm-calibrate-hint">Click Calibrate scale when you are ready.</p>
+            </section>
+
+            <section class="tools-panel panel-inset" id="fm-tools-bar">
+              <div class="tools-panel-head">
+                <strong>Tools</strong>
+                <div class="tools-mode-btns" role="group" aria-label="Drawing tools">
+                  <button type="button" class="secondary tool-mode-btn active" data-tool="off">Off</button>
+                  <button type="button" class="secondary tool-mode-btn" data-tool="length">Length (m)</button>
+                  <button type="button" class="secondary tool-mode-btn" data-tool="room">Draw room</button>
+                </div>
+                <button type="button" id="fm-tool-clear-btn" class="secondary">Clear</button>
+              </div>
+              <div class="tools-readouts">
+                <label class="discovery-inline">Length (m)
+                  <input id="fm-tool-length-mm" type="text" readonly value="—" />
+                </label>
+                <label class="discovery-inline">Circumference (m)
+                  <input id="fm-tool-circ-mm" type="text" readonly value="—" />
+                </label>
+                <label class="discovery-inline">Area (m²)
+                  <input id="fm-tool-area-mm2" type="text" readonly value="—" />
+                </label>
+              </div>
+              <p class="hint" id="fm-tool-hint">Set scale, then measure a length or draw a room — circ/area update from the room polygon.</p>
+            </section>
+
+            <section class="discovery-dock hidden" id="fm-discovery-dock">
+              <div class="discovery-dock-top">
+                <strong>Discovered room <span id="fm-discovery-progress"></span></strong>
+                <p class="hint" id="fm-discovery-hint">Drag white anchors to follow walls. Double-click an anchor to remove it, or Simplify to thin the polyline. Then Accept.</p>
+              </div>
+              <div class="discovery-dock-body">
+                <label class="discovery-inline">Label <input id="fm-discovery-label" /></label>
+                <label class="discovery-inline">Level
+                  <select id="fm-discovery-level">
+                    <option value="GROUND">Ground</option>
+                    <option value="FIRST">First</option>
+                    <option value="SECOND">Second</option>
+                    <option value="THIRD">Third</option>
+                    <option value="ROOF">Roof</option>
+                    <option value="OTHER">Other</option>
+                  </select>
+                </label>
+                <div class="discovery-adjust compact" aria-label="Nudge polygon">
+                  <span class="discovery-adjust-label">Move</span>
+                  <button type="button" id="fm-nudge-left" class="secondary" title="Left">←</button>
+                  <button type="button" id="fm-nudge-right" class="secondary" title="Right">→</button>
+                  <button type="button" id="fm-nudge-up" class="secondary" title="Up">↑</button>
+                  <button type="button" id="fm-nudge-down" class="secondary" title="Down">↓</button>
+                  <button type="button" id="fm-discovery-simplify" class="secondary" title="Drop near-collinear anchors">Simplify</button>
+                </div>
+                <div class="discovery-dock-actions">
+                  <button type="button" id="fm-discovery-accept">Accept</button>
+                  <button type="button" id="fm-discovery-skip" class="secondary">Skip</button>
+                  <button type="button" id="fm-discovery-cancel" class="secondary">Cancel</button>
+                </div>
+              </div>
+            </section>
+
+            <div id="fm-pdf-scroll" class="engineer-pdf-scroll">
+              <div id="fm-pdf-stage" class="engineer-pdf-stage">
+                <canvas id="fm-pdf-canvas"></canvas>
+                <canvas id="fm-overlay-canvas" class="engineer-overlay-canvas"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <aside class="engineer-sidebar">
+            <fieldset id="fm-mark-room-fieldset">
+              <legend>Room</legend>
+              <label class="block-label">Label
+                <input id="fm-room-label" placeholder="e.g. slaapkamer 1" />
+              </label>
+              <label class="block-label">Level
+                <select id="fm-room-level">
+                  <option value="GROUND">Ground</option>
+                  <option value="FIRST">First</option>
+                  <option value="SECOND">Second</option>
+                  <option value="THIRD">Third</option>
+                  <option value="ROOF">Roof</option>
+                  <option value="OTHER">Other</option>
+                </select>
+              </label>
+              <p class="hint" id="fm-room-pending-hint">Use Draw room in Tools, click vertices, then Close &amp; save. Double-click an anchor to remove it; Simplify thins the outline.</p>
+              <div class="actions actions-stack">
+                <button type="button" id="fm-room-draw-btn">Draw room</button>
+                <button type="button" id="fm-room-close-btn" class="secondary" disabled>Close polygon</button>
+                <button type="button" id="fm-room-simplify-btn" class="secondary" disabled>Simplify outline</button>
+                <button type="button" id="fm-room-save-btn" disabled>Save room</button>
+                <button type="button" id="fm-room-clear-btn" class="secondary" disabled>Clear mark</button>
+                <button type="button" id="fm-discover-btn-side" class="secondary">Discover rooms</button>
+              </div>
+            </fieldset>
+
+            <div class="saved-sections-block">
+              <h3>Saved rooms <span id="fm-room-count" class="region-count-badge">0</span></h3>
+              <p class="hint" id="fm-rooms-hint">Each room shows area (m²) and circumference (m) when scale is set.</p>
+              <ul id="fm-room-list" class="drawing-list"></ul>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </section>
+  </main>
+  <script type="module" src="/floormap.js?v=list-select"></script>
+</body>
+</html>

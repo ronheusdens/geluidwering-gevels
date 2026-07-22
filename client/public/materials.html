@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Acoustics — Material catalog</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="page page-wide">
+    <header class="header">
+      <p class="eyebrow">Acoustics administration</p>
+      <h1>Material catalog</h1>
+      <p class="lede">
+        CRUD for <code>acoustics.material</code> (DGMR <code>catalogusGG.pdf</code>, R&nbsp;63–2000&nbsp;Hz).
+        Restricted to <code>admin</code>.
+        <a href="/admin.html">← Project queue</a>
+      </p>
+    </header>
+
+    <section class="panel conn-bar" id="mat-conn-bar" aria-live="polite">
+      <span class="conn-led disconnected" id="mat-conn-led" aria-hidden="true"></span>
+      <span id="mat-conn-status">Connecting…</span>
+    </section>
+
+    <section class="panel" id="mat-login-panel">
+      <form id="mat-login-form" class="form" novalidate>
+        <fieldset>
+          <legend>Admin login</legend>
+          <label>Username <input name="username" required autocomplete="username" value="admin" /></label>
+          <label>Password <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
+        </fieldset>
+        <div class="actions">
+          <button type="submit" id="mat-login-btn">Sign in</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="mat-panel" class="hidden">
+      <div class="panel user-bar">
+        <span id="mat-user-label"></span>
+        <button type="button" id="mat-logout-btn" class="secondary">Sign out</button>
+      </div>
+
+      <section class="panel">
+        <form id="mat-filter-form" class="form mat-filter-row">
+          <label>Search
+            <input id="mat-q" name="q" type="search" placeholder="name or D00…" />
+          </label>
+          <label>Master category
+            <select id="mat-category">
+              <option value="">All</option>
+              <option value="Elementen">Elementen</option>
+              <option value="Glas">Glas</option>
+              <option value="Ventilatievoorzieningen">Ventilatievoorzieningen</option>
+              <option value="Ventilatievoorzieningen oud">Ventilatievoorzieningen oud</option>
+            </select>
+          </label>
+          <div class="actions mat-filter-actions">
+            <button type="submit">Search</button>
+            <button type="button" id="mat-new-btn" class="secondary">New material</button>
+          </div>
+        </form>
+        <p class="hint" id="mat-pager-label">—</p>
+        <div class="actions">
+          <button type="button" id="mat-prev-btn" class="secondary" disabled>Previous</button>
+          <button type="button" id="mat-next-btn" class="secondary" disabled>Next</button>
+        </div>
+      </section>
+
+      <section class="panel mat-table-wrap" id="mat-listbox" tabindex="0" role="listbox" aria-label="Material catalog">
+        <table class="mat-table" id="mat-table">
+          <thead>
+            <tr>
+              <th>Id</th>
+              <th>Master</th>
+              <th>Name</th>
+              <th>Dikte</th>
+              <th>Gewicht</th>
+              <th>RA</th>
+              <th>R63</th>
+              <th>R125</th>
+              <th>R250</th>
+              <th>R500</th>
+              <th>R1k</th>
+              <th>R2k</th>
+            </tr>
+          </thead>
+          <tbody id="mat-tbody"></tbody>
+        </table>
+      </section>
+
+      <section class="panel" id="mat-editor-panel">
+        <h2 id="mat-editor-title">Edit material</h2>
+        <form id="mat-editor-form" class="form mat-editor">
+          <input type="hidden" id="mat-id" />
+
+          <fieldset class="mat-fieldset">
+            <legend>Identity</legend>
+            <div class="mat-row">
+              <label class="mat-field mat-field-sm">Catalog id
+                <input id="mat-catalog-id" required maxlength="16" placeholder="D00118" />
+              </label>
+              <label class="mat-field mat-field-sm">No
+                <input id="mat-no" type="number" step="1" />
+              </label>
+              <label class="mat-field mat-field-md">Master category
+                <input id="mat-master" required list="mat-master-list" />
+                <datalist id="mat-master-list">
+                  <option value="Elementen"></option>
+                  <option value="Glas"></option>
+                  <option value="Ventilatievoorzieningen"></option>
+                  <option value="Ventilatievoorzieningen oud"></option>
+                </datalist>
+              </label>
+              <label class="mat-field mat-field-grow">Name
+                <input id="mat-name" required maxlength="200" />
+              </label>
+              <label class="mat-field mat-field-sm">Category
+                <input id="mat-cat" maxlength="32" placeholder="glas" />
+              </label>
+            </div>
+            <div class="mat-row">
+              <label class="mat-field mat-field-grow">Bron / source ref
+                <input id="mat-source-ref" maxlength="200" />
+              </label>
+              <label class="mat-field mat-field-md">Source
+                <input id="mat-source" value="catalogusGG.pdf" maxlength="64" />
+              </label>
+              <label class="mat-field mat-field-check checkbox-label">
+                <input id="mat-spectrum-ok" type="checkbox" checked />
+                <span>Spectrum OK</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class="mat-fieldset">
+            <legend>Physical</legend>
+            <div class="mat-row">
+              <label class="mat-field mat-field-sm">Dikte mm
+                <input id="mat-thick" type="number" step="any" />
+              </label>
+              <label class="mat-field mat-field-sm">Gewicht kg/m²
+                <input id="mat-weight" type="number" step="any" />
+              </label>
+              <label class="mat-field mat-field-sm">RA dB(A)
+                <input id="mat-ra" type="number" step="any" />
+              </label>
+              <label class="mat-field mat-field-sm">Glass t1
+                <input id="mat-t1" type="number" step="any" />
+              </label>
+              <label class="mat-field mat-field-sm">Cavity
+                <input id="mat-cav" type="number" step="any" />
+              </label>
+              <label class="mat-field mat-field-sm">Glass t2
+                <input id="mat-t2" type="number" step="any" />
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class="mat-fieldset">
+            <legend>R spectrum (dB)</legend>
+            <div class="mat-spectrum" role="group" aria-label="Octave-band sound reduction index">
+              <div class="mat-spectrum-headers">
+                <span>63&nbsp;Hz</span>
+                <span>125&nbsp;Hz</span>
+                <span>250&nbsp;Hz</span>
+                <span>500&nbsp;Hz</span>
+                <span>1000&nbsp;Hz</span>
+                <span>2000&nbsp;Hz</span>
+              </div>
+              <div class="mat-spectrum-inputs">
+                <input id="mat-r63" type="number" step="any" aria-label="R 63 Hz" />
+                <input id="mat-r125" type="number" step="any" aria-label="R 125 Hz" />
+                <input id="mat-r250" type="number" step="any" aria-label="R 250 Hz" />
+                <input id="mat-r500" type="number" step="any" aria-label="R 500 Hz" />
+                <input id="mat-r1000" type="number" step="any" aria-label="R 1000 Hz" />
+                <input id="mat-r2000" type="number" step="any" aria-label="R 2000 Hz" />
+              </div>
+            </div>
+          </fieldset>
+
+          <div class="actions">
+            <button type="submit" id="mat-save-btn">Save</button>
+            <button type="button" id="mat-delete-btn" class="danger secondary">Delete</button>
+            <button type="button" id="mat-clear-btn" class="secondary">Clear form</button>
+          </div>
+        </form>
+      </section>
+    </section>
+  </main>
+  <script type="module" src="/materials.js"></script>
+</body>
+</html>

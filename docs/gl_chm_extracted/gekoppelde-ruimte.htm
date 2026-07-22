@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+   <title>Gekoppelde ruimte</title>
+   <meta name="generator" content="Help &amp; Manual" />
+   <meta name="keywords" content="" />
+   <meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1" />
+   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+   
+   <link type="text/css" href="default.css" rel="stylesheet" />
+   <style type="text/css">
+     body { margin: 0px; background: #FFFFFF; }
+   </style>
+
+   <script type="text/javascript" src="jquery.js"></script>
+   <script type="text/javascript" src="helpman_settings.js"></script>
+   <script type="text/javascript" src="helpman_topicinit.js"></script>
+
+
+</head>
+<body>
+
+
+<table style="width:100%; border:none; border-spacing:0px; padding:5px; background:#C0C0C0">
+  <tr style="vertical-align:middle">
+    <td style="text-align:left">
+      <h1 class="p_Heading1"><img alt="GL_64" style="margin:0;width:0.6667in;height:0.6667in;border:none" src="gl_64.png"/> &nbsp; &nbsp; &nbsp; &nbsp;<span style="font-size: 24pt; color: #0000ff;">Gekoppelde ruimte</span></h1>
+
+    </td>
+    <td style="text-align:right">
+     <a href="inleiding2.htm">Top</a>&nbsp;
+     <a href="cpositie-en-celevatie.htm">Previous</a>&nbsp;
+     
+    </td>
+  </tr>
+</table>
+
+
+<!-- Placeholder for topic body. -->
+<table style="width:100%;border:none;border-spacing:0px"><tr style="vertical-align:top"><td style="text-align:left;padding:5px">
+<p><span style="color: #000000;">&nbsp;</span></p>
+<p><span style="font-size: 9pt; font-family: Tahoma,Geneva,Verdana,sans-serif;">In overleg met BSV (Bureau Sanering verkeerslawaai), de heer ir. E. Gerretsen en ir. Cauberg is de bijdrage van omloopgeluid via een in wendige scheidingsconstructie nader gespecificeerd.</span></p>
+<p><span style="font-size: 9pt; font-family: Tahoma,Geneva,Verdana,sans-serif;">In onderstaande figuur staat het basismodel van een gekoppelde ruimte:</span></p>
+<p><img alt="gekoppelde-ruimte" style="margin:0;width:5.8333in;height:4.3854in;border:none" src="gekoppelde-ruimte.gif"/></p>
+<p><span style="color: #000000;">&nbsp;</span></p>
+<p><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold;">Directe geluidoverdracht</span></p>
+<p><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">Bij directe geluidoverdracht vindt geluidtransmissie plaats via de gevel van buiten naar binnen (direct geluidveld naar diffuus geluidveld). De gevelgeluidwering per octaafband wordt berekend met behulp van formule 1:</span></p>
+<p><img alt="gevelgeluidwering" style="margin:0;width:5.9271in;height:0.5833in;border:none" src="gevelgeluidwering.gif"/></p>
+<p><span style="color: #000000;">&nbsp;</span></p>
+<p><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold;">Indirecte geluidoverdracht</span></p>
+<p><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">Bij indirecte geluidoverdracht (omloopgeluid) vindt geluidtransmissie plaats via gevel, gekoppelde ruimte en interne scheidingsconstructie. Eerst moet de geluidtransmissie door de gevel van buiten naar binnen worden berekend. Vervolgens wordt de geluiddemping van de ruimte berekend. Daarna moet de geluidtransmissie door de interne scheidingsconstructie van binnen naar binnen (diffuus naar diffuus geluidveld) worden berekend.</span></p>
+<p><span style="color: #000000;">&nbsp;</span></p>
+<p><span style="color: #000000;">&nbsp;</span></p>
+<p><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">De geluiddemping van de gekoppelde ruimte en de gevelgeluidwering per octaafband worden berekend met behulp van formule 2:</span></p>
+<p><img alt="geluiddemping" style="margin:0;width:5.9479in;height:0.5313in;border:none" src="geluiddemping.gif"/></p>
+<p><span style="color: #000000;">&nbsp;</span></p>
+<p><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">Vervolgens wordt de geluidisolatie van de interne scheidingsconstructie berekend met behulp van formule 3:</span></p>
+<p><img alt="geluidisolatie" style="margin:0;width:5.9375in;height:0.5313in;border:none" src="geluidisolatie.gif"/></p>
+<p><span style="color: #000000;">&nbsp;</span></p>
+<p><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">Om formule 4 in het programma te simuleren wordt automatisch bij &quot;grenst aan&quot;&quot; de C</span><span style="font-size: 8pt; font-family: Tahoma,Geneva,Verdana,sans-serif; vertical-align: sub;">g</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;"> op 3 dB gesteld (hierdoor wordt de C</span><span style="font-size: 8pt; font-family: Tahoma,Geneva,Verdana,sans-serif; vertical-align: sub;">r</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;"> die altijd 3 dB is geneutraliseerd, zie scherm voorkeursinstelling). De C</span><span style="font-size: 8pt; font-family: Tahoma,Geneva,Verdana,sans-serif; vertical-align: sub;">L</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;"> wordt gelijkgesteld aan de met behulp van formule 2 berekende G</span><span style="font-size: 8pt; font-family: Tahoma,Geneva,Verdana,sans-serif; vertical-align: sub;">A</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">.</span></p>
+<p><span style="color: #000000;">&nbsp;</span></p>
+<p><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">In het meegeleverde voorbeeldbestand KOPPELEN.GL is dit ge&iuml;llustreerd. Bij &lt;knieschot&gt; staat voor de C</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; vertical-align: sub;">L</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;"> = 15.7 dB en C</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; vertical-align: sub;">g</span><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;"> = 3 dB. Deze waarden zijn niet te wijzigen.</span></p>
+<p><span style="color: #000000;">&nbsp;</span></p>
+<p><span style="font-family: Tahoma,Geneva,Verdana,sans-serif; font-weight: bold;">Herleidingsterm spectrum</span></p>
+<p><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">De gevelgeluidwering wordt tenslotte berekend met behulp van formule 4, nadat de gevelgeluidwering per octaafband is berekend.</span></p>
+<p><img alt="gevelgeluidwering2" style="margin:0;width:5.9167in;height:0.5938in;border:none" src="gevelgeluidwering2.gif"/></p>
+<p><span style="color: #000000;">&nbsp;</span></p>
+<p><span style="font-family: Tahoma,Geneva,Verdana,sans-serif;">Eerst wordt de geluidwering van de gevel bepaald. Deze geluidwering is inclusief een eventuele tweede scheidingsconstructie. Daarna vindt pas een correctie plaats op het karakter van het buitengeluid. De herleidingsterm wordt derhalve maar een keer toegepast.</span></p>
+<p><span style="color: #000000;">&nbsp;</span></p>
+
+</td></tr></table>
+
+</body>
+</html>
