@@ -1,5 +1,5 @@
 {
-  "name": "acoustics-p0-client",
+  "name": "acoustics-client",
   "private": true,
   "version": "0.1.0",
   "type": "module",
