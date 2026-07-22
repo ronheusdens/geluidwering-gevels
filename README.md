@@ -7,6 +7,7 @@ First **application** on [bppServer](https://github.com/ronheusdens/bppServer) â
 | Path | Role |
 |------|------|
 | `client/` | HTML/TS UI (form, admin, materials, engineer, floormap, GA) |
+| `lib/database/` | Basic++ Postgres OOP helpers (`INCLUDE` from fixtures) |
 | `fixtures/acoustics/` | Basic++ API programs (`INCLUDE` via `BASIC_CWD`) |
 | `sql/` | Postgres DDL / seeds |
 | `docs/` | Materials catalogs, convert scripts, deploy notes |

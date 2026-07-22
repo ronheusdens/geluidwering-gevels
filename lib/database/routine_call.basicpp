@@ -1,0 +1,230 @@
+REM =============================================================================
+REM RoutineCall - Stored routine wrapper with OUT parameter support (Stage 3)
+REM =============================================================================
+
+CLASS RoutineCall() EXTENDS Object
+    REM OUT parameter storage
+    DIM out_names$(100)
+    DIM out_types%(100)
+    DIM out_values$(100)
+    DIM out_count% = 0
+    
+    PROCEDURE BindString(param_index%, value$) AS RoutineCall
+        RETURN SELF
+    END PROCEDURE
+
+    PROCEDURE BindInteger(param_index%, value%) AS RoutineCall
+        RETURN SELF
+    END PROCEDURE
+
+    PROCEDURE BindDecimal(param_index%, value#) AS RoutineCall
+        RETURN SELF
+    END PROCEDURE
+
+    PROCEDURE BindNull(param_index%) AS RoutineCall
+        RETURN SELF
+    END PROCEDURE
+
+    PROCEDURE Reset() AS RoutineCall
+        RETURN SELF
+    END PROCEDURE
+
+    PROCEDURE Execute() AS QueryResult
+        RETURN NULL
+    END PROCEDURE
+
+    PROCEDURE ExecuteNonQuery() AS Integer
+        RETURN -1
+    END PROCEDURE
+
+    PROCEDURE ExecuteScalarString() AS String
+        RETURN ""
+    END PROCEDURE
+
+    PROCEDURE ExecuteScalarInteger() AS Integer
+        RETURN 0
+    END PROCEDURE
+
+    PROCEDURE ExecuteScalarDecimal() AS Double
+        RETURN 0.0
+    END PROCEDURE
+
+    PROCEDURE GetPreparedSQL() AS String
+        RETURN ""
+    END PROCEDURE
+
+    PROCEDURE Close() AS Integer
+        RETURN 0
+    END PROCEDURE
+    
+    REM OUT parameter registration methods (Stage 3)
+    PROCEDURE RegisterOutString(param_name$) AS RoutineCall
+        REM Register an OUTPUT parameter that will return a string
+        out_count% = out_count% + 1
+        out_names$(out_count%) = param_name$
+        out_types%(out_count%) = 1
+        RETURN SELF
+    END PROCEDURE
+    
+    PROCEDURE RegisterOutInteger(param_name$) AS RoutineCall
+        REM Register an OUTPUT parameter that will return an integer
+        out_count% = out_count% + 1
+        out_names$(out_count%) = param_name$
+        out_types%(out_count%) = 2
+        RETURN SELF
+    END PROCEDURE
+    
+    PROCEDURE RegisterOutDecimal(param_name$) AS RoutineCall
+        REM Register an OUTPUT parameter that will return a decimal
+        out_count% = out_count% + 1
+        out_names$(out_count%) = param_name$
+        out_types%(out_count%) = 3
+        RETURN SELF
+    END PROCEDURE
+    
+    REM OUT parameter retrieval methods (Stage 3)
+    PROCEDURE OutString(param_name$) AS String
+        REM Retrieve string value from OUT parameter
+        DIM i%
+        FOR i% = 1 TO out_count%
+            IF out_names$(i%) = param_name$ THEN
+                RETURN out_values$(i%)
+            END IF
+        NEXT i%
+        RETURN ""
+    END PROCEDURE
+    
+    PROCEDURE OutInteger(param_name$) AS Integer
+        REM Retrieve integer value from OUT parameter
+        DIM str_val$ = SELF.OutString(param_name$)
+        RETURN VAL(str_val$)
+    END PROCEDURE
+    
+    PROCEDURE OutDecimal(param_name$) AS Double
+        REM Retrieve decimal value from OUT parameter
+        DIM str_val$ = SELF.OutString(param_name$)
+        RETURN VAL(str_val$)
+    END PROCEDURE
+END CLASS
+
+CLASS PostgreSQLRoutineCall(db, stmt_id%, sql_template$) EXTENDS RoutineCall
+    PROCEDURE BindString(param_index%, value$) AS RoutineCall
+        POSTGRES_BIND(stmt_id%, param_index%, value$)
+        RETURN SELF
+    END PROCEDURE
+
+    PROCEDURE BindInteger(param_index%, value%) AS RoutineCall
+        POSTGRES_BIND(stmt_id%, param_index%, STR$(value%))
+        RETURN SELF
+    END PROCEDURE
+
+    PROCEDURE BindDecimal(param_index%, value#) AS RoutineCall
+        POSTGRES_BIND(stmt_id%, param_index%, STR$(value#))
+        RETURN SELF
+    END PROCEDURE
+
+    PROCEDURE BindNull(param_index%) AS RoutineCall
+        POSTGRES_BIND_NULL(stmt_id%, param_index%)
+        RETURN SELF
+    END PROCEDURE
+
+    PROCEDURE Reset() AS RoutineCall
+        POSTGRES_RESET_PARAMS(stmt_id%)
+        RETURN SELF
+    END PROCEDURE
+
+    PROCEDURE Execute() AS QueryResult
+        DIM result_id%
+
+        result_id% = POSTGRES_EXECUTE_PREPARED(stmt_id%)
+        IF result_id% >= 0 THEN
+            RETURN NULL
+        END IF
+
+        DIM result AS NEW PostgreSQLQueryResult(result_id%, -1, -1)
+        RETURN result
+    END PROCEDURE
+
+    PROCEDURE ExecuteNonQuery() AS Integer
+        DIM result_id%
+
+        result_id% = POSTGRES_EXECUTE_PREPARED(stmt_id%)
+        IF result_id% >= 0 THEN
+            RETURN -1
+        END IF
+
+        REM If OUT parameters registered, fetch their values from result
+        IF out_count% > 0 THEN
+            FetchOutParameterValues(result_id%)
+        END IF
+
+        POSTGRES_CLOSE_RESULT(result_id%)
+        RETURN 0
+    END PROCEDURE
+    
+    PROCEDURE FetchOutParameterValues(result_id%) AS Integer
+        REM Fetch OUT parameter values from query result
+        REM For PostgreSQL, OUT values are returned as columns in the result
+        REM Store them in the out_values$ array by parameter name
+        
+        DIM i%, row
+        
+        IF result_id% < 0 THEN
+            RETURN -1
+        END IF
+        
+        REM Get first row (procedures return single row with OUT values)
+        DIM result AS NEW PostgreSQLQueryResult(result_id%, -1, -1)
+        IF result.GetNumRows() <= 0 THEN
+            result.Close()
+            RETURN -1
+        END IF
+        
+        row = result.GetRow(0)
+        
+        REM Store OUT parameter values by name
+        FOR i% = 1 TO out_count%
+            out_values$(i%) = row.GetString(out_names$(i%))
+        NEXT i%
+        
+        result.Close()
+        RETURN 0
+    END PROCEDURE
+
+    PROCEDURE ExecuteScalarString() AS String
+        DIM result AS QueryResult
+        DIM value$
+        DIM row
+
+        result = SELF.Execute()
+        IF result IS NULL THEN
+            RETURN ""
+        END IF
+
+        IF result.GetNumRows() <= 0 THEN
+            result.Close()
+            RETURN ""
+        END IF
+
+        row = result.GetRow(0)
+        value$ = row.GetValueByIndex(0)
+        result.Close()
+        RETURN value$
+    END PROCEDURE
+
+    PROCEDURE ExecuteScalarInteger() AS Integer
+        RETURN VAL(SELF.ExecuteScalarString())
+    END PROCEDURE
+
+    PROCEDURE ExecuteScalarDecimal() AS Double
+        RETURN VAL(SELF.ExecuteScalarString())
+    END PROCEDURE
+
+    PROCEDURE GetPreparedSQL() AS String
+        RETURN sql_template$
+    END PROCEDURE
+
+    PROCEDURE Close() AS Integer
+        RETURN POSTGRES_DEALLOCATE(stmt_id%)
+    END PROCEDURE
+END CLASS

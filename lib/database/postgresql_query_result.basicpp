@@ -1,0 +1,48 @@
+REM =============================================================================
+REM PostgreSQL Query Result (Phase 12.1)
+REM Implements QueryResult interface for PostgreSQL result sets
+REM =============================================================================
+
+REM Include required dependencies
+INCLUDE "lib/database/query_result.basicpp"
+INCLUDE "lib/database/row.basicpp"
+INCLUDE "lib/database/postgresql_row.basicpp"
+INCLUDE "lib/database/postgresql_row_collection.basicpp"
+
+CLASS PostgreSQLQueryResult(result_id%, cached_rows%, cached_cols%) EXTENDS QueryResult
+    REM Instance fields
+    result_handle% = result_id%
+    
+    PROCEDURE GetNumRows() AS Integer
+        IF cached_rows% = -1 THEN
+            cached_rows% = POSTGRES_NUM_ROWS(result_handle%)
+        END IF
+        RETURN cached_rows%
+    END PROCEDURE
+    
+    PROCEDURE GetNumColumns() AS Integer
+        IF cached_cols% = -1 THEN
+            cached_cols% = POSTGRES_NUM_COLUMNS(result_handle%)
+        END IF
+        RETURN cached_cols%
+    END PROCEDURE
+    
+    PROCEDURE GetColumnName(col%) AS String
+        RETURN POSTGRES_GET_COLUMN_NAME$(result_handle%, col%)
+    END PROCEDURE
+    
+    PROCEDURE GetRow(row%) AS Row
+        DIM row_obj AS NEW PostgreSQLRow(result_handle%, row%)
+        RETURN row_obj
+    END PROCEDURE
+    
+    PROCEDURE GetRows() AS RowCollection
+        DIM collection AS NEW PostgreSQLRowCollection(result_handle%)
+        RETURN collection
+    END PROCEDURE
+    
+    PROCEDURE Close() AS Integer
+        POSTGRES_CLOSE_RESULT(result_handle%)
+        RETURN 0
+    END PROCEDURE
+END CLASS

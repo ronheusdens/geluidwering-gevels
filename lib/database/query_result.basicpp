@@ -1,0 +1,60 @@
+REM =============================================================================
+REM QueryResult - Abstract Base Class for Query Results
+REM =============================================================================
+REM
+REM Represents the result set of a query. Provides methods to:
+REM - Get metadata (row/column count, column names, types)
+REM - Access individual rows
+REM - Iterate through rows (FOR EACH support)
+REM
+REM Concrete implementations: SQLiteQueryResult, MariaDBQueryResult
+REM =============================================================================
+
+CLASS QueryResult()
+    REM Abstract base class - should not be instantiated directly
+    
+    PROCEDURE GetNumRows() AS Integer
+        REM Returns the number of rows in the result set
+        REM Returns: Number of rows (0 if empty result)
+        RETURN 0
+    END PROCEDURE
+    
+    PROCEDURE GetNumColumns() AS Integer
+        REM Returns the number of columns in each row
+        REM Returns: Number of columns
+        RETURN 0
+    END PROCEDURE
+    
+    PROCEDURE GetColumnName(col%) AS String
+        REM Returns the name of a column by index
+        REM Parameters:
+        REM   col% - 0-based column index
+        REM Returns: Column name string
+        RETURN ""
+    END PROCEDURE
+    
+    PROCEDURE GetRow(row%) AS Row
+        REM Returns a single row as a Row object
+        REM Parameters:
+        REM   row% - 0-based row index
+        REM Returns: Row object, or NULL if index out of range
+        REM Should be overridden by subclasses
+        RETURN NULL
+    END PROCEDURE
+    
+    PROCEDURE GetRows() AS RowCollection
+        REM Returns all rows as an iterable collection
+        REM Used with FOR EACH loops
+        REM Returns: RowCollection object for iteration
+        REM Should be overridden by subclasses
+        RETURN NULL
+    END PROCEDURE
+    
+    PROCEDURE Close() AS Integer
+        REM Closes/frees the result set
+        REM Note: Phase 9 will call this automatically at scope exit
+        REM Returns: 0 on success
+        RETURN 0
+    END PROCEDURE
+    
+END CLASS

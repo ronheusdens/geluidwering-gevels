@@ -1,0 +1,72 @@
+REM =============================================================================
+REM RowCollection & RowEnumerator - Support FOR EACH Iteration
+REM =============================================================================
+REM
+REM These classes enable modern FOR EACH loop syntax:
+REM   FOR EACH row IN results.GetRows()
+REM       PRINT row.GetString("name")
+REM   NEXT
+REM
+REM RowCollection represents the full result set.
+REM RowEnumerator handles iteration state and GetEnumerator pattern.
+REM =============================================================================
+
+CLASS RowCollection(result_handle%)
+    REM Wraps a result set for iteration
+    result_id% = result_handle%
+    
+    PROCEDURE GetEnumerator() AS RowEnumerator
+        REM Returns an enumerator for use with FOR EACH
+        REM Returns: RowEnumerator object initialized to start
+        
+        DIM enum AS NEW RowEnumerator(result_id%, 0)
+        RETURN enum
+    END PROCEDURE
+    
+END CLASS
+
+
+CLASS RowEnumerator(result_id%, start_row%)
+    REM Manages iteration state for FOR EACH loops
+    REM Implements GetEnumerator pattern
+    result_handle% = result_id%
+    current_index% = start_row% - 1
+    max_rows% = 0                  REM Will be set when needed
+    rows_cached% = 0
+    
+    PROCEDURE MoveNext() AS Integer
+        REM Moves to the next row
+        REM Returns: 1 if there is a next row, 0 if at end
+        
+        REM Cache max_rows on first call
+        IF rows_cached% = 0 THEN
+            max_rows% = RESULT_NUM_ROWS(result_handle%)
+            rows_cached% = 1
+        END IF
+        
+        current_index% = current_index% + 1
+        
+        IF current_index% < max_rows% THEN
+            RETURN 1
+        ELSE
+            RETURN 0
+        END IF
+    END PROCEDURE
+    
+    PROCEDURE GetCurrent() AS Row
+        REM Returns the current row as a Row object
+        REM Returns: SQLiteRow object at current position
+        
+        DIM row AS NEW SQLiteRow(result_handle%, current_index%)
+        RETURN row
+    END PROCEDURE
+    
+    PROCEDURE Reset() AS Integer
+        REM Resets enumerator to start
+        REM Returns: 0 on success
+        
+        current_index% = -1
+        RETURN 0
+    END PROCEDURE
+    
+END CLASS

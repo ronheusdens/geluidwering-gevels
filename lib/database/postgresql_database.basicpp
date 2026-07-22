@@ -1,0 +1,228 @@
+REM =============================================================================
+REM PostgreSQL Database Connection (Phase 12.1)
+REM Implements DatabaseConnection interface for PostgreSQL servers
+REM =============================================================================
+
+REM Include required base classes and dependencies
+INCLUDE "lib/database/database_connection.basicpp"
+INCLUDE "lib/database/query_result.basicpp"
+INCLUDE "lib/database/row.basicpp"
+INCLUDE "lib/database/postgresql_query_result.basicpp"
+INCLUDE "lib/database/postgresql_row.basicpp"
+INCLUDE "lib/database/postgresql_row_collection.basicpp"
+INCLUDE "lib/database/routine_call.basicpp"
+
+CLASS PostgreSQLDatabase(connection_string$) EXTENDS DatabaseConnection
+    REM Instance fields for connection state
+    connection_id% = 0
+    host_name$ = ""
+    port_num% = 0
+    database_name$ = ""
+    user_name$ = ""
+    password_word$ = ""
+    error_message$ = ""
+    in_transaction% = 0
+    routine_stmt_counter% = 0
+    
+    PROCEDURE Init()
+        REM Connection string format: "host:port:database:user:password"
+        REM Example: "localhost:5432:test_db:basicpp:basicpp_password"
+        
+        REM Call C API to create connection
+        REM POSTGRES_CREATE handles parsing the connection string internally
+        connection_id% = POSTGRES_CREATE(connection_string$)
+        
+        IF connection_id% <= 0 THEN
+            error_message$ = "Failed to connect to PostgreSQL server"
+            connection_id% = -1
+        ELSE
+            error_message$ = ""
+        END IF
+        
+        in_transaction% = 0
+    END PROCEDURE
+    
+    PROCEDURE Connect() AS Integer
+        REM Connection already established in Init
+        IF connection_id% > 0 THEN
+            RETURN 0
+        ELSE
+            RETURN -1
+        END IF
+    END PROCEDURE
+    
+    PROCEDURE Disconnect() AS Integer
+        IF connection_id% > 0 THEN
+            POSTGRES_CLOSE(connection_id%)
+            connection_id% = 0
+        END IF
+        RETURN 0
+    END PROCEDURE
+    
+    PROCEDURE IsConnected() AS Integer
+        IF connection_id% <= 0 THEN
+            RETURN 0
+        END IF
+        RETURN POSTGRES_IS_CONNECTED(connection_id%)
+    END PROCEDURE
+    
+    PROCEDURE Execute(sql$) AS QueryResult
+        DIM local_error$
+        DIM result_id%
+        
+        IF connection_id% <= 0 THEN
+            local_error$ = "Not connected to PostgreSQL"
+            error_message$ = local_error$
+            RETURN NULL
+        END IF
+        
+        result_id% = POSTGRES_QUERY(connection_id%, sql$)
+        
+        REM Check for error via error message (result IDs are always negative)
+        local_error$ = POSTGRES_GET_ERROR$(connection_id%)
+        IF Len(local_error$) > 0 THEN
+            error_message$ = local_error$
+            RETURN NULL
+        END IF
+        error_message$ = ""
+        
+        REM Create result object
+        DIM result AS NEW PostgreSQLQueryResult(result_id%, -1, -1)
+        RETURN result
+    END PROCEDURE
+    
+    PROCEDURE GetLastError() AS String
+        RETURN error_message$
+    END PROCEDURE
+    
+    PROCEDURE BeginTransaction() AS Integer
+        DIM local_error$
+        DIM result AS QueryResult
+        
+        IF in_transaction% THEN
+            local_error$ = "Transaction already active"
+            error_message$ = local_error$
+            RETURN -1
+        END IF
+        
+        result = SELF.Execute("BEGIN")
+        IF result <> NULL THEN
+            in_transaction% = 1
+            error_message$ = ""
+            RETURN 0
+        ELSE
+            local_error$ = "Failed to begin transaction"
+            error_message$ = local_error$
+            RETURN -1
+        END IF
+    END PROCEDURE
+    
+    PROCEDURE Commit() AS Integer
+        DIM local_error$
+        DIM result AS QueryResult
+        
+        IF NOT in_transaction% THEN
+            local_error$ = "No active transaction"
+            error_message$ = local_error$
+            RETURN -1
+        END IF
+        
+        result = SELF.Execute("COMMIT")
+        IF result <> NULL THEN
+            in_transaction% = 0
+            error_message$ = ""
+            RETURN 0
+        ELSE
+            local_error$ = "Failed to commit transaction"
+            error_message$ = local_error$
+            RETURN -1
+        END IF
+    END PROCEDURE
+    
+    PROCEDURE Rollback() AS Integer
+        DIM local_error$
+        DIM result AS QueryResult
+        
+        IF NOT in_transaction% THEN
+            local_error$ = "No active transaction"
+            error_message$ = local_error$
+            RETURN -1
+        END IF
+        
+        result = SELF.Execute("ROLLBACK")
+        IF result <> NULL THEN
+            in_transaction% = 0
+            error_message$ = ""
+            RETURN 0
+        ELSE
+            local_error$ = "Failed to rollback transaction"
+            error_message$ = local_error$
+            RETURN -1
+        END IF
+    END PROCEDURE
+    
+    PROCEDURE Prepare(sql$) AS PreparedStatement
+        REM Phase 12.2: Prepared statement support
+        REM For now, return NULL (will implement in Phase 2)
+        RETURN NULL
+    END PROCEDURE
+
+    PROCEDURE PrepareFunction(routine_name$, param_count%) AS RoutineCall
+        RETURN CreateRoutineCall(routine_name$, param_count%, 0)
+    END PROCEDURE
+
+    PROCEDURE PrepareProcedure(routine_name$, param_count%) AS RoutineCall
+        RETURN CreateRoutineCall(routine_name$, param_count%, 1)
+    END PROCEDURE
+
+    PROCEDURE CreateRoutineCall(routine_name$, param_count%, is_procedure%) AS RoutineCall
+        DIM stmt_name$
+        DIM sql_template$
+        DIM stmt_id%
+        DIM placeholders$
+
+        IF connection_id% <= 0 THEN
+            error_message$ = "Not connected to PostgreSQL"
+            RETURN NULL
+        END IF
+
+        placeholders$ = BuildRoutinePlaceholders(param_count%)
+        routine_stmt_counter% = routine_stmt_counter% + 1
+        stmt_name$ = "routine_stmt_" + STR$(routine_stmt_counter%)
+
+        IF is_procedure% THEN
+            sql_template$ = "CALL " + routine_name$ + "(" + placeholders$ + ")"
+        ELSE
+            sql_template$ = "SELECT * FROM " + routine_name$ + "(" + placeholders$ + ")"
+        END IF
+
+        stmt_id% = POSTGRES_PREPARE(connection_id%, stmt_name$, sql_template$)
+        IF stmt_id% <= 0 THEN
+            error_message$ = POSTGRES_GET_ERROR$(connection_id%)
+            RETURN NULL
+        END IF
+
+        error_message$ = ""
+        DIM routine_call AS NEW PostgreSQLRoutineCall(SELF, stmt_id%, sql_template$)
+        RETURN routine_call
+    END PROCEDURE
+
+    PROCEDURE BuildRoutinePlaceholders(param_count%) AS String
+        DIM placeholders$
+        DIM param_idx%
+
+        placeholders$ = ""
+        IF param_count% <= 0 THEN
+            RETURN ""
+        END IF
+        
+        FOR param_idx% = 1 TO param_count%
+            IF param_idx% > 1 THEN
+                placeholders$ = placeholders$ + ", "
+            END IF
+            placeholders$ = placeholders$ + "$" + STR$(param_idx%)
+        NEXT param_idx%
+
+        RETURN placeholders$
+    END PROCEDURE
+END CLASS

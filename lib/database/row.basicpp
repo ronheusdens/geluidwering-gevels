@@ -1,0 +1,76 @@
+REM =============================================================================
+REM Row - Abstract Base Class for Query Result Rows
+REM =============================================================================
+REM
+REM Represents a single row from a query result set. Provides type-safe
+REM access to column values by name or index. Handles type conversions
+REM and null checking.
+REM
+REM Concrete implementations: SQLiteRow, MariaDBRow
+REM =============================================================================
+
+CLASS Row()
+    REM Abstract base class - should not be instantiated directly
+    
+    PROCEDURE GetValue(col$) AS String
+        REM Returns a column value as a string by column name
+        REM Parameters:
+        REM   col$ - Column name
+        REM Returns: Column value as string (empty if null)
+        RETURN ""
+    END PROCEDURE
+    
+    PROCEDURE GetValueByIndex(col%) AS String
+        REM Returns a column value as a string by 0-based index
+        REM Parameters:
+        REM   col% - 0-based column index
+        REM Returns: Column value as string (empty if null)
+        RETURN ""
+    END PROCEDURE
+    
+    PROCEDURE GetType(col$) AS Integer
+        REM Returns the data type of a column
+        REM Parameters:
+        REM   col$ - Column name
+        REM Returns: Type code:
+        REM   1 = INTEGER
+        REM   2 = FLOAT/DECIMAL
+        REM   3 = TEXT/STRING
+        REM   4 = BLOB
+        REM   5 = NULL
+        RETURN 5
+    END PROCEDURE
+    
+    PROCEDURE GetInt(col$) AS Integer
+        REM Returns a column value as an integer
+        REM Parameters:
+        REM   col$ - Column name
+        REM Returns: Integer value (0 if null or not convertible)
+        RETURN 0
+    END PROCEDURE
+    
+    PROCEDURE GetDecimal(col$) AS Double
+        REM Returns a column value as a floating-point number
+        REM Parameters:
+        REM   col$ - Column name
+        REM Returns: Double value (0.0 if null or not convertible)
+        RETURN 0.0
+    END PROCEDURE
+    
+    PROCEDURE GetString(col$) AS String
+        REM Returns a column value as a string
+        REM Parameters:
+        REM   col$ - Column name
+        REM Returns: String value (empty if null)
+        RETURN ""
+    END PROCEDURE
+    
+    PROCEDURE IsNull(col$) AS Integer
+        REM Checks if a column value is NULL
+        REM Parameters:
+        REM   col$ - Column name
+        REM Returns: 1 if NULL, 0 if not NULL
+        RETURN 1
+    END PROCEDURE
+    
+END CLASS

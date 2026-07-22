@@ -1,0 +1,49 @@
+REM =============================================================================
+REM PostgreSQL Row Collection & Enumerator (Phase 12.1)
+REM Enables FOR EACH iteration over PostgreSQL result sets
+REM =============================================================================
+
+INCLUDE "lib/database/row_collection.basicpp"
+INCLUDE "lib/database/postgresql_row.basicpp"
+
+CLASS PostgreSQLRowCollection(result_id%) EXTENDS RowCollection
+    REM Instance fields
+    result_handle% = result_id%
+    
+    PROCEDURE GetEnumerator() AS RowEnumerator
+        DIM max_rows%
+        max_rows% = POSTGRES_NUM_ROWS(result_handle%)
+        DIM enum AS NEW PostgreSQLRowEnumerator(result_handle%, 0, result_handle%, -1, max_rows%)
+        RETURN enum
+    END PROCEDURE
+    
+    PROCEDURE GetCurrent() AS Row
+        REM Returns row 0 - used by single-row queries (COUNT, etc.)
+        DIM row AS NEW PostgreSQLRow(result_handle%, 0)
+        RETURN row
+    END PROCEDURE
+END CLASS
+
+REM =============================================================================
+
+CLASS PostgreSQLRowEnumerator(result_id%, start_row%, result_handle%, current_index%, max_rows%) EXTENDS RowEnumerator
+    REM Instance fields
+    result_ref% = result_handle%
+    REM Re-set max_rows% here so derived class body runs AFTER base class body overwrites it to 0
+    max_rows% = POSTGRES_NUM_ROWS(result_ref%)
+
+    PROCEDURE MoveNext() AS Integer
+        REM Override base class MoveNext() to use max_rows% set in this derived class body
+        current_index% = current_index% + 1
+        IF current_index% < max_rows% THEN
+            RETURN 1
+        ELSE
+            RETURN 0
+        END IF
+    END PROCEDURE
+    
+    PROCEDURE GetCurrent() AS Row
+        DIM row AS NEW PostgreSQLRow(result_ref%, current_index%)
+        RETURN row
+    END PROCEDURE
+END CLASS

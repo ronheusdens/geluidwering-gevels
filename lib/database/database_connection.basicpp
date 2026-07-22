@@ -1,0 +1,96 @@
+REM =============================================================================
+REM DatabaseConnection - Abstract Base Class for Database Access
+REM =============================================================================
+REM
+REM This is the abstract interface that all database implementations must follow.
+REM It defines the contract for connecting to databases and executing queries.
+REM
+REM Concrete implementations: SQLiteDatabase, MariaDBConnection
+REM =============================================================================
+
+CLASS DatabaseConnection()
+    REM Abstract base class - should not be instantiated directly
+    
+    PROCEDURE Connect() AS Integer
+        REM Establishes connection to the database
+        REM Returns: 0 on success, non-zero on error
+        REM Should be overridden by subclasses
+        RETURN -1
+    END PROCEDURE
+    
+    PROCEDURE Disconnect() AS Integer
+        REM Closes the connection and frees resources
+        REM Returns: 0 on success, non-zero on error
+        REM Should be overridden by subclasses
+        RETURN -1
+    END PROCEDURE
+    
+    PROCEDURE IsConnected() AS Integer
+        REM Checks if connection is active
+        REM Returns: 1 if connected, 0 if not
+        REM Should be overridden by subclasses
+        RETURN 0
+    END PROCEDURE
+    
+    PROCEDURE Execute(sql$) AS QueryResult
+        REM Executes a SQL query and returns results
+        REM Parameters:
+        REM   sql$ - SQL query string
+        REM Returns: QueryResult object, or NULL on error
+        REM Should be overridden by subclasses
+        RETURN NULL
+    END PROCEDURE
+    
+    PROCEDURE GetLastError() AS String
+        REM Returns the last error message
+        REM Returns: Error message string (empty if no error)
+        REM Should be overridden by subclasses
+        RETURN ""
+    END PROCEDURE
+    
+    PROCEDURE BeginTransaction() AS Integer
+        REM Starts a transaction (optional for Phase 1)
+        REM Returns: 0 on success, non-zero on error
+        RETURN 0
+    END PROCEDURE
+    
+    PROCEDURE Commit() AS Integer
+        REM Commits the current transaction (optional for Phase 1)
+        REM Returns: 0 on success, non-zero on error
+        RETURN 0
+    END PROCEDURE
+    
+    PROCEDURE Rollback() AS Integer
+        REM Rolls back the current transaction (optional for Phase 1)
+        REM Returns: 0 on success, non-zero on error
+        RETURN 0
+    END PROCEDURE
+    
+    PROCEDURE Prepare(sql$) AS PreparedStatement
+        REM Creates a prepared statement for parameterized queries (Phase 11)
+        REM Parameters:
+        REM   sql$ - SQL template with :param_name placeholders
+        REM Returns: PreparedStatement object, or NULL on error
+        REM Subclasses must override this method
+        RETURN NULL
+    END PROCEDURE
+
+    PROCEDURE PrepareFunction(routine_name$, param_count%) AS RoutineCall
+        REM Creates a stored-function wrapper using positional parameters
+        REM Parameters:
+        REM   routine_name$ - Qualified PostgreSQL function name
+        REM   param_count% - Number of positional parameters
+        REM Returns: RoutineCall object, or NULL on error
+        RETURN NULL
+    END PROCEDURE
+
+    PROCEDURE PrepareProcedure(routine_name$, param_count%) AS RoutineCall
+        REM Creates a stored-procedure wrapper using positional parameters
+        REM Parameters:
+        REM   routine_name$ - Qualified PostgreSQL procedure name
+        REM   param_count% - Number of positional parameters
+        REM Returns: RoutineCall object, or NULL on error
+        RETURN NULL
+    END PROCEDURE
+    
+END CLASS

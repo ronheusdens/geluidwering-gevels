@@ -1,0 +1,56 @@
+REM =============================================================================
+REM PostgreSQL Row (Phase 12.1)
+REM Implements Row interface for PostgreSQL row access
+REM =============================================================================
+
+CLASS PostgreSQLRow(result_id%, row_num%) EXTENDS Row
+    REM Instance fields
+    result_handle% = result_id%
+    row_index% = row_num%
+    
+    PROCEDURE GetValue(col$) AS String
+        RETURN POSTGRES_GET_BY_NAME$(result_handle%, row_index%, col$)
+    END PROCEDURE
+    
+    PROCEDURE GetValueByIndex(col%) AS String
+        RETURN POSTGRES_GET_VALUE$(result_handle%, row_index%, col%)
+    END PROCEDURE
+    
+    PROCEDURE GetType(col$) AS Integer
+        DIM col_index%
+        col_index% = POSTGRES_GET_COLUMN_INDEX(result_handle%, col$)
+        IF col_index% >= 0 THEN
+            RETURN POSTGRES_GET_TYPE(result_handle%, row_index%, col_index%)
+        ELSE
+            RETURN -1
+        END IF
+    END PROCEDURE
+    
+    PROCEDURE GetInt(col$) AS Integer
+        DIM value$
+        value$ = GetValue(col$)
+        IF value$ = "" THEN
+            RETURN 0
+        ELSE
+            RETURN VAL(value$)
+        END IF
+    END PROCEDURE
+    
+    PROCEDURE GetDecimal(col$) AS Double
+        DIM value$
+        value$ = GetValue(col$)
+        IF value$ = "" THEN
+            RETURN 0.0
+        ELSE
+            RETURN VAL(value$)
+        END IF
+    END PROCEDURE
+    
+    PROCEDURE GetString(col$) AS String
+        RETURN GetValue(col$)
+    END PROCEDURE
+    
+    PROCEDURE IsNull(col$) AS Integer
+        RETURN POSTGRES_IS_NULL(result_handle%, row_index%, POSTGRES_GET_COLUMN_INDEX(result_handle%, col$))
+    END PROCEDURE
+END CLASS
