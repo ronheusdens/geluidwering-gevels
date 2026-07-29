@@ -4,8 +4,8 @@ Product design for Acoustics apps on [bppServer](../../../bppServer/). Not part 
 
 | Doc | Role |
 |-----|------|
-| [acoustics-suite-overview.md](acoustics-suite-overview.md) | Two apps, shared building data, `NoiseLoad` handoff |
-| [acoustics-postgres-schema.md](acoustics-postgres-schema.md) | Versioned PostgreSQL DDL |
+| [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md) | Two apps, shared building data, `NoiseLoad` handoff |
+| [app-gevelwering-postgres-schema.md](app-gevelwering-postgres-schema.md) | Versioned PostgreSQL DDL |
 | [road-traffic-noise-app.md](road-traffic-noise-app.md) | App 1 — road traffic Laeq |
 | [facade-sound-insulation-app.md](facade-sound-insulation-app.md) | App 2 — façade insulation |
 

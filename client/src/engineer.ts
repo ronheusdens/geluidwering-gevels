@@ -1,5 +1,13 @@
 import { loadAuth, storeAuth as persistAuth, syncSessionCookie, apiAuthHeaders } from "./auth-store";
 import { resolveBppWsUrl } from "./ws-url";
+import { initPasswordToggles } from "./password-toggle";
+import {
+  metresPerNormFromCalibration,
+  normalizeAspectYx,
+  scaledAreaM2,
+  scaledPathLength,
+  shoelaceArea,
+} from "./geom";
 
 type Envelope = {
   v: number;
@@ -51,6 +59,7 @@ type DrawingRegion = {
   y_max: number;
   scale_ratio?: number | null;
   metres_per_norm_unit?: number | null;
+  scale_aspect_yx?: number | null;
   scale_source?: string | null;
 };
 
@@ -85,15 +94,16 @@ type PdfDocument = {
 };
 
 type PdfPage = {
-  getViewport: (opts: { scale: number }) => { width: number; height: number };
+  getViewport: (opts: { scale: number; rotation?: number }) => { width: number; height: number };
   render: (ctx: { canvasContext: CanvasRenderingContext2D; viewport: { width: number; height: number } }) => {
     promise: Promise<void>;
   };
+  rotate?: number;
 };
 
 const BPP_WS = resolveBppWsUrl();
 
-const AUTH_KEY = "acoustics_engineer_auth";
+const AUTH_KEY = "app_gevelwering_engineer_auth";
 
 const connBarEl = document.getElementById("engineer-conn-bar") as HTMLElement;
 const connLedEl = document.getElementById("engineer-conn-led") as HTMLElement;
@@ -342,7 +352,7 @@ function statusLabel(status: ProjectStatus | string): string {
 async function loadSharedApi(): Promise<void> {
   await send(
     "exec.request",
-    { code: 'INCLUDE "fixtures/acoustics/shared_building_api.basicpp"\n' },
+    { code: 'INCLUDE "fixtures/app-gevelwering/shared_building_api.basicpp"\n' },
     "exec.completed",
   );
   const bootRet = await invokeString("API_Bootstrap", []);
@@ -448,6 +458,7 @@ async function openProject(buildingId: string): Promise<void> {
 function normalizeRegion(raw: Partial<DrawingRegion> & { region_id?: string }): DrawingRegion {
   const scaleRatio = raw.scale_ratio != null ? Number(raw.scale_ratio) : NaN;
   const mpu = raw.metres_per_norm_unit != null ? Number(raw.metres_per_norm_unit) : NaN;
+  const aspect = raw.scale_aspect_yx != null ? Number(raw.scale_aspect_yx) : NaN;
   return {
     id: String(raw.id || raw.region_id || ""),
     document_id: String(raw.document_id || ""),
@@ -460,6 +471,7 @@ function normalizeRegion(raw: Partial<DrawingRegion> & { region_id?: string }): 
     y_max: Number(raw.y_max),
     scale_ratio: Number.isFinite(scaleRatio) ? scaleRatio : null,
     metres_per_norm_unit: Number.isFinite(mpu) ? mpu : null,
+    scale_aspect_yx: Number.isFinite(aspect) && aspect > 0 ? aspect : null,
     scale_source: raw.scale_source != null ? String(raw.scale_source) : null,
   };
 }
@@ -521,14 +533,14 @@ function updateScaleUi(): void {
 
   if (!sel) {
     scaleStatusEl.textContent = "Select a section, then Set scale";
-    scaleHintEl.textContent = "Click a floormap, facade, or section, then Set scale.";
+    scaleHintEl.textContent = "Klik een plattegrond, gevel of doorsnede, daarna Schaal instellen.";
     scaleBtn.disabled = true;
     scaleBtn.textContent = "Set scale";
     return;
   }
   if (!regionSupportsScale(sel.region_kind)) {
     scaleStatusEl.textContent = `${sel.label} cannot be scaled`;
-    scaleHintEl.textContent = "Scale applies to floormap, facade, section, and cross-section.";
+    scaleHintEl.textContent = "Schaal geldt voor plattegrond, gevel, doorsnede en dwarsdoorsnede.";
     scaleBtn.disabled = true;
     scaleBtn.textContent = "Set scale";
     return;
@@ -593,7 +605,7 @@ function updateAnalyzePanel(): void {
 function openAnalysisWorkspace(): void {
   const sel = selectedRegion();
   if (!sel || !regionSupportsScale(sel.region_kind)) {
-    setStatus("Select a floormap, façade, or section first", "err");
+    setStatus("Selecteer eerst een plattegrond, gevel of doorsnede", "err");
     return;
   }
   const url = analysisWorkspaceUrl(sel.id);
@@ -615,7 +627,7 @@ function endScalePick(msg?: string): void {
 function startScalePick(): void {
   const sel = selectedRegion();
   if (!sel || !regionSupportsScale(sel.region_kind)) {
-    setStatus("Select a floormap, facade, or section first", "err");
+    setStatus("Selecteer eerst een plattegrond, gevel of doorsnede", "err");
     return;
   }
   if (discoveryCandidates.length > 0) {
@@ -673,6 +685,16 @@ function activeScaleMpu(): number | null {
   return mpu;
 }
 
+/** Section crop aspect (height_px / width_px) in page pixels. */
+function sectionScaleAspect(sec: DrawingRegion): number {
+  const wNorm = Math.max(1e-9, sec.x_max - sec.x_min);
+  const hNorm = Math.max(1e-9, sec.y_max - sec.y_min);
+  if (canvasWidth > 0 && canvasHeight > 0) {
+    return (hNorm * canvasHeight) / (wNorm * canvasWidth);
+  }
+  return normalizeAspectYx(sec.scale_aspect_yx);
+}
+
 function fmtMeasure(n: number | null, digits = 1): string {
   if (n == null || !Number.isFinite(n)) return "—";
   return n.toFixed(digits);
@@ -685,26 +707,14 @@ function pathLengthM(
   closed: boolean,
 ): number {
   if (pts.length < 2) return 0;
-  let sum = 0;
-  const n = closed ? pts.length : pts.length - 1;
-  for (let i = 0; i < n; i++) {
-    const a = canvasPtToSectionLocal(pts[i], sec);
-    const b = canvasPtToSectionLocal(pts[(i + 1) % pts.length], sec);
-    sum += Math.hypot(b.x - a.x, b.y - a.y) * mpu;
-  }
-  return sum;
+  const local = pts.map((p) => canvasPtToSectionLocal(p, sec));
+  return Math.round(scaledPathLength(local, mpu, sectionScaleAspect(sec), closed) * 100) / 100;
 }
 
 function pathAreaM2(pts: { x: number; y: number }[], sec: DrawingRegion, mpu: number): number {
   if (pts.length < 3) return 0;
-  let sum = 0;
-  for (let i = 0; i < pts.length; i++) {
-    const a = canvasPtToSectionLocal(pts[i], sec);
-    const b = canvasPtToSectionLocal(pts[(i + 1) % pts.length], sec);
-    sum += a.x * b.y - b.x * a.y;
-  }
-  const areaNorm = Math.abs(sum) / 2;
-  return areaNorm * mpu * mpu;
+  const local = pts.map((p) => canvasPtToSectionLocal(p, sec));
+  return Math.round(scaledAreaM2(shoelaceArea(local), mpu, sectionScaleAspect(sec)) * 100) / 100;
 }
 
 function measureDisplayPoints(): { x: number; y: number }[] {
@@ -758,7 +768,7 @@ function updateMeasureReadouts(): void {
 function updateToolHint(): void {
   const mpu = activeScaleMpu();
   if (!mpu) {
-    toolHintEl.textContent = "Select a scaled section (floormap, facade, …), then choose a measure tool.";
+    toolHintEl.textContent = "Selecteer een geschaalde sectie (plattegrond, gevel, …), kies daarna een meettool.";
     return;
   }
   if (measure.tool === "length") {
@@ -868,7 +878,7 @@ function drawMeasureOverlay(ctx: CanvasRenderingContext2D): void {
   }
 }
 
-async function saveSectionScale(sectionId: string, mpu: number): Promise<void> {
+async function saveSectionScale(sectionId: string, mpu: number, aspectYx: number): Promise<void> {
   if (!auth?.token) throw new Error("Not logged in");
 
   let httpErr = "";
@@ -882,6 +892,7 @@ async function saveSectionScale(sectionId: string, mpu: number): Promise<void> {
         metres_per_norm_unit: mpu,
         scale_ratio: null,
         scale_source: "CALIBRATED",
+        scale_aspect_yx: aspectYx,
       }),
     });
     let body: { ok?: boolean; error?: string } = {};
@@ -905,7 +916,7 @@ async function saveSectionScale(sectionId: string, mpu: number): Promise<void> {
   // WS fallback — re-INCLUDE so facade support is loaded without restarting bppServer
   await send(
     "exec.request",
-    { code: 'INCLUDE "fixtures/acoustics/shared_building_api.basicpp"\n' },
+    { code: 'INCLUDE "fixtures/app-gevelwering/shared_building_api.basicpp"\n' },
     "exec.completed",
   );
   const ret = await invokeString("API_SaveFloormapScale", [
@@ -914,6 +925,7 @@ async function saveSectionScale(sectionId: string, mpu: number): Promise<void> {
     String(mpu),
     "NULL",
     "CALIBRATED",
+    String(aspectYx),
   ]);
   if (ret.startsWith("ERROR")) {
     throw new Error(httpErr ? `${ret} (HTTP: ${httpErr})` : ret);
@@ -953,20 +965,21 @@ async function finishScalePick(): Promise<void> {
   };
   const a = pageNormToSectionLocal(aPage.x, aPage.y, sel);
   const b = pageNormToSectionLocal(bPage.x, bPage.y, sel);
-  const normDist = Math.hypot(b.x - a.x, b.y - a.y);
-  if (normDist < 1e-6) {
+  const aspect = sectionScaleAspect(sel);
+  const metres = mm / 1000;
+  const mpu = metresPerNormFromCalibration(metres, a, b, aspect);
+  if (!(mpu > 0) || !Number.isFinite(mpu)) {
     setStatus("Scale points too close — pick again", "err");
     scalePick = { points: [] };
     updateScaleUi();
     drawRegionsOverlay();
     return;
   }
-  const metres = mm / 1000;
-  const mpu = metres / normDist;
   setStatus("Saving scale…", "busy");
   try {
-    await saveSectionScale(sel.id, mpu);
+    await saveSectionScale(sel.id, mpu, aspect);
     sel.metres_per_norm_unit = mpu;
+    sel.scale_aspect_yx = aspect;
     sel.scale_source = "CALIBRATED";
     sel.scale_ratio = null;
     endScalePick(`Scale saved: marked line = ${mm} mm`);
@@ -991,7 +1004,7 @@ async function finishScalePick(): Promise<void> {
 function regionKindLabel(kind: string): string {
   switch (kind) {
     case "FACADE":
-      return "Façade";
+      return "Gevel";
     case "SECTION":
       return "Building section";
     case "FLOORMAP":
@@ -1212,7 +1225,9 @@ async function loadActiveDocument(): Promise<void> {
 async function renderPdfPage(): Promise<void> {
   if (!pdfDoc) return;
   const page = await pdfDoc.getPage(pdfPageNum);
-  const viewport = page.getViewport({ scale: pdfZoom });
+  // Keep page /Rotate (e.g. 90°) explicit so re-renders after discover match the first paint.
+  const rotation = typeof page.rotate === "number" ? page.rotate : 0;
+  const viewport = page.getViewport({ scale: pdfZoom, rotation });
   canvasWidth = Math.floor(viewport.width);
   canvasHeight = Math.floor(viewport.height);
   pdfCanvas.width = canvasWidth;
@@ -1221,6 +1236,8 @@ async function renderPdfPage(): Promise<void> {
   overlayCanvas.height = canvasHeight;
   const ctx = pdfCanvas.getContext("2d");
   if (!ctx) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
   await page.render({ canvasContext: ctx, viewport }).promise;
   pageLabelEl.textContent = `Page ${pdfPageNum} / ${pdfTotalPages}`;
   setPageDisplay(pdfPageNum);
@@ -1458,6 +1475,10 @@ async function clearAllSections(): Promise<void> {
 /**
  * Discover axis-aligned rectangular/square frames on the rendered PDF page.
  * Looks for hollow border rectangles typical of drawing viewports.
+ *
+ * Important: never call getImageData() on the live PDF.js canvas — on large
+ * GPU-backed canvases that can invalidate/corrupt the bitmap (looks like a
+ * sudden rotate/mirror). Sample from an offscreen downscale instead.
  */
 function discoverRectangularFrames(
   source: HTMLCanvasElement,
@@ -1466,21 +1487,23 @@ function discoverRectangularFrames(
   const h = source.height;
   if (w < 40 || h < 40) return [];
 
-  const ctx = source.getContext("2d", { willReadFrequently: true });
-  if (!ctx) return [];
-  const img = ctx.getImageData(0, 0, w, h);
-  const px = img.data;
-
   const scale = Math.min(1, 320 / Math.max(w, h));
   const sw = Math.max(32, Math.floor(w * scale));
   const sh = Math.max(32, Math.floor(h * scale));
 
+  const off = document.createElement("canvas");
+  off.width = sw;
+  off.height = sh;
+  const octx = off.getContext("2d", { willReadFrequently: true });
+  if (!octx) return [];
+  octx.drawImage(source, 0, 0, sw, sh);
+  const img = octx.getImageData(0, 0, sw, sh);
+  const px = img.data;
+
   const dark = new Uint8Array(sw * sh);
   for (let y = 0; y < sh; y++) {
     for (let x = 0; x < sw; x++) {
-      const sx = Math.min(w - 1, Math.floor(x / scale));
-      const sy = Math.min(h - 1, Math.floor(y / scale));
-      const i = (sy * w + sx) * 4;
+      const i = (y * sw + x) * 4;
       const lum = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
       dark[y * sw + x] = lum < 145 ? 1 : 0;
     }
@@ -1612,6 +1635,8 @@ async function discoverSections(): Promise<void> {
   regionDiscoverBtn.disabled = true;
   try {
     const found = discoverRectangularFrames(pdfCanvas);
+    // Re-paint in case any canvas readback disturbed the PDF.js bitmap.
+    await renderPdfPage();
     if (found.length === 0) {
       setStatus("No rectangular sections found on this page", "err");
       return;
@@ -2104,6 +2129,16 @@ toolClearSidebarBtn?.addEventListener("click", () => {
   setStatus("Measure cleared", "ok");
 });
 
+(() => {
+  const panel = document.getElementById("engineer-tools-bar") as HTMLDetailsElement | null;
+  if (!panel) return;
+  const key = "app-gevelwering-tools-collapsed";
+  panel.open = localStorage.getItem(key) !== "1";
+  panel.addEventListener("toggle", () => {
+    localStorage.setItem(key, panel.open ? "0" : "1");
+  });
+})();
+
 window.addEventListener("keydown", (evt) => {
   if (evt.key === "Escape" && measure.tool !== "off") {
     clearMeasure(true);
@@ -2289,4 +2324,5 @@ reviewForm.addEventListener("submit", (evt) => {
 });
 
 updateZoomLabel();
+initPasswordToggles();
 connect();

@@ -1,8 +1,8 @@
 /**
- * P1 HTTP drawing upload — binary POST, parameterized INSERT into acoustics.document.
+ * P1 HTTP drawing upload — binary POST, parameterized INSERT into app_gevelwering.document.
  *
  * POST /api/drawings/upload?building_id=<uuid>&filename=<name>
- * Headers: Authorization: Bearer <session_token>  OR cookie acoustics_session
+ * Headers: Authorization: Bearer <session_token>  OR cookie app_gevelwering_session
  * Body: application/octet-stream (raw file bytes)
  */
 import { getPool } from "./pg-config.mjs";
@@ -17,7 +17,7 @@ import {
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const MAX_UPLOAD_BYTES = Number(process.env.ACOUSTICS_MAX_UPLOAD_BYTES || 100 * 1024 * 1024);
+const MAX_UPLOAD_BYTES = Number(process.env.GEVELWERING_MAX_UPLOAD_BYTES || 100 * 1024 * 1024);
 
 function json(req, res, status, body) {
   jsonWithSecurity(req, res, status, body);
@@ -72,8 +72,8 @@ async function resolveSession(client, token) {
     `SELECT u.id::text AS user_id,
             u.username,
             u.is_engineer
-     FROM acoustics.login_session s
-     JOIN acoustics.service_user u ON u.id = s.user_id
+     FROM app_gevelwering.login_session s
+     JOIN app_gevelwering.service_user u ON u.id = s.user_id
      WHERE s.token = $1
        AND s.revoked_at IS NULL
        AND s.expires_at > now()
@@ -86,7 +86,7 @@ async function resolveSession(client, token) {
 async function assertProjectOwned(client, buildingId, ownerId) {
   const { rows } = await client.query(
     `SELECT b.id::text AS id
-     FROM acoustics.building b
+     FROM app_gevelwering.building b
      WHERE b.id = $1::uuid
        AND (b.owner_user_id = $2::uuid OR b.owner_user_id IS NULL)`,
     [buildingId, ownerId],
@@ -97,7 +97,7 @@ async function assertProjectOwned(client, buildingId, ownerId) {
 async function assertProjectUploadAllowed(client, buildingId, ownerId) {
   const { rows } = await client.query(
     `SELECT b.project_status::text AS project_status
-     FROM acoustics.building b
+     FROM app_gevelwering.building b
      WHERE b.id = $1::uuid
        AND (b.owner_user_id = $2::uuid OR b.owner_user_id IS NULL)`,
     [buildingId, ownerId],
@@ -170,7 +170,7 @@ export async function handleDrawingList(req, res, url) {
               d.file_ext,
               d.byte_size::text AS byte_size,
               d.created_at::text AS created_at
-       FROM acoustics.document d
+       FROM app_gevelwering.document d
        WHERE d.building_id = $1::uuid
        ORDER BY d.created_at ASC`,
       [buildingId],
@@ -265,7 +265,7 @@ export async function handleDrawingUpload(req, res, url) {
     }
 
     const { rows } = await client.query(
-      `INSERT INTO acoustics.document
+      `INSERT INTO app_gevelwering.document
          (building_id, filename, file_ext, content_type, content, byte_size, owner_user_id)
        VALUES ($1::uuid, $2, $3, $4, $5, $6, $7::uuid)
        RETURNING id::text AS id, byte_size`,
@@ -294,8 +294,8 @@ export async function handleDrawingUpload(req, res, url) {
 async function assertDocumentDownloadAllowed(client, documentId, session) {
   const { rows } = await client.query(
     `SELECT d.filename, d.file_ext, d.content_type, d.content
-     FROM acoustics.document d
-     JOIN acoustics.building b ON b.id = d.building_id
+     FROM app_gevelwering.document d
+     JOIN app_gevelwering.building b ON b.id = d.building_id
      WHERE d.id = $1::uuid
        AND (
          $2 = 'admin'
@@ -416,7 +416,7 @@ export async function handleDrawingSectionsDelete(req, res, url) {
 
     if (sectionId) {
       const { rows } = await client.query(
-        `DELETE FROM acoustics.drawing_region WHERE id = $1::uuid RETURNING id::text AS id`,
+        `DELETE FROM app_gevelwering.drawing_region WHERE id = $1::uuid RETURNING id::text AS id`,
         [sectionId],
       );
       if (rows.length < 1) {
@@ -428,7 +428,7 @@ export async function handleDrawingSectionsDelete(req, res, url) {
     }
 
     const { rowCount } = await client.query(
-      `DELETE FROM acoustics.drawing_region WHERE document_id = $1::uuid`,
+      `DELETE FROM app_gevelwering.drawing_region WHERE document_id = $1::uuid`,
       [documentId],
     );
     json(req, res, 200, { ok: true, document_id: documentId, deleted_count: rowCount ?? 0 });

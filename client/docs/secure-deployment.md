@@ -9,7 +9,7 @@ Public www traffic must be **HTTPS** (UI/API) and **WSS** (bppServer protocol). 
 | Sniff / MITM on the internet | TLS at Apache; HSTS |
 | Fake bppServer (DNS / Wi‑Fi spoof) | Browser trusts your hostname certificate; clients use `wss://` same origin only |
 | Cross-site page opening your WS | `BPP_WS_ORIGIN_ALLOWLIST` on WS handshake |
-| Stolen session token (XSS) | CSP; HttpOnly `acoustics_session` cookie for HTTP APIs; WS token in `sessionStorage` (not `localStorage`) |
+| Stolen session token (XSS) | CSP; HttpOnly `app_gevelwering_session` cookie for HTTP APIs; WS token in `sessionStorage` (not `localStorage`) |
 | Arbitrary Basic++ invoke | Server-side `API_*` allowlist + session validation |
 | Direct hit on backend ports | bppServer + Node bind **127.0.0.1** only |
 
@@ -24,23 +24,23 @@ Browser --HTTPS/WSS--> Apache (TLS)
                          \-- /     --> http://127.0.0.1:4173 (static UI)
 ```
 
-Template: [`scripts/apache2/acoustics-https.conf`](../../scripts/apache2/acoustics-https.conf)
+Template: [`scripts/apache2/app-gevelwering-https.conf`](../../scripts/apache2/app-gevelwering-https.conf)
 
 ## Checklist
 
 1. Install modules: `a2enmod ssl headers proxy proxy_http proxy_wstunnel rewrite`
-2. Copy/adapt `acoustics-https.conf`; replace `acoustics.example.com` and cert paths
-3. Certbot: `certbot --apache -d acoustics.example.com`
+2. Copy/adapt `app-gevelwering-https.conf`; replace `app-gevelwering.example.com` and cert paths
+3. Certbot: `certbot --apache -d app-gevelwering.example.com`
 4. Run backends on loopback:
    - `bppServer --server --port 18080`
-   - `ACOUSTICS_UI_PORT=4173 node serve.mjs` (host defaults to `127.0.0.1`)
+   - `GEVELWERING_UI_PORT=4173 node serve.mjs` (host defaults to `127.0.0.1`)
 5. Environment (production):
 
 ```bash
-export BPP_WS_ORIGIN_ALLOWLIST=https://acoustics.example.com
-export ACOUSTICS_CORS_ORIGIN=https://acoustics.example.com
-export ACOUSTICS_REQUIRE_HTTPS=1
-# optional: ACOUSTICS_FORCE_HTTPS=1  # emit HSTS even if proto header missing
+export BPP_WS_ORIGIN_ALLOWLIST=https://app-gevelwering.example.com
+export GEVELWERING_CORS_ORIGIN=https://app-gevelwering.example.com
+export GEVELWERING_REQUIRE_HTTPS=1
+# optional: GEVELWERING_FORCE_HTTPS=1  # emit HSTS even if proto header missing
 ```
 
 6. systemd unit: [`scripts/systemd/bppServer.service`](../../scripts/systemd/bppServer.service) — must include `--server`; set `BPP_WS_ORIGIN_ALLOWLIST`

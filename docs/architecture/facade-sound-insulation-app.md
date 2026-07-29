@@ -1,7 +1,7 @@
 # App 2: Online façade sound insulation calculation
 
 **Status:** Design driver — **distinct App 2** (façade insulation); consumes App 1 `NoiseLoad[]` (or import)  
-**Overview:** [acoustics-suite-overview.md](acoustics-suite-overview.md)  
+**Overview:** [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md)  
 **Upstream:** [road-traffic-noise-app.md](road-traffic-noise-app.md) (App 1 supplies `NoiseLoad[]`)  
 **Related:** [server-runtime-rfc.md](../../../bppServer/docs/Architectural_aspects/09-bppserver/server-runtime-rfc.md) §2.5, sibling repo `c/bppServer`  
 **Not in scope:** coding-agent / LLM tooling (`09-agent-integration`)
@@ -24,7 +24,7 @@ App 2 is a **separate application** from App 1. It reads the **same shared build
 | Engineering calculation | Façade sound insulation vs loads |
 | Report + appendices | Assessment, site layout, noise loads, calculation results |
 
-Shared building data + handoff: [acoustics-suite-overview.md](acoustics-suite-overview.md). This document is the **App 2 product workflow**; the RFC remains the **protocol/runtime** contract.
+Shared building data + handoff: [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md). This document is the **App 2 product workflow**; the RFC remains the **protocol/runtime** contract.
 
 ---
 
@@ -45,7 +45,7 @@ Shared building data + handoff: [acoustics-suite-overview.md](acoustics-suite-ov
 
 ### Steps 1–2 — Customer details and drawings (**shared building data**)
 
-Same building record as App 1 — see [acoustics-suite-overview.md](acoustics-suite-overview.md) §2. App 2 does not re-own this data; it binds the project/building and reads it.
+Same building record as App 1 — see [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md) §2. App 2 does not re-own this data; it binds the project/building and reads it.
 
 **System:** `SetCustomer` / `SetProjectSite` / `RegisterDocument` (write once; both apps read).
 
@@ -156,7 +156,7 @@ invoke AssessFacadeLimits()
 invoke ReportFacade()           // returns paths + summary JSON
 ```
 
-Distinct-app sketches: [acoustics-suite-overview.md](acoustics-suite-overview.md) §5. Concurrent sessions: **&lt; 3** (RFC §5.0).
+Distinct-app sketches: [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md) §5. Concurrent sessions: **&lt; 3** (RFC §5.0).
 
 ---
 
@@ -217,7 +217,7 @@ Prefer Basic++ `TYPE` records / tables for v1; CLASS wrappers optional.
 | **P4** | Report pack with three appendices |
 | **P5** | Durable project store so App 1 loads survive for later App 2 sessions |
 
-Cross-app phasing: [acoustics-suite-overview.md](acoustics-suite-overview.md) §7.
+Cross-app phasing: [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md) §7.
 
 ---
 
@@ -233,7 +233,7 @@ Cross-app phasing: [acoustics-suite-overview.md](acoustics-suite-overview.md) §
 
 ## 9. Product decisions (defaults)
 
-Defaults live in [acoustics-suite-overview.md](acoustics-suite-overview.md) §6. App 2–specific:
+Defaults live in [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md) §6. App 2–specific:
 
 1. **Noise loads source:** App 1 export/project loads preferred; manual/import allowed for demos and external App 1 runs.  
 2. **Report format:** HTML/Markdown + JSON first; PDF later.  
@@ -243,4 +243,4 @@ Defaults live in [acoustics-suite-overview.md](acoustics-suite-overview.md) §6.
 
 ## 10. Next working step
 
-Implement App 2 **P0** procedures `UseProjectNoiseLoads` / `ImportNoiseLoads` / `ComputeInsulation` / `AssessFacadeLimits` / `ReportFacade` consuming App 1 mock loads — see [acoustics-suite-overview.md](acoustics-suite-overview.md) §8.
+Implement App 2 **P0** procedures `UseProjectNoiseLoads` / `ImportNoiseLoads` / `ComputeInsulation` / `AssessFacadeLimits` / `ReportFacade` consuming App 1 mock loads — see [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md) §8.

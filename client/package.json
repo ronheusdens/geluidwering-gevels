@@ -1,5 +1,5 @@
 {
-  "name": "acoustics-client",
+  "name": "app-gevelwering-client",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -9,7 +9,8 @@
     "start": "npm run build && node serve.mjs"
   },
   "dependencies": {
-    "pg": "^8.16.0"
+    "pg": "^8.16.0",
+    "polygon-clipping": "^0.15.7"
   },
   "devDependencies": {
     "esbuild": "^0.25.0"

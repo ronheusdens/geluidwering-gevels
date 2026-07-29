@@ -1,7 +1,7 @@
 # App 1: Road traffic noise assessment (Laeq)
 
 **Status:** Design driver — **distinct App 1** (road traffic Laeq); results feed App 2 via `NoiseLoad` handoff  
-**Overview:** [acoustics-suite-overview.md](acoustics-suite-overview.md)  
+**Overview:** [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md)  
 **Downstream:** [facade-sound-insulation-app.md](facade-sound-insulation-app.md) (App 2 consumes `NoiseLoad[]`)  
 **Related:** [server-runtime-rfc.md](../../../bppServer/docs/Architectural_aspects/09-bppserver/server-runtime-rfc.md) §2.5, sibling `c/bppServer`  
 **Not in scope:** coding-agent / LLM tooling
@@ -122,7 +122,7 @@ App 1 writes structured **façade / receiver noise loads** (export / project sto
 - `invoke AssessTrafficLimits()` → pass/fail vs traffic-noise limit table
 - Stream progress via `stdout.chunk` on long runs
 
-**Outputs for App 2:** `NoiseLoad[]` export / project store (see [acoustics-suite-overview.md](acoustics-suite-overview.md) §4).
+**Outputs for App 2:** `NoiseLoad[]` export / project store (see [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md) §4).
 
 ---
 

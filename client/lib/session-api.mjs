@@ -1,5 +1,5 @@
 /**
- * POST /api/session  { token } → Set-Cookie acoustics_session (HttpOnly)
+ * POST /api/session  { token } → Set-Cookie app_gevelwering_session (HttpOnly)
  * DELETE /api/session → clear cookie
  */
 import {

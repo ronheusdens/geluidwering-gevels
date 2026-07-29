@@ -2,6 +2,12 @@
 
 export type Pt = { x: number; y: number };
 
+/** Round metres / m² / m³ style quantities to at most 2 decimal places. */
+export function round2(n: number): number {
+  if (!Number.isFinite(n)) return n;
+  return Math.round(n * 100) / 100;
+}
+
 export function shoelaceArea(points: Pt[]): number {
   if (points.length < 3) return 0;
   let sum = 0;
@@ -22,6 +28,26 @@ export function polylinePerimeter(points: Pt[]): number {
     sum += Math.hypot(b.x - a.x, b.y - a.y);
   }
   return sum;
+}
+
+/** Open path length (does not close back to the first vertex). */
+export function openPolylineLength(points: Pt[]): number {
+  if (points.length < 2) return 0;
+  let sum = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    sum += Math.hypot(b.x - a.x, b.y - a.y);
+  }
+  return sum;
+}
+
+/** Clamp points to [0,1] without closing the ring. */
+export function clampPath(points: Pt[]): Pt[] {
+  return points.map((p) => ({
+    x: Math.min(1, Math.max(0, p.x)),
+    y: Math.min(1, Math.max(0, p.y)),
+  }));
 }
 
 /** Ensure ring is closed and clamped to [0,1]. */
@@ -148,12 +174,81 @@ export function rdpSimplify(points: Pt[], epsilon: number): Pt[] {
 }
 
 /**
- * metres_per_norm_unit: metres corresponding to 1.0 in section-local coords
- * (full floormap width/height span is not 1 metre — calibration defines this).
+ * metres_per_norm_unit (mpu): metres for Δx_norm = 1 (full crop/section width).
+ * scale_aspect_yx: cropHeight/cropWidth in pixels. Then Δy_norm = 1 spans mpu * aspect metres.
+ *
+ * Why aspect matters: section-local x/y are normalized independently by width and height.
+ * Treating (x,y) as isotropic overstates area by W/H on landscape crops (and understates on portrait).
  */
+export function normalizeAspectYx(aspectYx: number | null | undefined): number {
+  if (aspectYx == null || !Number.isFinite(aspectYx) || aspectYx <= 0) return 1;
+  return aspectYx;
+}
+
+export function scaleAxes(
+  metresPerNorm: number,
+  aspectYx?: number | null,
+): { mx: number; my: number } {
+  const a = normalizeAspectYx(aspectYx);
+  return { mx: metresPerNorm, my: metresPerNorm * a };
+}
+
+/** Physical length of one segment in section-local 0–1 coords. */
+export function scaledSegmentLength(
+  dx: number,
+  dy: number,
+  metresPerNorm: number,
+  aspectYx?: number | null,
+): number {
+  const { mx, my } = scaleAxes(metresPerNorm, aspectYx);
+  return Math.hypot(dx * mx, dy * my);
+}
+
+export function scaledPathLength(
+  points: Pt[],
+  metresPerNorm: number,
+  aspectYx?: number | null,
+  closed = false,
+): number {
+  if (points.length < 2) return 0;
+  let sum = 0;
+  const n = closed ? points.length : points.length - 1;
+  for (let i = 0; i < n; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    sum += scaledSegmentLength(b.x - a.x, b.y - a.y, metresPerNorm, aspectYx);
+  }
+  return sum;
+}
+
+export function scaledAreaM2(
+  areaNorm: number,
+  metresPerNorm: number,
+  aspectYx?: number | null,
+): number {
+  const { mx, my } = scaleAxes(metresPerNorm, aspectYx);
+  return areaNorm * mx * my;
+}
+
+/**
+ * metres_per_norm_unit from a calibration line in section-local coords.
+ * Uses width-normalized isotropic distance so any orientation yields the same mpu.
+ */
+export function metresPerNormFromCalibration(
+  lengthMetres: number,
+  a: Pt,
+  b: Pt,
+  aspectYx?: number | null,
+): number {
+  const dist = Math.hypot(b.x - a.x, (b.y - a.y) * normalizeAspectYx(aspectYx));
+  if (!(dist > 1e-12) || !(lengthMetres > 0)) return NaN;
+  return lengthMetres / dist;
+}
+
 export function scaledMetrics(
   points: Pt[],
   metresPerNorm: number | null | undefined,
+  aspectYx?: number | null,
 ): { area_norm: number; perimeter_norm: number; area_m2: number | null; perimeter_m: number | null } {
   const area_norm = shoelaceArea(points);
   const perimeter_norm = polylinePerimeter(points);
@@ -163,8 +258,8 @@ export function scaledMetrics(
   return {
     area_norm,
     perimeter_norm,
-    area_m2: area_norm * metresPerNorm * metresPerNorm,
-    perimeter_m: perimeter_norm * metresPerNorm,
+    area_m2: round2(scaledAreaM2(area_norm, metresPerNorm, aspectYx)),
+    perimeter_m: round2(scaledPathLength(points, metresPerNorm, aspectYx, true)),
   };
 }
 

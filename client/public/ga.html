@@ -3,19 +3,24 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Acoustics — Geluidwering (GA-model)</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <title>Geluidwering Gevels — Berekening gevelwering</title>
+  <link rel="stylesheet" href="/styles.css?v=pw-eye" />
 </head>
 <body>
   <main class="page page-wide">
     <header class="header">
-      <p class="eyebrow">Acoustics — nieuwbouw</p>
-      <h1>Geluidwering gevels — projectmodel</h1>
+      <div class="brand">
+        <img class="brand-logo" src="/assets/stilte-logo.jpg" alt="" width="68" height="68" />
+        <div class="brand-copy">
+          <p class="brand-name">Geluidwering Gevels</p>
+          <h1 class="page-heading">Berekening gevelwering</h1>
+        </div>
+      </div>
       <p class="lede">
-        Variant → verblijfsgebied → verblijfsruimte (floormap) → vlak (gevel).
-        <a href="/engineer.html">← Drawing review</a>
+        Variant → verblijfsgebied → verblijfsruimte (plattegrond) → vlak (gevel).
+        <a href="/engineer.html">← Engineer</a>
         ·
-        <a id="ga-floormap-link" href="/floormap.html">Floormap</a>
+        <a id="ga-floormap-link" href="/floormap.html">Plattegrond</a>
       </p>
     </header>
 
@@ -74,11 +79,11 @@
                   <option>Overig</option>
                 </select>
               </label>
-              <label>Geluidsbelasting [dB(A)] <input id="ga-variant-lb" type="number" min="0" max="140" step="0.1" value="55" /></label>
+              <label>Geluidsbelasting [dB] <input id="ga-variant-lb" type="number" min="0" max="140" step="0.1" value="55" /></label>
               <label>Spectrum
                 <select id="ga-variant-spectrum">
                   <option value="SPECTRUM_1">Spectrum 1</option>
-                  <option value="SPECTRUM_2">Spectrum 2</option>
+                  <option value="SPECTRUM_2" selected>Spectrum 2</option>
                 </select>
               </label>
               <div class="actions">
@@ -90,33 +95,29 @@
             <ul id="ga-variant-list" class="drawing-list"></ul>
           </div>
 
-          <div class="ga-col">
-            <h2>Verblijfsgebied / -ruimte</h2>
-            <p class="hint">Elk VG heeft ≥1 VR. VR is altijd een floormap-room.</p>
-            <form id="ga-vg-form" class="form">
-              <label>VG-omschrijving <input id="ga-vg-name" maxlength="80" placeholder="bijv. VG woonkamer" /></label>
-              <label>Floormap-ruimte
-                <select id="ga-vg-room"></select>
-              </label>
-              <label>VR-omschrijving <input id="ga-vr-name" maxlength="80" placeholder="overgenomen van room" /></label>
-              <div class="mat-row">
-                <label>Hoogte [m] <input id="ga-vr-hoogte" type="number" min="0" step="0.01" value="2.6" /></label>
-                <label>T0 [s] <input id="ga-vr-t0" type="number" min="0" max="10" step="0.1" value="0.5" /></label>
-              </div>
-              <div class="actions">
-                <button type="submit">Nieuw VG + VR</button>
-                <button type="button" id="ga-vr-add-btn" class="secondary">Extra VR in geselecteerd VG</button>
-              </div>
-            </form>
+          <div class="ga-col" id="ga-vg-col">
+            <h2>Verblijfsgebieden &amp; ruimten</h2>
+            <p class="hint">
+              Een <strong>VG</strong> groepeert verblijfsruimten (VR’s) van hetzelfde plattegrond-VG-nummer op één vloer.
+              Kies hieronder een VG → zie/bewerk de VR’s → of koppel een nog vrije plattegrondruimte.
+            </p>
+
+            <h3 class="ga-subhead">1. Verblijfsgebieden</h3>
             <ul id="ga-vg-list" class="drawing-list"></ul>
+
+            <h3 class="ga-subhead" id="ga-vr-heading">2. Verblijfsruimten in dit VG</h3>
+            <p class="hint" id="ga-vr-empty-hint">Selecteer een verblijfsgebied hierboven.</p>
             <ul id="ga-vr-list" class="drawing-list"></ul>
+
             <form id="ga-vr-edit-form" class="form hidden">
-              <h3>Geselecteerde VR</h3>
+              <h3 class="ga-subhead">Bewerk geselecteerde VR</h3>
+              <p class="hint">Niet voor toevoegen: dit past een VR aan die je hierboven in de lijst hebt gekozen.</p>
+              <p class="ga-room-preview" id="ga-vr-edit-preview"></p>
               <label>Omschrijving <input id="ga-vr-edit-name" maxlength="80" /></label>
               <div class="mat-row">
                 <label>Vloer [m²] <input id="ga-vr-edit-vloer" type="number" min="0" step="0.01" /></label>
                 <label>Hoogte [m] <input id="ga-vr-edit-hoogte" type="number" min="0" step="0.01" /></label>
-                <label>Volume [m³] <input id="ga-vr-edit-volume" type="number" min="0" step="0.01" /></label>
+                <label>Volume [m³] <input id="ga-vr-edit-volume" type="number" min="0" step="0.01" readonly title="Volume = vloer × hoogte" /></label>
                 <label>T0 [s] <input id="ga-vr-edit-t0" type="number" min="0" max="10" step="0.1" /></label>
               </div>
               <div class="actions">
@@ -125,28 +126,83 @@
                 <button type="button" id="ga-vg-del-btn" class="secondary">Verwijder VG</button>
               </div>
             </form>
+
+            <fieldset id="ga-vr-add-fieldset" class="ga-room-pick">
+              <legend>3. Nog vrije plattegrondruimte koppelen</legend>
+              <p class="hint" id="ga-vr-add-hint">
+                Kies een ruimte die nog niet in de berekening zit. <strong>Start nieuw VG</strong> maakt een nieuw verblijfsgebied met die ruimte als eerste VR.
+                <strong>Voeg toe aan VG</strong> hangt een extra VR onder het hierboven geselecteerde VG (zelfde vloer +zelfde VG-nummer).
+              </p>
+              <label class="block-label">Vrije plattegrondruimte
+                <select id="ga-vg-room"></select>
+              </label>
+              <p class="ga-room-preview" id="ga-room-preview" aria-live="polite">—</p>
+              <div class="mat-row">
+                <label>Hoogte [m] <input id="ga-vr-hoogte" type="number" min="0" step="0.01" value="2.6" /></label>
+                <label>T0 [s] <input id="ga-vr-t0" type="number" min="0" max="10" step="0.1" value="0.5" /></label>
+              </div>
+              <div class="actions actions-stack">
+                <button type="button" id="ga-vg-new-btn" title="Maakt een nieuw verblijfsgebied met de gekozen ruimte als eerste VR">Start nieuw VG met deze VR</button>
+                <button type="button" id="ga-vr-add-btn" class="secondary" title="Voegt de gekozen ruimte toe als extra VR in het geselecteerde VG">Voeg toe aan geselecteerd VG</button>
+              </div>
+            </fieldset>
           </div>
 
           <div class="ga-col">
             <h2>Vlakken</h2>
-            <p class="hint">Koppel een façade-component of voer S handmatig in.</p>
+            <p class="hint" id="ga-vlak-facade-hint">Selecteer een VR in het midden; dan verschijnen alleen gevelcomponenten van die VR.</p>
             <form id="ga-vlak-form" class="form">
-              <label>Omschrijving <input id="ga-vlak-name" maxlength="80" placeholder="Voorzijde" /></label>
-              <label>Façade-component
-                <select id="ga-vlak-facade"><option value="">— handmatig —</option></select>
+              <label class="block-label">Gevelcomponent (voor gekozen VR)
+                <select id="ga-vlak-facade" class="ga-facade-select" size="5">
+                  <option value="">— selecteer eerst een VR —</option>
+                </select>
               </label>
-              <label>S [m²] <input id="ga-vlak-area" type="number" min="0" step="0.01" value="0" /></label>
+              <p class="ga-room-preview is-empty" id="ga-vlak-facade-preview">—</p>
+              <label>Omschrijving vlak <input id="ga-vlak-name" maxlength="80" placeholder="bijv. voorzijde" /></label>
+              <label><span id="ga-vlak-qty-label">S [m²]</span> <input id="ga-vlak-area" type="number" min="0" step="0.01" value="0" /></label>
+              <label>CL [dB] <input id="ga-vlak-cl" type="number" step="0.1" value="0" title="Geluidsniveaucorrectie" /></label>
+              <label>Cg [dB] <input id="ga-vlak-cg" type="number" step="0.1" value="0" title="Gevelstructuurcorrectie" /></label>
               <label class="inline-check"><input id="ga-vlak-gak" type="checkbox" checked /> Meenemen in GA;k (Stot)</label>
               <div class="actions">
                 <button type="submit">Vlak toevoegen</button>
+                <button type="button" id="ga-custom-mat-toggle" class="secondary">Eigen materiaal…</button>
               </div>
             </form>
+            <div id="ga-custom-mat-panel" class="ga-custom-mat hidden">
+              <h3>Eigen materiaal</h3>
+              <p class="hint">Wordt gekoppeld aan de geselecteerde gevelcomponent; daarna kun je het vlak toevoegen.</p>
+              <form id="ga-custom-mat-form" class="form">
+                <label>Rubriek
+                  <select id="ga-custom-mat-rubriek" required>
+                    <option value="">— kies rubriek —</option>
+                  </select>
+                </label>
+                <label>Naam <input id="ga-custom-mat-name" maxlength="120" required placeholder="bijv. eigen glas 6-12-4" /></label>
+                <label>RA [dB] <input id="ga-custom-mat-ra" type="number" min="0" max="100" step="0.1" required value="30" /></label>
+                <div class="actions">
+                  <button type="submit">Opslaan en koppelen</button>
+                  <button type="button" id="ga-custom-mat-cancel" class="secondary">Annuleren</button>
+                </div>
+              </form>
+            </div>
             <ul id="ga-vlak-list" class="drawing-list"></ul>
+            <div class="ga-results" id="ga-vr-results" aria-live="polite">
+              <h3>Resultaten VR</h3>
+              <p class="hint" id="ga-vr-results-hint">Selecteer een VR en voeg vlakken met materiaal toe.</p>
+              <dl class="ga-results-grid" id="ga-vr-results-grid">
+                <div><dt>S / Stot</dt><dd id="ga-res-s">—</dd></div>
+                <div><dt>R'</dt><dd id="ga-res-rp">—</dd></div>
+                <div><dt>D<sub>2m,nT</sub></dt><dd id="ga-res-d">—</dd></div>
+                <div><dt>GA</dt><dd id="ga-res-ga">—</dd></div>
+                <div><dt>Lbi</dt><dd id="ga-res-lbi">—</dd></div>
+                <div><dt>GA;k</dt><dd id="ga-res-gak">—</dd></div>
+              </dl>
+            </div>
           </div>
         </div>
       </section>
     </section>
   </main>
-  <script type="module" src="/ga.js"></script>
+  <script type="module" src="/ga.js?v=vlak-merge"></script>
 </body>
 </html>

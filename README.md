@@ -8,7 +8,7 @@ First **application** on [bppServer](https://github.com/ronheusdens/bppServer) â
 |------|------|
 | `client/` | HTML/TS UI (form, admin, materials, engineer, floormap, GA) |
 | `lib/database/` | Basic++ Postgres OOP helpers (`INCLUDE` from fixtures) |
-| `fixtures/acoustics/` | Basic++ API programs (`INCLUDE` via `BASIC_CWD`) |
+| `fixtures/app-gevelwering/` | Basic++ API programs (`INCLUDE` via `BASIC_CWD`) |
 | `sql/` | Postgres DDL / seeds |
 | `docs/` | Materials catalogs, convert scripts, deploy notes |
 | `scripts/` | Apache HTTPS example |
@@ -17,7 +17,7 @@ First **application** on [bppServer](https://github.com/ronheusdens/bppServer) â
 ## Prerequisites
 
 - Sibling (or configured) bppServer build: `../bppServer/build/bin/bppServer`
-- Postgres database `acoustics` (override with `BPP_PG_DB`)
+- Postgres database `app_gevelwering` (override with `BPP_PG_DB`)
 - Node.js + npm for the UI
 
 ```bash
@@ -25,7 +25,7 @@ First **application** on [bppServer](https://github.com/ronheusdens/bppServer) â
 cd ../bppServer && ./scripts/bootstrap-core.sh && make
 
 # Run this app
-cd ../acoustics && ./start.sh
+cd ../app-gevelwering && ./start.sh
 ```
 
 Override server location: `BPPSERVER_ROOT=/path/to/bppServer ./start.sh`
@@ -36,4 +36,4 @@ UI `:4173`, WebSocket `:18080` (defaults).
 
 - Architecture (suite / schema / App1â€“App2): [`docs/architecture/`](docs/architecture/)
 - Secure deploy: [`client/docs/secure-deployment.md`](client/docs/secure-deployment.md)
-- Apache template: [`scripts/apache2/acoustics-https.conf`](scripts/apache2/acoustics-https.conf)
+- Apache template: [`scripts/apache2/app-gevelwering-https.conf`](scripts/apache2/app-gevelwering-https.conf)

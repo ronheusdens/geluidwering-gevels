@@ -16,12 +16,16 @@ import {
 } from "./lib/drawing-upload.mjs";
 import {
   handleFloormapApiOptions,
+  handleFloormapMaterialCategoriesGet,
+  handleFloormapMaterialCreate,
+  handleFloormapMaterialsList,
   handleFloormapScaleSave,
   handleFloormapSectionGet,
   handleFloormapSectionsList,
   handleFloormapSubsectionDelete,
   handleFloormapSubsectionSave,
   handleFloormapSubsectionsList,
+  handleFloormapVrComponentsList,
 } from "./lib/floormap-api.mjs";
 import {
   handleSessionApiOptions,
@@ -34,8 +38,8 @@ import { securityHeaders } from "./lib/http-security.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
-const port = Number(process.env.ACOUSTICS_UI_PORT || 4173);
-const host = process.env.ACOUSTICS_UI_HOST || "127.0.0.1";
+const port = Number(process.env.GEVELWERING_UI_PORT || 4173);
+const host = process.env.GEVELWERING_UI_HOST || "127.0.0.1";
 
 const types = {
   ".html": "text/html; charset=utf-8",
@@ -124,7 +128,10 @@ const server = http.createServer(async (req, res) => {
     urlPath === "/api/floormap/section" ||
     urlPath === "/api/floormap/sections" ||
     urlPath === "/api/floormap/subsections" ||
-    urlPath === "/api/floormap/scale"
+    urlPath === "/api/floormap/vr-components" ||
+    urlPath === "/api/floormap/scale" ||
+    urlPath === "/api/floormap/material-categories" ||
+    urlPath === "/api/floormap/materials"
   ) {
     if (req.method === "OPTIONS") {
       handleFloormapApiOptions(req, res);
@@ -137,6 +144,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (urlPath === "/api/floormap/sections" && req.method === "GET") {
         await handleFloormapSectionsList(req, res, url);
+        return;
+      }
+      if (urlPath === "/api/floormap/vr-components" && req.method === "GET") {
+        await handleFloormapVrComponentsList(req, res, url);
         return;
       }
       if (urlPath === "/api/floormap/subsections" && req.method === "GET") {
@@ -153,6 +164,18 @@ const server = http.createServer(async (req, res) => {
       }
       if (urlPath === "/api/floormap/scale" && req.method === "POST") {
         await handleFloormapScaleSave(req, res);
+        return;
+      }
+      if (urlPath === "/api/floormap/material-categories" && req.method === "GET") {
+        await handleFloormapMaterialCategoriesGet(req, res, url);
+        return;
+      }
+      if (urlPath === "/api/floormap/materials" && req.method === "GET") {
+        await handleFloormapMaterialsList(req, res, url);
+        return;
+      }
+      if (urlPath === "/api/floormap/materials" && req.method === "POST") {
+        await handleFloormapMaterialCreate(req, res);
         return;
       }
     } catch (err) {
@@ -198,10 +221,10 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(port, host, () => {
   const url = `http://${host}:${port}/`;
-  console.log(`Acoustics UI: ${url} (loopback — use Apache HTTPS in production)`);
+  console.log(`Gevelwering UI: ${url} (loopback — use Apache HTTPS in production)`);
   console.log(`Session API: POST/DELETE ${url}api/session`);
   console.log(`Drawing API: POST ${url}api/drawings/upload  GET ${url}api/drawings/list`);
-  console.log(`Floormap API: GET ${url}api/floormap/sections  POST ${url}api/floormap/subsections`);
+  console.log(`Floormap API: GET ${url}api/floormap/sections  GET ${url}api/floormap/vr-components  POST ${url}api/floormap/subsections`);
   console.log(`bppServer WebSocket (dev): ws://127.0.0.1:18080/ws — prod: wss://<host>/ws`);
 });
 

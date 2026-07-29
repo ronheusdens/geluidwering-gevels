@@ -1,33 +1,38 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="nl">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Acoustics Admin</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <title>Geluidwering Gevels — Beheer</title>
+  <link rel="stylesheet" href="/styles.css?v=pw-eye" />
 </head>
 <body>
   <main class="page">
     <header class="header">
-      <p class="eyebrow">Acoustics administration</p>
-      <h1>Admin project queue</h1>
-      <p class="lede">Visible only to the <code>admin</code> account. Select a customer to review all projects and update client-facing status. <a href="/materials.html">Material catalog →</a></p>
+      <div class="brand">
+        <img class="brand-logo" src="/assets/stilte-logo.jpg" alt="" width="68" height="68" />
+        <div class="brand-copy">
+          <p class="brand-name">Geluidwering Gevels</p>
+          <h1 class="page-heading">Projectenbeheer</h1>
+        </div>
+      </div>
+      <p class="lede">Alleen zichtbaar voor het account <code>admin</code>. Kies een klant om projecten te bekijken en de status bij te werken. <a href="/materials.html">Materiaalcatalogus →</a></p>
     </header>
 
     <section class="panel conn-bar" id="admin-conn-bar" aria-live="polite">
       <span class="conn-led disconnected" id="admin-conn-led" aria-hidden="true"></span>
-      <span id="admin-conn-status">Connecting…</span>
+      <span id="admin-conn-status">Verbinden…</span>
     </section>
 
     <section class="panel" id="admin-login-panel">
       <form id="admin-login-form" class="form" novalidate>
         <fieldset>
-          <legend>Admin login</legend>
-          <label>Username <input name="username" required autocomplete="username" value="admin" /></label>
-          <label>Password <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
+          <legend>Beheerder-login</legend>
+          <label>Gebruikersnaam <input name="username" required autocomplete="username" value="admin" /></label>
+          <label>Wachtwoord <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
         </fieldset>
         <div class="actions">
-          <button type="submit" id="admin-login-btn">Sign in</button>
+          <button type="submit" id="admin-login-btn">Inloggen</button>
         </div>
       </form>
     </section>
@@ -35,27 +40,27 @@
     <section id="admin-panel" class="hidden">
       <div class="panel user-bar">
         <span id="admin-user-label"></span>
-        <button type="button" id="admin-logout-btn" class="secondary">Sign out</button>
+        <button type="button" id="admin-logout-btn" class="secondary">Uitloggen</button>
       </div>
 
       <section class="panel">
         <label class="block-label">
-          Customer
+          Klant
           <select id="admin-customer-select">
-            <option value="">— select a customer —</option>
+            <option value="">— kies een klant —</option>
           </select>
         </label>
         <div class="actions">
-          <button type="button" id="admin-refresh-btn" class="secondary">Refresh customer list</button>
+          <button type="button" id="admin-refresh-btn" class="secondary">Klantenlijst vernieuwen</button>
         </div>
       </section>
 
       <section class="panel hidden" id="admin-projects-panel">
-        <h2 id="admin-customer-title">Projects</h2>
+        <h2 id="admin-customer-title">Projecten</h2>
         <div id="admin-projects-list" class="admin-projects-list"></div>
       </section>
     </section>
   </main>
-  <script type="module" src="/admin.js"></script>
+  <script type="module" src="/admin.js?v=pw-eye"></script>
 </body>
 </html>

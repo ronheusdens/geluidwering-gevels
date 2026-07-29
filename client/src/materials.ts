@@ -1,5 +1,13 @@
 import { loadAuth, storeAuth as persistAuth, syncSessionCookie } from "./auth-store";
 import { resolveBppWsUrl } from "./ws-url";
+import { initPasswordToggles } from "./password-toggle";
+import {
+  MATERIAL_RUBRIEKEN,
+  formatRubriekLabel,
+  formatSubrubriekLabel,
+  rubriekByName,
+  subrubriekenFor,
+} from "../lib/material-taxonomy.mjs";
 
 type Envelope = {
   v: number;
@@ -36,11 +44,15 @@ type Material = {
   r_500_hz: string;
   r_1000_hz: string;
   r_2000_hz: string;
+  r_4000_hz: string;
+  rw_db: string;
+  c_db: string;
+  ctr_db: string;
   source: string;
 };
 
 const BPP_WS = resolveBppWsUrl();
-const AUTH_KEY = "acoustics_admin_auth";
+const AUTH_KEY = "app_gevelwering_admin_auth";
 
 const connBarEl = document.getElementById("mat-conn-bar") as HTMLElement;
 const connLedEl = document.getElementById("mat-conn-led") as HTMLElement;
@@ -54,6 +66,7 @@ const logoutBtn = document.getElementById("mat-logout-btn") as HTMLButtonElement
 const filterForm = document.getElementById("mat-filter-form") as HTMLFormElement;
 const qEl = document.getElementById("mat-q") as HTMLInputElement;
 const categoryEl = document.getElementById("mat-category") as HTMLSelectElement;
+const subcategoryFilterEl = document.getElementById("mat-subcategory") as HTMLSelectElement;
 const pagerLabelEl = document.getElementById("mat-pager-label") as HTMLElement;
 const prevBtn = document.getElementById("mat-prev-btn") as HTMLButtonElement;
 const nextBtn = document.getElementById("mat-next-btn") as HTMLButtonElement;
@@ -65,9 +78,9 @@ const editorForm = document.getElementById("mat-editor-form") as HTMLFormElement
 const idEl = document.getElementById("mat-id") as HTMLInputElement;
 const catalogIdEl = document.getElementById("mat-catalog-id") as HTMLInputElement;
 const noEl = document.getElementById("mat-no") as HTMLInputElement;
-const masterEl = document.getElementById("mat-master") as HTMLInputElement;
+const masterEl = document.getElementById("mat-master") as HTMLSelectElement;
 const nameEl = document.getElementById("mat-name") as HTMLInputElement;
-const catEl = document.getElementById("mat-cat") as HTMLInputElement;
+const catEl = document.getElementById("mat-cat") as HTMLSelectElement;
 const sourceRefEl = document.getElementById("mat-source-ref") as HTMLInputElement;
 const sourceEl = document.getElementById("mat-source") as HTMLInputElement;
 const spectrumOkEl = document.getElementById("mat-spectrum-ok") as HTMLInputElement;
@@ -83,6 +96,10 @@ const r250El = document.getElementById("mat-r250") as HTMLInputElement;
 const r500El = document.getElementById("mat-r500") as HTMLInputElement;
 const r1000El = document.getElementById("mat-r1000") as HTMLInputElement;
 const r2000El = document.getElementById("mat-r2000") as HTMLInputElement;
+const r4000El = document.getElementById("mat-r4000") as HTMLInputElement;
+const rwEl = document.getElementById("mat-rw") as HTMLInputElement;
+const cEl = document.getElementById("mat-c") as HTMLInputElement;
+const ctrEl = document.getElementById("mat-ctr") as HTMLInputElement;
 const saveBtn = document.getElementById("mat-save-btn") as HTMLButtonElement;
 const deleteBtn = document.getElementById("mat-delete-btn") as HTMLButtonElement;
 const clearBtn = document.getElementById("mat-clear-btn") as HTMLButtonElement;
@@ -196,13 +213,94 @@ function esc(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+function fillFilterRubrieken(): void {
+  const keep = categoryEl.value;
+  categoryEl.replaceChildren();
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = "Alle rubrieken";
+  categoryEl.appendChild(all);
+  for (const r of MATERIAL_RUBRIEKEN) {
+    const opt = document.createElement("option");
+    opt.value = r.name;
+    opt.textContent = formatRubriekLabel(r);
+    categoryEl.appendChild(opt);
+  }
+  if (keep && [...categoryEl.options].some((o) => o.value === keep)) {
+    categoryEl.value = keep;
+  }
+  fillFilterSubrubrieken();
+}
+
+function fillFilterSubrubrieken(): void {
+  const master = categoryEl.value;
+  const rub = rubriekByName(master);
+  const keep = subcategoryFilterEl.value;
+  subcategoryFilterEl.replaceChildren();
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = "0 - Alle subrubrieken";
+  subcategoryFilterEl.appendChild(all);
+  const subs = rub ? subrubriekenFor(rub.nr) : [];
+  for (const s of subs) {
+    const opt = document.createElement("option");
+    opt.value = s.name;
+    opt.textContent = formatSubrubriekLabel(s);
+    subcategoryFilterEl.appendChild(opt);
+  }
+  subcategoryFilterEl.disabled = !rub;
+  if (keep && subs.some((s) => s.name === keep)) subcategoryFilterEl.value = keep;
+  else subcategoryFilterEl.value = "";
+}
+
+function fillEditorRubrieken(): void {
+  const keep = masterEl.value;
+  masterEl.replaceChildren();
+  for (const r of MATERIAL_RUBRIEKEN) {
+    const opt = document.createElement("option");
+    opt.value = r.name;
+    opt.textContent = formatRubriekLabel(r);
+    masterEl.appendChild(opt);
+  }
+  if (keep && [...masterEl.options].some((o) => o.value === keep)) masterEl.value = keep;
+  else masterEl.value = MATERIAL_RUBRIEKEN[0]?.name || "";
+  fillEditorSubrubrieken();
+}
+
+function fillEditorSubrubrieken(): void {
+  const rub = rubriekByName(masterEl.value);
+  const keep = catEl.value;
+  catEl.replaceChildren();
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = "— kies subrubriek —";
+  catEl.appendChild(empty);
+  const subs = rub ? subrubriekenFor(rub.nr) : [];
+  for (const s of subs) {
+    const opt = document.createElement("option");
+    opt.value = s.name;
+    opt.textContent = formatSubrubriekLabel(s);
+    catEl.appendChild(opt);
+  }
+  if (keep && subs.some((s) => s.name === keep)) catEl.value = keep;
+  else catEl.value = "";
+}
+
+function listCategoryFilter(): string {
+  const master = categoryEl.value.trim();
+  if (!master) return "";
+  const sub = subcategoryFilterEl.value.trim();
+  return sub ? `${master}::${sub}` : master;
+}
+
 function clearEditor(): void {
   selectedId = null;
   highlightSelection();
   idEl.value = "";
   catalogIdEl.value = "";
   noEl.value = "";
-  masterEl.value = "Elementen";
+  masterEl.value = MATERIAL_RUBRIEKEN[0]?.name || "";
+  fillEditorSubrubrieken();
   nameEl.value = "";
   catEl.value = "";
   sourceRefEl.value = "";
@@ -220,6 +318,10 @@ function clearEditor(): void {
   r500El.value = "";
   r1000El.value = "";
   r2000El.value = "";
+  r4000El.value = "";
+  rwEl.value = "";
+  cEl.value = "";
+  ctrEl.value = "";
   editorTitleEl.textContent = "New material";
   deleteBtn.disabled = true;
 }
@@ -229,9 +331,24 @@ function fillEditor(m: Material): void {
   idEl.value = m.material_id || "";
   catalogIdEl.value = m.catalog_id || "";
   noEl.value = m.material_no === "" || m.material_no == null ? "" : String(m.material_no);
-  masterEl.value = m.master_category || "";
+  masterEl.value = m.master_category || MATERIAL_RUBRIEKEN[0]?.name || "";
+  if (![...masterEl.options].some((o) => o.value === masterEl.value) && m.master_category) {
+    const opt = document.createElement("option");
+    opt.value = m.master_category;
+    opt.textContent = m.master_category;
+    masterEl.appendChild(opt);
+    masterEl.value = m.master_category;
+  }
+  fillEditorSubrubrieken();
   nameEl.value = m.name || "";
   catEl.value = m.category || "";
+  if (m.category && ![...catEl.options].some((o) => o.value === m.category)) {
+    const opt = document.createElement("option");
+    opt.value = m.category;
+    opt.textContent = m.category;
+    catEl.appendChild(opt);
+    catEl.value = m.category;
+  }
   sourceRefEl.value = m.source_ref || "";
   sourceEl.value = m.source || "catalogusGG.pdf";
   spectrumOkEl.checked = m.spectrum_ok === "true" || m.spectrum_ok === "t";
@@ -247,6 +364,10 @@ function fillEditor(m: Material): void {
   r500El.value = m.r_500_hz || "";
   r1000El.value = m.r_1000_hz || "";
   r2000El.value = m.r_2000_hz || "";
+  r4000El.value = m.r_4000_hz || "";
+  rwEl.value = m.rw_db || "";
+  cEl.value = m.c_db || "";
+  ctrEl.value = m.ctr_db || "";
   editorTitleEl.textContent = m.material_id ? `Edit · ${m.catalog_id || ""} · ${m.name}` : "New material";
   deleteBtn.disabled = !m.material_id;
   highlightSelection();
@@ -299,7 +420,7 @@ async function loadList(preferId?: string | null): Promise<void> {
   const ret = await invokeString("API_AdminListMaterials", [
     auth.token,
     qEl.value.trim(),
-    categoryEl.value,
+    listCategoryFilter(),
     String(lim),
     String(offset),
   ]);
@@ -317,6 +438,7 @@ async function loadList(preferId?: string | null): Promise<void> {
       <tr data-id="${esc(m.material_id)}" role="option" tabindex="-1">
         <td>${esc(m.catalog_id || "")}</td>
         <td>${esc(m.master_category || "")}</td>
+        <td>${esc(m.category || "")}</td>
         <td class="mat-name-cell">${esc(m.name)}</td>
         <td>${esc(m.thickness_mm || "")}</td>
         <td>${esc(m.weight_kg_m2 || "")}</td>
@@ -327,6 +449,10 @@ async function loadList(preferId?: string | null): Promise<void> {
         <td>${esc(m.r_500_hz || "")}</td>
         <td>${esc(m.r_1000_hz || "")}</td>
         <td>${esc(m.r_2000_hz || "")}</td>
+        <td>${esc(m.r_4000_hz || "")}</td>
+        <td>${esc(m.rw_db || "")}</td>
+        <td>${esc(m.c_db || "")}</td>
+        <td>${esc(m.ctr_db || "")}</td>
       </tr>`,
     )
     .join("");
@@ -367,8 +493,8 @@ async function bootstrapSession(): Promise<void> {
     setStatus("Disconnected from bppServer", "err");
   };
 
-  await send("session.open", { client_name: "acoustics-materials-web", client_version: "0.2.12" }, "session.opened");
-  await send("exec.request", { code: 'INCLUDE "fixtures/acoustics/shared_building_api.basicpp"\n' }, "exec.completed");
+  await send("session.open", { client_name: "app-gevelwering-materials-web", client_version: "0.2.12" }, "session.opened");
+  await send("exec.request", { code: 'INCLUDE "fixtures/app-gevelwering/shared_building_api.basicpp"\n' }, "exec.completed");
   const bootRet = await invokeString("API_Bootstrap", []);
   if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap failed: ${bootRet}`);
   setStatus(`Connected · session ${sessionId ?? "?"} · Postgres ready`, "ok");
@@ -435,6 +561,14 @@ filterForm.addEventListener("submit", async (ev) => {
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   }
+});
+
+categoryEl.addEventListener("change", () => {
+  fillFilterSubrubrieken();
+});
+
+masterEl.addEventListener("change", () => {
+  fillEditorSubrubrieken();
 });
 
 prevBtn.addEventListener("click", async () => {
@@ -516,6 +650,13 @@ editorForm.addEventListener("submit", async (ev) => {
       r500El.value.trim(),
       r1000El.value.trim(),
       r2000El.value.trim(),
+      r4000El.value.trim(),
+      rwEl.value.trim(),
+      cEl.value.trim(),
+      ctrEl.value.trim(),
+      t1El.value.trim(),
+      cavEl.value.trim(),
+      t2El.value.trim(),
       sourceEl.value.trim() || "catalogusGG.pdf",
     ]);
     if (ret.startsWith("ERROR")) {
@@ -553,6 +694,11 @@ deleteBtn.addEventListener("click", async () => {
   }
 });
 
+fillFilterRubrieken();
+fillEditorRubrieken();
+
 bootstrapSession().catch((err) => {
   setStatus(err instanceof Error ? err.message : String(err), "err");
 });
+
+initPasswordToggles();

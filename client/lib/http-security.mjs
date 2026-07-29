@@ -1,7 +1,7 @@
 /**
- * Shared HTTP security helpers for acoustics-p0 serve + APIs.
+ * Shared HTTP security helpers for app-gevelwering serve + APIs.
  */
-const SESSION_COOKIE = "acoustics_session";
+const SESSION_COOKIE = "app_gevelwering_session";
 const SESSION_MAX_AGE_SEC = 12 * 60 * 60; // match login_session 12h
 
 function isLocalDevHost(hostHeader) {
@@ -16,13 +16,13 @@ export function forwardedProto(req) {
 }
 
 export function isHttpsRequest(req) {
-  if (process.env.ACOUSTICS_FORCE_HTTPS === "1") return true;
+  if (process.env.GEVELWERING_FORCE_HTTPS === "1") return true;
   return forwardedProto(req) === "https";
 }
 
-/** Reject cleartext API access when ACOUSTICS_REQUIRE_HTTPS=1 (behind TLS proxy). */
+/** Reject cleartext API access when GEVELWERING_REQUIRE_HTTPS=1 (behind TLS proxy). */
 export function requireHttpsOrReject(req, res) {
-  if (process.env.ACOUSTICS_REQUIRE_HTTPS !== "1") return false;
+  if (process.env.GEVELWERING_REQUIRE_HTTPS !== "1") return false;
   if (isHttpsRequest(req)) return false;
   const payload = JSON.stringify({
     ok: false,
@@ -37,10 +37,10 @@ export function requireHttpsOrReject(req, res) {
 }
 
 /**
- * CORS: explicit ACOUSTICS_CORS_ORIGIN in production; * only for local/dev when unset.
+ * CORS: explicit GEVELWERING_CORS_ORIGIN in production; * only for local/dev when unset.
  */
 export function corsHeaders(req) {
-  const configured = (process.env.ACOUSTICS_CORS_ORIGIN || "").trim();
+  const configured = (process.env.GEVELWERING_CORS_ORIGIN || "").trim();
   let origin;
   if (configured) {
     origin = configured;
@@ -68,7 +68,7 @@ export function securityHeaders(req) {
     "Content-Security-Policy":
       "default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data: blob:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
   };
-  if (isHttpsRequest(req) || process.env.ACOUSTICS_FORCE_HTTPS === "1") {
+  if (isHttpsRequest(req) || process.env.GEVELWERING_FORCE_HTTPS === "1") {
     headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";
   }
   return headers;
@@ -94,7 +94,7 @@ export function parseBearerToken(req) {
   return m ? m[1].trim() : "";
 }
 
-/** Bearer header or acoustics_session cookie. */
+/** Bearer header or app_gevelwering_session cookie. */
 export function parseSessionToken(req) {
   const bearer = parseBearerToken(req);
   if (bearer) return bearer;

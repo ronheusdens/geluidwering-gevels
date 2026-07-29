@@ -48,9 +48,39 @@ function resolveBppWsUrl() {
   return q || override || `ws://${location.hostname}:18080/ws`;
 }
 
+// src/password-toggle.ts
+var EYE_CLOSED = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75C21.27 9.11 17 5 12 5c-1.4 0-2.73.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78 3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/></svg>`;
+var EYE_OPEN = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 5c-5 0-9.27 3.11-11 7.5C2.73 16.89 7 20 12 20s9.27-3.11 11-7.5C21.27 8.11 17 5 12 5zm0 12.5c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>`;
+function enhancePasswordInput(input) {
+  if (input.dataset.pwToggle === "1") return;
+  if (input.closest(".pw-field")) return;
+  input.dataset.pwToggle = "1";
+  const wrap = document.createElement("div");
+  wrap.className = "pw-field";
+  input.parentNode?.insertBefore(wrap, input);
+  wrap.appendChild(input);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "pw-toggle";
+  btn.setAttribute("aria-label", "Wachtwoord tonen");
+  btn.setAttribute("aria-pressed", "false");
+  btn.innerHTML = EYE_CLOSED;
+  wrap.appendChild(btn);
+  btn.addEventListener("click", () => {
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    btn.innerHTML = show ? EYE_OPEN : EYE_CLOSED;
+    btn.setAttribute("aria-pressed", show ? "true" : "false");
+    btn.setAttribute("aria-label", show ? "Wachtwoord verbergen" : "Wachtwoord tonen");
+  });
+}
+function initPasswordToggles(root = document) {
+  root.querySelectorAll('input[type="password"]').forEach(enhancePasswordInput);
+}
+
 // src/admin.ts
 var BPP_WS = resolveBppWsUrl();
-var AUTH_KEY = "acoustics_admin_auth";
+var AUTH_KEY = "app_gevelwering_admin_auth";
 var connBarEl = document.getElementById("admin-conn-bar");
 var connLedEl = document.getElementById("admin-conn-led");
 var connStatusEl = document.getElementById("admin-conn-status");
@@ -102,7 +132,7 @@ function showAdmin(info) {
   storeAuth2(info);
   loginPanelEl.classList.add("hidden");
   adminPanelEl.classList.remove("hidden");
-  adminUserLabelEl.textContent = `Signed in as ${info.display_name || info.username}`;
+  adminUserLabelEl.textContent = `Ingelogd als ${info.display_name || info.username}`;
 }
 function send(type, payload, wantType) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -152,15 +182,15 @@ async function invokeString(target, args) {
 function statusLabel(status) {
   switch (status) {
     case "INITIAL_REQUEST":
-      return "Initial request";
+      return "Project gestart";
     case "PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED":
-      return "Project data supplied not yet processed";
+      return "Gegevens aangeleverd \u2014 nog niet verwerkt";
     case "PROJECT_UNDERWAY":
-      return "Project underway";
+      return "Project in uitvoering";
     case "PROJECT_NEAR_FINAL":
-      return "Project near final";
+      return "Project bijna afgerond";
     case "PROJECT_FINISHED":
-      return "Project finished";
+      return "Project afgerond";
     default:
       return status;
   }
@@ -192,7 +222,7 @@ async function loadCustomers() {
   customerSelectEl.innerHTML = "";
   const blank = document.createElement("option");
   blank.value = "";
-  blank.textContent = "\u2014 select a customer \u2014";
+  blank.textContent = "\u2014 kies een klant \u2014";
   customerSelectEl.appendChild(blank);
   for (const c of customers) {
     const opt = document.createElement("option");
@@ -200,9 +230,9 @@ async function loadCustomers() {
     const outstanding = Number(c.outstanding_count || 0);
     const total = Number(c.project_count || 0);
     const drawings = Number(c.drawing_count || 0);
-    const suffix = outstanding > 0 ? ` \xB7 ${outstanding} outstanding` : total > 0 ? " \xB7 all finished" : "";
-    const drawingSuffix = drawings > 0 ? ` \xB7 ${drawings} drawing${drawings === 1 ? "" : "s"}` : " \xB7 no drawings";
-    opt.textContent = `${c.customer_name} (${total} project${total === 1 ? "" : "s"}${suffix}${drawingSuffix})`;
+    const suffix = outstanding > 0 ? ` \xB7 ${outstanding} openstaand` : total > 0 ? " \xB7 alles afgerond" : "";
+    const drawingSuffix = drawings > 0 ? ` \xB7 ${drawings} tekening${drawings === 1 ? "" : "en"}` : " \xB7 geen tekeningen";
+    opt.textContent = `${c.customer_name} (${total} project${total === 1 ? "" : "en"}${suffix}${drawingSuffix})`;
     customerSelectEl.appendChild(opt);
   }
   if (prev && [...customerSelectEl.options].some((o) => o.value === prev)) {
@@ -225,30 +255,30 @@ async function loadCustomerProjects(customerId) {
   }
   const parsed = JSON.parse(ret);
   const projects = parsed.projects ?? [];
-  const customerName = customerSelectEl.options[customerSelectEl.selectedIndex]?.textContent?.split(" (")[0] || "Customer";
+  const customerName = customerSelectEl.options[customerSelectEl.selectedIndex]?.textContent?.split(" (")[0] || "Klant";
   projectsPanelEl.classList.remove("hidden");
-  customerTitleEl.textContent = `Projects for ${customerName}`;
+  customerTitleEl.textContent = `Projecten van ${customerName}`;
   if (projects.length === 0) {
-    projectsListEl.innerHTML = `<p class="hint">No projects for this customer.</p>`;
+    projectsListEl.innerHTML = `<p class="hint">Geen projecten voor deze klant.</p>`;
     return;
   }
   projectsListEl.innerHTML = projects.map((p) => {
     const outstanding = isOutstanding(p.project_status);
     const drawingCount = Number(p.drawing_count || 0);
-    const drawingLine = drawingCount > 0 ? `Drawings: ${p.drawing_names || `${drawingCount} file${drawingCount === 1 ? "" : "s"}`}` : "Drawings: none uploaded";
+    const drawingLine = drawingCount > 0 ? `Tekeningen: ${p.drawing_names || `${drawingCount} bestand${drawingCount === 1 ? "" : "en"}`}` : "Tekeningen: nog geen upload";
     return `
         <section class="panel admin-project-card${outstanding ? "" : " admin-project-finished"}" data-building-id="${p.building_id}">
-          <h3>${p.label || "(no label)"}${outstanding ? "" : " \xB7 finished"}</h3>
-          <p class="hint">Ref: ${p.external_ref || "(none)"} \xB7 Created: ${p.created_at || "\u2014"}</p>
+          <h3>${p.label || "(geen label)"}${outstanding ? "" : " \xB7 afgerond"}</h3>
+          <p class="hint">Ref: ${p.external_ref || "(geen)"} \xB7 Aangemaakt: ${p.created_at || "\u2014"}</p>
           <p class="hint">${drawingLine}</p>
           <label class="block-label">
-            Project status
+            Projectstatus
             <select class="admin-project-status">
               ${statusOptions(p.project_status)}
             </select>
           </label>
           <div class="actions">
-            <button type="button" class="admin-save-status">Update status</button>
+            <button type="button" class="admin-save-status">Status bijwerken</button>
           </div>
         </section>
       `;
@@ -259,7 +289,7 @@ async function loadCustomerProjects(customerId) {
       const select = card?.querySelector(".admin-project-status");
       if (!card || !select || !auth?.token) return;
       btn.disabled = true;
-      setStatus("Updating project status\u2026", "busy");
+      setStatus("Projectstatus bijwerken\u2026", "busy");
       try {
         const ret2 = await invokeString("API_AdminUpdateProjectStatus", [
           auth.token,
@@ -270,7 +300,7 @@ async function loadCustomerProjects(customerId) {
           setStatus(ret2, "err");
           return;
         }
-        setStatus("Project status updated", "ok");
+        setStatus("Projectstatus bijgewerkt", "ok");
         await loadCustomers();
         if (customerSelectEl.value) await loadCustomerProjects(customerSelectEl.value);
       } catch (err) {
@@ -282,11 +312,11 @@ async function loadCustomerProjects(customerId) {
   }
 }
 async function bootstrapSession() {
-  setStatus(`Connecting to ${BPP_WS}\u2026`, "busy");
+  setStatus(`Verbinden met ${BPP_WS}\u2026`, "busy");
   ws = new WebSocket(BPP_WS);
   setConnLed(false);
   await new Promise((resolve, reject) => {
-    const t = window.setTimeout(() => reject(new Error("WebSocket connect timeout")), 8e3);
+    const t = window.setTimeout(() => reject(new Error("WebSocket-verbinding time-out")), 8e3);
     ws.onopen = () => {
       window.clearTimeout(t);
       setConnLed(true);
@@ -295,19 +325,19 @@ async function bootstrapSession() {
     ws.onerror = () => {
       window.clearTimeout(t);
       setConnLed(false);
-      reject(new Error("WebSocket connection failed \u2014 is bppServer running on port 18080?"));
+      reject(new Error("WebSocket-verbinding mislukt \u2014 draait bppServer op poort 18080?"));
     };
   });
   ws.onmessage = (ev) => onMessage(String(ev.data));
   ws.onclose = () => {
     setConnLed(false);
-    setStatus("Disconnected from bppServer", "err");
+    setStatus("Verbinding met bppServer verbroken", "err");
   };
-  await send("session.open", { client_name: "acoustics-admin-web", client_version: "0.2.4" }, "session.opened");
-  await send("exec.request", { code: 'INCLUDE "fixtures/acoustics/shared_building_api.basicpp"\n' }, "exec.completed");
+  await send("session.open", { client_name: "app-gevelwering-admin-web", client_version: "0.2.4" }, "session.opened");
+  await send("exec.request", { code: 'INCLUDE "fixtures/app-gevelwering/shared_building_api.basicpp"\n' }, "exec.completed");
   const bootRet = await invokeString("API_Bootstrap", []);
-  if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap failed: ${bootRet}`);
-  setStatus(`Connected \xB7 session ${sessionId ?? "?"} \xB7 Postgres ready`, "ok");
+  if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap mislukt: ${bootRet}`);
+  setStatus(`Verbonden \xB7 sessie ${sessionId ?? "?"} \xB7 Postgres gereed`, "ok");
   const stored = loadStoredAuth();
   if (stored?.token) {
     const validated = await invokeString("API_ValidateSession", [stored.token]);
@@ -325,7 +355,7 @@ async function bootstrapSession() {
 loginForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   loginBtn.disabled = true;
-  setStatus("Signing in\u2026", "busy");
+  setStatus("Inloggen\u2026", "busy");
   try {
     const fd = new FormData(loginForm);
     const username = String(fd.get("username") ?? "").trim();
@@ -337,12 +367,12 @@ loginForm.addEventListener("submit", async (ev) => {
     }
     const info = JSON.parse(ret);
     if (info.username !== "admin") {
-      setStatus("Admin page is restricted to user 'admin'", "err");
+      setStatus("Deze pagina is alleen voor gebruiker 'admin'", "err");
       return;
     }
     showAdmin(info);
     await loadCustomers();
-    setStatus("Admin signed in", "ok");
+    setStatus("Beheerder ingelogd", "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   } finally {
@@ -355,7 +385,7 @@ logoutBtn.addEventListener("click", async () => {
   } catch {
   }
   showLogin();
-  setStatus("Signed out", "ok");
+  setStatus("Uitgelogd", "ok");
 });
 customerSelectEl.addEventListener("change", () => {
   void loadCustomerProjects(customerSelectEl.value);
@@ -364,7 +394,7 @@ refreshBtn.addEventListener("click", async () => {
   refreshBtn.disabled = true;
   try {
     await loadCustomers();
-    setStatus("Customer list refreshed", "ok");
+    setStatus("Klantenlijst vernieuwd", "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   } finally {
@@ -374,3 +404,4 @@ refreshBtn.addEventListener("click", async () => {
 bootstrapSession().catch((err) => {
   setStatus(err instanceof Error ? err.message : String(err), "err");
 });
+initPasswordToggles();

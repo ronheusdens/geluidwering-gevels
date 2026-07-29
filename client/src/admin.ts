@@ -1,5 +1,6 @@
 import { loadAuth, storeAuth as persistAuth, syncSessionCookie } from "./auth-store";
 import { resolveBppWsUrl } from "./ws-url";
+import { initPasswordToggles } from "./password-toggle";
 
 type Envelope = {
   v: number;
@@ -42,7 +43,7 @@ type AdminProject = {
 
 const BPP_WS = resolveBppWsUrl();
 
-const AUTH_KEY = "acoustics_admin_auth";
+const AUTH_KEY = "app_gevelwering_admin_auth";
 const connBarEl = document.getElementById("admin-conn-bar") as HTMLElement;
 const connLedEl = document.getElementById("admin-conn-led") as HTMLElement;
 const connStatusEl = document.getElementById("admin-conn-status") as HTMLElement;
@@ -102,7 +103,7 @@ function showAdmin(info: AuthInfo): void {
   storeAuth(info);
   loginPanelEl.classList.add("hidden");
   adminPanelEl.classList.remove("hidden");
-  adminUserLabelEl.textContent = `Signed in as ${info.display_name || info.username}`;
+  adminUserLabelEl.textContent = `Ingelogd als ${info.display_name || info.username}`;
 }
 
 function send(type: string, payload: Record<string, unknown>, wantType: string): Promise<Envelope> {
@@ -158,15 +159,15 @@ async function invokeString(target: string, args: unknown[]): Promise<string> {
 function statusLabel(status: ProjectStatus | string): string {
   switch (status) {
     case "INITIAL_REQUEST":
-      return "Initial request";
+      return "Project gestart";
     case "PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED":
-      return "Project data supplied not yet processed";
+      return "Gegevens aangeleverd — nog niet verwerkt";
     case "PROJECT_UNDERWAY":
-      return "Project underway";
+      return "Project in uitvoering";
     case "PROJECT_NEAR_FINAL":
-      return "Project near final";
+      return "Project bijna afgerond";
     case "PROJECT_FINISHED":
-      return "Project finished";
+      return "Project afgerond";
     default:
       return status;
   }
@@ -203,7 +204,7 @@ async function loadCustomers(): Promise<void> {
   customerSelectEl.innerHTML = "";
   const blank = document.createElement("option");
   blank.value = "";
-  blank.textContent = "— select a customer —";
+  blank.textContent = "— kies een klant —";
   customerSelectEl.appendChild(blank);
 
   for (const c of customers) {
@@ -214,12 +215,15 @@ async function loadCustomers(): Promise<void> {
     const drawings = Number(c.drawing_count || 0);
     const suffix =
       outstanding > 0
-        ? ` · ${outstanding} outstanding`
+        ? ` · ${outstanding} openstaand`
         : total > 0
-          ? " · all finished"
+          ? " · alles afgerond"
           : "";
-    const drawingSuffix = drawings > 0 ? ` · ${drawings} drawing${drawings === 1 ? "" : "s"}` : " · no drawings";
-    opt.textContent = `${c.customer_name} (${total} project${total === 1 ? "" : "s"}${suffix}${drawingSuffix})`;
+    const drawingSuffix =
+      drawings > 0
+        ? ` · ${drawings} tekening${drawings === 1 ? "" : "en"}`
+        : " · geen tekeningen";
+    opt.textContent = `${c.customer_name} (${total} project${total === 1 ? "" : "en"}${suffix}${drawingSuffix})`;
     customerSelectEl.appendChild(opt);
   }
 
@@ -245,13 +249,13 @@ async function loadCustomerProjects(customerId: string): Promise<void> {
   const parsed = JSON.parse(ret) as { projects: AdminProject[] };
   const projects = parsed.projects ?? [];
   const customerName =
-    customerSelectEl.options[customerSelectEl.selectedIndex]?.textContent?.split(" (")[0] || "Customer";
+    customerSelectEl.options[customerSelectEl.selectedIndex]?.textContent?.split(" (")[0] || "Klant";
 
   projectsPanelEl.classList.remove("hidden");
-  customerTitleEl.textContent = `Projects for ${customerName}`;
+  customerTitleEl.textContent = `Projecten van ${customerName}`;
 
   if (projects.length === 0) {
-    projectsListEl.innerHTML = `<p class="hint">No projects for this customer.</p>`;
+    projectsListEl.innerHTML = `<p class="hint">Geen projecten voor deze klant.</p>`;
     return;
   }
 
@@ -261,21 +265,21 @@ async function loadCustomerProjects(customerId: string): Promise<void> {
       const drawingCount = Number(p.drawing_count || 0);
       const drawingLine =
         drawingCount > 0
-          ? `Drawings: ${p.drawing_names || `${drawingCount} file${drawingCount === 1 ? "" : "s"}`}`
-          : "Drawings: none uploaded";
+          ? `Tekeningen: ${p.drawing_names || `${drawingCount} bestand${drawingCount === 1 ? "" : "en"}`}`
+          : "Tekeningen: nog geen upload";
       return `
         <section class="panel admin-project-card${outstanding ? "" : " admin-project-finished"}" data-building-id="${p.building_id}">
-          <h3>${p.label || "(no label)"}${outstanding ? "" : " · finished"}</h3>
-          <p class="hint">Ref: ${p.external_ref || "(none)"} · Created: ${p.created_at || "—"}</p>
+          <h3>${p.label || "(geen label)"}${outstanding ? "" : " · afgerond"}</h3>
+          <p class="hint">Ref: ${p.external_ref || "(geen)"} · Aangemaakt: ${p.created_at || "—"}</p>
           <p class="hint">${drawingLine}</p>
           <label class="block-label">
-            Project status
+            Projectstatus
             <select class="admin-project-status">
               ${statusOptions(p.project_status)}
             </select>
           </label>
           <div class="actions">
-            <button type="button" class="admin-save-status">Update status</button>
+            <button type="button" class="admin-save-status">Status bijwerken</button>
           </div>
         </section>
       `;
@@ -288,7 +292,7 @@ async function loadCustomerProjects(customerId: string): Promise<void> {
       const select = card?.querySelector<HTMLSelectElement>(".admin-project-status");
       if (!card || !select || !auth?.token) return;
       btn.disabled = true;
-      setStatus("Updating project status…", "busy");
+      setStatus("Projectstatus bijwerken…", "busy");
       try {
         const ret2 = await invokeString("API_AdminUpdateProjectStatus", [
           auth.token,
@@ -299,7 +303,7 @@ async function loadCustomerProjects(customerId: string): Promise<void> {
           setStatus(ret2, "err");
           return;
         }
-        setStatus("Project status updated", "ok");
+        setStatus("Projectstatus bijgewerkt", "ok");
         await loadCustomers();
         if (customerSelectEl.value) await loadCustomerProjects(customerSelectEl.value);
       } catch (err) {
@@ -312,11 +316,11 @@ async function loadCustomerProjects(customerId: string): Promise<void> {
 }
 
 async function bootstrapSession(): Promise<void> {
-  setStatus(`Connecting to ${BPP_WS}…`, "busy");
+  setStatus(`Verbinden met ${BPP_WS}…`, "busy");
   ws = new WebSocket(BPP_WS);
   setConnLed(false);
   await new Promise<void>((resolve, reject) => {
-    const t = window.setTimeout(() => reject(new Error("WebSocket connect timeout")), 8000);
+    const t = window.setTimeout(() => reject(new Error("WebSocket-verbinding time-out")), 8000);
     ws!.onopen = () => {
       window.clearTimeout(t);
       setConnLed(true);
@@ -325,20 +329,20 @@ async function bootstrapSession(): Promise<void> {
     ws!.onerror = () => {
       window.clearTimeout(t);
       setConnLed(false);
-      reject(new Error("WebSocket connection failed — is bppServer running on port 18080?"));
+      reject(new Error("WebSocket-verbinding mislukt — draait bppServer op poort 18080?"));
     };
   });
   ws.onmessage = (ev) => onMessage(String(ev.data));
   ws.onclose = () => {
     setConnLed(false);
-    setStatus("Disconnected from bppServer", "err");
+    setStatus("Verbinding met bppServer verbroken", "err");
   };
 
-  await send("session.open", { client_name: "acoustics-admin-web", client_version: "0.2.4" }, "session.opened");
-  await send("exec.request", { code: 'INCLUDE "fixtures/acoustics/shared_building_api.basicpp"\n' }, "exec.completed");
+  await send("session.open", { client_name: "app-gevelwering-admin-web", client_version: "0.2.4" }, "session.opened");
+  await send("exec.request", { code: 'INCLUDE "fixtures/app-gevelwering/shared_building_api.basicpp"\n' }, "exec.completed");
   const bootRet = await invokeString("API_Bootstrap", []);
-  if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap failed: ${bootRet}`);
-  setStatus(`Connected · session ${sessionId ?? "?"} · Postgres ready`, "ok");
+  if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap mislukt: ${bootRet}`);
+  setStatus(`Verbonden · sessie ${sessionId ?? "?"} · Postgres gereed`, "ok");
 
   const stored = loadStoredAuth();
   if (stored?.token) {
@@ -358,7 +362,7 @@ async function bootstrapSession(): Promise<void> {
 loginForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   loginBtn.disabled = true;
-  setStatus("Signing in…", "busy");
+  setStatus("Inloggen…", "busy");
   try {
     const fd = new FormData(loginForm);
     const username = String(fd.get("username") ?? "").trim();
@@ -370,12 +374,12 @@ loginForm.addEventListener("submit", async (ev) => {
     }
     const info = JSON.parse(ret) as AuthInfo;
     if (info.username !== "admin") {
-      setStatus("Admin page is restricted to user 'admin'", "err");
+      setStatus("Deze pagina is alleen voor gebruiker 'admin'", "err");
       return;
     }
     showAdmin(info);
     await loadCustomers();
-    setStatus("Admin signed in", "ok");
+    setStatus("Beheerder ingelogd", "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   } finally {
@@ -390,7 +394,7 @@ logoutBtn.addEventListener("click", async () => {
     /* ignore */
   }
   showLogin();
-  setStatus("Signed out", "ok");
+  setStatus("Uitgelogd", "ok");
 });
 
 customerSelectEl.addEventListener("change", () => {
@@ -401,7 +405,7 @@ refreshBtn.addEventListener("click", async () => {
   refreshBtn.disabled = true;
   try {
     await loadCustomers();
-    setStatus("Customer list refreshed", "ok");
+    setStatus("Klantenlijst vernieuwd", "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   } finally {
@@ -412,3 +416,5 @@ refreshBtn.addEventListener("click", async () => {
 bootstrapSession().catch((err) => {
   setStatus(err instanceof Error ? err.message : String(err), "err");
 });
+
+initPasswordToggles();

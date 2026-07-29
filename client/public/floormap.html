@@ -3,19 +3,24 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Acoustics Engineer — Drawing analysis</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <title>Geluidwering Gevels — Drawing analysis</title>
+  <link rel="stylesheet" href="/styles.css?v=pw-eye" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body class="engineer-body">
   <main class="page page-engineer">
     <header class="header header-compact">
-      <p class="eyebrow">Acoustics calculation service</p>
-      <h1>Drawing analysis</h1>
+      <div class="brand">
+        <img class="brand-logo" src="/assets/stilte-logo.jpg" alt="" width="52" height="52" />
+        <div class="brand-copy">
+          <p class="brand-name">Geluidwering Gevels</p>
+          <h1 class="page-heading">Drawing analysis</h1>
+        </div>
+      </div>
       <p class="hint">
         <a href="/engineer.html">← Back to drawing review</a>
         ·
-        <a id="fm-ga-link" href="/ga.html">GA-model</a>
+        <a id="fm-ga-link" href="/ga.html">Berekening gevelwering</a>
       </p>
     </header>
 
@@ -44,12 +49,12 @@
         <label class="inline-label">Building id
           <input id="fm-building-input" placeholder="uuid" size="36" />
         </label>
-        <button type="button" id="fm-load-building-btn" class="secondary">Load sections</button>
+        <button type="button" id="fm-load-building-btn" class="secondary">Ophalen</button>
       </div>
 
       <section class="panel" id="fm-picker-panel">
-        <h2>Scalable sections</h2>
-        <p class="hint">Pick a floormap, façade, or section to measure and mark components (same workflow for each).</p>
+        <h2>Schaalbare secties</h2>
+        <p class="hint">Kies een plattegrond, gevel of doorsnede om te meten en componenten te markeren.</p>
         <div id="fm-section-list" class="admin-projects-list"></div>
       </section>
 
@@ -59,7 +64,7 @@
             <h2 id="fm-section-title">Section</h2>
             <p class="hint" id="fm-section-meta"></p>
           </div>
-          <button type="button" id="fm-back-picker-btn" class="secondary">All sections</button>
+          <button type="button" id="fm-back-picker-btn" class="secondary">← Overzicht</button>
         </div>
 
         <div class="engineer-layout">
@@ -89,29 +94,34 @@
               <p class="hint" id="fm-calibrate-hint">Click Calibrate scale when you are ready.</p>
             </section>
 
-            <section class="tools-panel panel-inset" id="fm-tools-bar">
-              <div class="tools-panel-head">
+            <details class="tools-panel panel-inset" id="fm-tools-bar" open>
+              <summary class="tools-panel-toggle">
                 <strong>Tools</strong>
-                <div class="tools-mode-btns" role="group" aria-label="Drawing tools">
-                  <button type="button" class="secondary tool-mode-btn active" data-tool="off">Off</button>
-                  <button type="button" class="secondary tool-mode-btn" data-tool="length">Length (m)</button>
-                  <button type="button" class="secondary tool-mode-btn" data-tool="room">Draw room</button>
+                <span class="tools-panel-chevron" aria-hidden="true"></span>
+              </summary>
+              <div class="tools-panel-main" id="fm-tools-main">
+                <div class="tools-panel-head">
+                  <div class="tools-mode-btns" role="group" aria-label="Drawing tools">
+                    <button type="button" class="secondary tool-mode-btn active" data-tool="off">Off</button>
+                    <button type="button" class="secondary tool-mode-btn" data-tool="length">Length (m)</button>
+                    <button type="button" class="secondary tool-mode-btn" data-tool="room">Teken ruimte</button>
+                  </div>
+                  <button type="button" id="fm-tool-clear-btn" class="secondary">Clear</button>
                 </div>
-                <button type="button" id="fm-tool-clear-btn" class="secondary">Clear</button>
+                <div class="tools-readouts">
+                  <label class="discovery-inline">Length (m)
+                    <input id="fm-tool-length-mm" type="text" readonly value="—" />
+                  </label>
+                  <label class="discovery-inline">Circumference (m)
+                    <input id="fm-tool-circ-mm" type="text" readonly value="—" />
+                  </label>
+                  <label class="discovery-inline">Area (m²)
+                    <input id="fm-tool-area-mm2" type="text" readonly value="—" />
+                  </label>
+                </div>
+                <p class="hint" id="fm-tool-hint">Set scale, then measure a length or draw a room — circ/area update from the room polygon.</p>
               </div>
-              <div class="tools-readouts">
-                <label class="discovery-inline">Length (m)
-                  <input id="fm-tool-length-mm" type="text" readonly value="—" />
-                </label>
-                <label class="discovery-inline">Circumference (m)
-                  <input id="fm-tool-circ-mm" type="text" readonly value="—" />
-                </label>
-                <label class="discovery-inline">Area (m²)
-                  <input id="fm-tool-area-mm2" type="text" readonly value="—" />
-                </label>
-              </div>
-              <p class="hint" id="fm-tool-hint">Set scale, then measure a length or draw a room — circ/area update from the room polygon.</p>
-            </section>
+            </details>
 
             <section class="discovery-dock hidden" id="fm-discovery-dock">
               <div class="discovery-dock-top">
@@ -122,12 +132,12 @@
                 <label class="discovery-inline">Label <input id="fm-discovery-label" /></label>
                 <label class="discovery-inline">Level
                   <select id="fm-discovery-level">
-                    <option value="GROUND">Ground</option>
-                    <option value="FIRST">First</option>
-                    <option value="SECOND">Second</option>
-                    <option value="THIRD">Third</option>
-                    <option value="ROOF">Roof</option>
-                    <option value="OTHER">Other</option>
+                    <option value="GROUND">Begane vloer</option>
+                    <option value="FIRST">Verdieping</option>
+                    <option value="SECOND">2e verdieping</option>
+                    <option value="THIRD">3e verdieping</option>
+                    <option value="ROOF">Dak</option>
+                    <option value="OTHER">Overig</option>
                   </select>
                 </label>
                 <div class="discovery-adjust compact" aria-label="Nudge polygon">
@@ -156,34 +166,95 @@
 
           <aside class="engineer-sidebar">
             <fieldset id="fm-mark-room-fieldset">
-              <legend>Room</legend>
+              <legend>Ruimte</legend>
               <label class="block-label">Label
-                <input id="fm-room-label" placeholder="e.g. slaapkamer 1" />
+                <input id="fm-room-label" placeholder="bijv. slaapkamer 1" />
               </label>
-              <label class="block-label">Level
+              <div class="vg-vr-row" id="fm-vg-vr-row">
+                <label class="discovery-inline">VG
+                  <input id="fm-room-vg" type="number" min="1" step="1" inputmode="numeric" placeholder="1" />
+                </label>
+                <label class="discovery-inline">VR
+                  <input id="fm-room-vr" type="text" maxlength="16" placeholder="3A" autocomplete="off" />
+                </label>
+              </div>
+              <p class="hint" id="fm-vg-vr-hint">Zelfde VG + andere VR = ruimten in hetzelfde verblijfsgebied. VR is uniek per project (bijv. 1, 3A).</p>
+              <div id="fm-material-block" class="hidden">
+                <label class="block-label">Rubriek
+                  <select id="fm-material-category">
+                    <option value="">— kies rubriek —</option>
+                  </select>
+                </label>
+                <label class="block-label">Subrubriek
+                  <select id="fm-material-subcategory" disabled>
+                    <option value="">0 - Alle subrubrieken</option>
+                  </select>
+                </label>
+                <label class="block-label">Filter naam
+                  <input id="fm-material-filter" type="search" placeholder="zoek in naam / catalogus-id" autocomplete="off" />
+                </label>
+                <label class="block-label">Materiaal (naam)
+                  <select id="fm-material-id" disabled>
+                    <option value="">— kies rubriek eerst —</option>
+                  </select>
+                </label>
+                <div id="fm-material-spectrum" class="fm-material-spectrum hidden" aria-live="polite">
+                  <p class="fm-material-spectrum-title">R-spectrum (dB) · 125–2000&nbsp;Hz + totaal</p>
+                  <div class="fm-spectrum-grid" role="group" aria-label="R-spectrum 125 tot 2000 Hz en totaal RA">
+                    <span class="fm-spectrum-hz">125</span>
+                    <span class="fm-spectrum-hz">250</span>
+                    <span class="fm-spectrum-hz">500</span>
+                    <span class="fm-spectrum-hz">1000</span>
+                    <span class="fm-spectrum-hz">2000</span>
+                    <span class="fm-spectrum-hz fm-spectrum-hz--total">RA</span>
+                    <span class="fm-spectrum-val" id="fm-r125">—</span>
+                    <span class="fm-spectrum-val" id="fm-r250">—</span>
+                    <span class="fm-spectrum-val" id="fm-r500">—</span>
+                    <span class="fm-spectrum-val" id="fm-r1000">—</span>
+                    <span class="fm-spectrum-val" id="fm-r2000">—</span>
+                    <span class="fm-spectrum-val fm-spectrum-val--total" id="fm-ra">—</span>
+                  </div>
+                </div>
+                <p class="hint">Kies rubriek + subrubriek en een catalogusmateriaal. Nodig voor de berekening gevelwering per VR.</p>
+              </div>
+              <label class="block-label">Verdieping
                 <select id="fm-room-level">
-                  <option value="GROUND">Ground</option>
-                  <option value="FIRST">First</option>
-                  <option value="SECOND">Second</option>
-                  <option value="THIRD">Third</option>
-                  <option value="ROOF">Roof</option>
-                  <option value="OTHER">Other</option>
+                  <option value="GROUND">Begane vloer</option>
+                  <option value="FIRST">Verdieping</option>
+                  <option value="SECOND">2e verdieping</option>
+                  <option value="THIRD">3e verdieping</option>
+                  <option value="ROOF">Dak</option>
+                  <option value="OTHER">Overig</option>
                 </select>
               </label>
-              <p class="hint" id="fm-room-pending-hint">Use Draw room in Tools, click vertices, then Close &amp; save. Double-click an anchor to remove it; Simplify thins the outline.</p>
+              <p class="hint" id="fm-room-pending-hint">Gebruik Teken ruimte in Tools, klik hoekpunten, sluit daarna af en sla op.</p>
               <div class="actions actions-stack">
-                <button type="button" id="fm-room-draw-btn">Draw room</button>
-                <button type="button" id="fm-room-close-btn" class="secondary" disabled>Close polygon</button>
-                <button type="button" id="fm-room-simplify-btn" class="secondary" disabled>Simplify outline</button>
-                <button type="button" id="fm-room-save-btn" disabled>Save room</button>
-                <button type="button" id="fm-room-clear-btn" class="secondary" disabled>Clear mark</button>
-                <button type="button" id="fm-discover-btn-side" class="secondary">Discover rooms</button>
+                <button type="button" id="fm-room-draw-btn">Teken ruimte</button>
+                <button type="button" id="fm-room-close-btn" class="secondary" disabled>Sluit polygoon</button>
+                <button type="button" id="fm-room-simplify-btn" class="secondary" disabled>Vereenvoudig omtrek</button>
+                <button type="button" id="fm-room-save-btn" disabled>Ruimte opslaan</button>
+                <button type="button" id="fm-room-clear-btn" class="secondary" disabled>Markering wissen</button>
+                <button type="button" id="fm-discover-btn-side" class="secondary">Ontdek ruimten</button>
               </div>
             </fieldset>
 
-            <div class="saved-sections-block">
-              <h3>Saved rooms <span id="fm-room-count" class="region-count-badge">0</span></h3>
-              <p class="hint" id="fm-rooms-hint">Each room shows area (m²) and circumference (m) when scale is set.</p>
+            <fieldset id="fm-set-ops-fieldset" class="hidden">
+              <legend>Setbewerking</legend>
+              <p class="hint">Selecteer ≥2 componenten. ∩ doorsnede, ∪ vereniging, − verschil (grootste minus rest). Resultaat wordt een <strong>nieuw component</strong> met netto m²; materiaal komt uit de keuze hierboven (rubriek/subrubriek).</p>
+              <div class="set-ops-btns" role="group" aria-label="Booleaanse bewerking">
+                <button type="button" id="fm-set-intersect-btn" class="set-op-btn" title="Doorsnede (AND)">∩</button>
+                <button type="button" id="fm-set-union-btn" class="set-op-btn" title="Vereniging (OR)">∪</button>
+                <button type="button" id="fm-set-difference-btn" class="set-op-btn" title="Verschil: grootste minus rest (gevel − kozijnen)">−</button>
+              </div>
+              <div class="actions actions-stack">
+                <button type="button" id="fm-set-apply-btn">Toepassen &amp; opslaan</button>
+                <button type="button" id="fm-set-clear-sel-btn" class="secondary">Selectie wissen</button>
+              </div>
+            </fieldset>
+
+            <div class="saved-sections-block" id="fm-saved-block">
+              <h3 id="fm-saved-heading">Opgeslagen componenten <span id="fm-room-count" class="region-count-badge">0</span></h3>
+              <p class="hint" id="fm-rooms-hint">Elke component toont oppervlakte (m²) en omtrek (m) bij ingestelde schaal.</p>
               <ul id="fm-room-list" class="drawing-list"></ul>
             </div>
           </aside>
@@ -191,6 +262,6 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/floormap.js?v=list-select"></script>
+  <script type="module" src="/floormap.js?v=room-area-live"></script>
 </body>
 </html>

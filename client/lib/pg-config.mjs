@@ -15,7 +15,7 @@ let pool = null;
 export function parsePgConn(conn = process.env.BPP_PG_CONN || "") {
   if (!conn) {
     const user = process.env.USER || process.env.LOGNAME || "postgres";
-    return { host: "/tmp", port: 5432, database: "acoustics", user, password: "" };
+    return { host: "/tmp", port: 5432, database: "app_gevelwering", user, password: "" };
   }
   const parts = conn.split(":");
   if (parts.length < 4) {
@@ -26,7 +26,7 @@ export function parsePgConn(conn = process.env.BPP_PG_CONN || "") {
   return {
     host: host || "/tmp",
     port: Number(portStr) || 5432,
-    database: database || "acoustics",
+    database: database || "app_gevelwering",
     user: user || process.env.USER || "postgres",
     password,
   };

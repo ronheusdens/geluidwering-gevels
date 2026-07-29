@@ -55,8 +55,38 @@ function resolveBppWsUrl() {
   return q || override || `ws://${location.hostname}:18080/ws`;
 }
 
+// src/password-toggle.ts
+var EYE_CLOSED = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75C21.27 9.11 17 5 12 5c-1.4 0-2.73.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78 3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/></svg>`;
+var EYE_OPEN = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 5c-5 0-9.27 3.11-11 7.5C2.73 16.89 7 20 12 20s9.27-3.11 11-7.5C21.27 8.11 17 5 12 5zm0 12.5c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>`;
+function enhancePasswordInput(input) {
+  if (input.dataset.pwToggle === "1") return;
+  if (input.closest(".pw-field")) return;
+  input.dataset.pwToggle = "1";
+  const wrap = document.createElement("div");
+  wrap.className = "pw-field";
+  input.parentNode?.insertBefore(wrap, input);
+  wrap.appendChild(input);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "pw-toggle";
+  btn.setAttribute("aria-label", "Wachtwoord tonen");
+  btn.setAttribute("aria-pressed", "false");
+  btn.innerHTML = EYE_CLOSED;
+  wrap.appendChild(btn);
+  btn.addEventListener("click", () => {
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    btn.innerHTML = show ? EYE_OPEN : EYE_CLOSED;
+    btn.setAttribute("aria-pressed", show ? "true" : "false");
+    btn.setAttribute("aria-label", show ? "Wachtwoord verbergen" : "Wachtwoord tonen");
+  });
+}
+function initPasswordToggles(root = document) {
+  root.querySelectorAll('input[type="password"]').forEach(enhancePasswordInput);
+}
+
 // src/app.ts
-var AUTH_KEY = "acoustics_p0_auth";
+var AUTH_KEY = "app_gevelwering_auth";
 var BPP_WS = resolveBppWsUrl();
 var connBarEl = document.getElementById("conn-bar");
 var connLedEl = document.getElementById("conn-led");
@@ -92,6 +122,9 @@ var projectDetailPanel = document.getElementById("project-detail-panel");
 var projectDetailTitle = document.getElementById("project-detail-title");
 var profileBtn = document.getElementById("profile-btn");
 var profilePanelEl = document.getElementById("profile-panel");
+var methodBtn = document.getElementById("method-btn");
+var methodPanelEl = document.getElementById("method-panel");
+var methodCloseBtn = document.getElementById("method-close-btn");
 var profileServiceEmailEl = document.getElementById("profile-service-email");
 var profilePwWarningEl = document.getElementById("profile-pw-warning");
 var saveProfileBtn = document.getElementById("save-profile-btn");
@@ -136,25 +169,25 @@ function setAuthTab(tab) {
 function statusLabel(status) {
   switch (status) {
     case "INITIAL_REQUEST":
-      return "Project started \u2014 upload drawings";
+      return "Project gestart \u2014 tekeningen uploaden";
     case "PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED":
-      return "Drawings submitted \u2014 awaiting acceptance";
+      return "Tekeningen ingediend \u2014 wacht op acceptatie";
     case "PROJECT_UNDERWAY":
-      return "Drawings accepted \u2014 calculation underway";
+      return "Tekeningen geaccepteerd \u2014 berekening loopt";
     case "PROJECT_NEAR_FINAL":
-      return "Calculation near final";
+      return "Berekening bijna afgerond";
     case "PROJECT_FINISHED":
-      return "Report ready (concept v1.0)";
+      return "Rapport gereed (concept v1.0)";
     default:
-      return status || "Unknown";
+      return status || "Onbekend";
   }
 }
 var PROGRESS_STEPS = [
-  { key: "INITIAL_REQUEST", title: "Project started", short: "Started" },
-  { key: "PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED", title: "Drawings submitted", short: "Submitted" },
-  { key: "PROJECT_UNDERWAY", title: "Drawings accepted", short: "Accepted" },
-  { key: "PROJECT_NEAR_FINAL", title: "Near final", short: "Near final" },
-  { key: "PROJECT_FINISHED", title: "Report ready", short: "Report" }
+  { key: "INITIAL_REQUEST", title: "Project gestart", short: "Gestart" },
+  { key: "PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED", title: "Tekeningen ingediend", short: "Ingediend" },
+  { key: "PROJECT_UNDERWAY", title: "Tekeningen geaccepteerd", short: "Geaccepteerd" },
+  { key: "PROJECT_NEAR_FINAL", title: "Bijna afgerond", short: "Bijna klaar" },
+  { key: "PROJECT_FINISHED", title: "Rapport gereed", short: "Rapport" }
 ];
 function progressIndex(status) {
   if (!status) return -1;
@@ -186,11 +219,11 @@ function renderProjectProgress(status) {
     projectProgressStepsEl.appendChild(li);
   });
   const captions = {
-    INITIAL_REQUEST: "Next: upload drawings and submit them for review.",
-    PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED: "An engineer is checking whether your drawings are acceptable as a basis for the calculation.",
-    PROJECT_UNDERWAY: "Your drawings were accepted. Calculation work is underway.",
-    PROJECT_NEAR_FINAL: "The calculation is nearly complete. The concept report will follow soon.",
-    PROJECT_FINISHED: "Finished \u2014 your concept report (v1.0) is ready to download."
+    INITIAL_REQUEST: "Volgende stap: upload tekeningen en dien ze in ter beoordeling.",
+    PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED: "Een ingenieur controleert of uw tekeningen als basis voor de berekening kunnen dienen.",
+    PROJECT_UNDERWAY: "Uw tekeningen zijn geaccepteerd. De berekening is gestart.",
+    PROJECT_NEAR_FINAL: "De berekening is bijna afgerond. Het conceptrapport volgt binnenkort.",
+    PROJECT_FINISHED: "Afgerond \u2014 uw conceptrapport (v1.0) is klaar om te downloaden."
   };
   projectProgressCaptionEl.textContent = captions[status] || statusLabel(status);
   const finished = status === "PROJECT_FINISHED";
@@ -209,7 +242,7 @@ function projectTitle(p) {
   if (p.label) return p.label;
   if (p.external_ref) return p.external_ref;
   if (p.dwell_street) return p.dwell_street;
-  return "Untitled project";
+  return "Naamloos project";
 }
 function nextRequestId(prefix) {
   reqCounter += 1;
@@ -234,12 +267,13 @@ function showLogin() {
   loginPanel.classList.remove("hidden");
   appPanel.classList.add("hidden");
   profilePanelEl.classList.add("hidden");
+  methodPanelEl.classList.add("hidden");
   projectDetailPanel.classList.add("hidden");
   profilePwWarningEl.classList.add("hidden");
   setAuthTab("signin");
-  pageTitle.textContent = "Sign in";
-  pageLede.textContent = "Log in with your service credentials to manage acoustics projects.";
-  document.title = "Acoustics P0 \u2014 Login";
+  pageTitle.textContent = "Inloggen";
+  pageLede.textContent = "Log in om uw akoestische projecten te beheren.";
+  document.title = "Geluidwering Gevels \u2014 Inloggen";
 }
 async function showApp(info) {
   auth = info;
@@ -248,20 +282,21 @@ async function showApp(info) {
   appPanel.classList.remove("hidden");
   projectDetailPanel.classList.add("hidden");
   const label = info.display_name || info.username;
-  userLabel.textContent = `Signed in as ${label}`;
-  profileServiceEmailEl.textContent = info.email ? `Service account email: ${info.email}` : "Service account email not set.";
+  userLabel.textContent = `Ingelogd als ${label}`;
+  profileServiceEmailEl.textContent = info.email ? `Account-e-mail: ${info.email}` : "Geen account-e-mail ingesteld.";
   const mustChange = !!info.must_change_password;
   profilePwWarningEl.classList.toggle("hidden", !mustChange);
   profilePanelEl.classList.toggle("hidden", !mustChange);
-  pageTitle.textContent = "Projects";
-  pageLede.textContent = "Your outstanding acoustics projects. Customer details are managed under Profile.";
-  document.title = "Acoustics P0 \u2014 Projects";
+  methodPanelEl.classList.add("hidden");
+  pageTitle.textContent = "Projecten";
+  pageLede.textContent = "Uw lopende akoestische projecten. Klantgegevens beheert u onder Profiel.";
+  document.title = "Geluidwering Gevels \u2014 Projecten";
   await loadCustomerProfile();
   await refreshProjectList();
 }
 function send(type, payload, wantType) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    return Promise.reject(new Error("WebSocket not open"));
+    return Promise.reject(new Error("Geen verbinding met de server"));
   }
   const request_id = nextRequestId(type.replace(".", "_"));
   const env = { v: 1, type, request_id, payload };
@@ -306,21 +341,21 @@ async function invokeString(target, args) {
   );
   const ret = inv.payload?.return;
   if (typeof ret !== "string") {
-    throw new Error(`Unexpected return from ${target}: ${JSON.stringify(inv.payload)}`);
+    throw new Error(`Onverwacht antwoord van ${target}: ${JSON.stringify(inv.payload)}`);
   }
   if (ret === "") {
     throw new Error(
-      `${target} returned empty \u2014 file chunk may exceed server limits; try a smaller drawing or restart bppServer after rebuild`
+      `${target} gaf een leeg antwoord \u2014 bestand mogelijk te groot; probeer een kleinere tekening of herstart de server`
     );
   }
   return ret;
 }
 async function bootstrapSession() {
-  setStatus(`Connecting to ${BPP_WS}\u2026`, "busy");
+  setStatus(`Verbinden met ${BPP_WS}\u2026`, "busy");
   ws = new WebSocket(BPP_WS);
   setConnLed(false);
   await new Promise((resolve, reject) => {
-    const t = window.setTimeout(() => reject(new Error("WebSocket connect timeout")), 8e3);
+    const t = window.setTimeout(() => reject(new Error("Verbinding time-out")), 8e3);
     ws.onopen = () => {
       window.clearTimeout(t);
       setConnLed(true);
@@ -329,35 +364,35 @@ async function bootstrapSession() {
     ws.onerror = () => {
       window.clearTimeout(t);
       setConnLed(false);
-      reject(new Error("WebSocket connection failed \u2014 is bppServer running on port 18080?"));
+      reject(new Error("Verbinding mislukt \u2014 draait de server op poort 18080?"));
     };
   });
   ws.onmessage = (ev) => onMessage(String(ev.data));
   ws.onclose = () => {
     setConnLed(false);
-    setStatus("Disconnected from bppServer", "err");
+    setStatus("Verbinding verbroken", "err");
   };
-  await send("session.open", { client_name: "acoustics-p0-web", client_version: "0.2.0" }, "session.opened");
+  await send("session.open", { client_name: "app-gevelwering-web", client_version: "0.2.0" }, "session.opened");
   const load = await send(
     "exec.request",
-    { code: 'INCLUDE "fixtures/acoustics/shared_building_api.basicpp"\n' },
+    { code: 'INCLUDE "fixtures/app-gevelwering/shared_building_api.basicpp"\n' },
     "exec.completed"
   );
-  if (load.type === "error") throw new Error(`exec failed: ${JSON.stringify(load.payload)}`);
+  if (load.type === "error") throw new Error(`Laden API mislukt: ${JSON.stringify(load.payload)}`);
   const bootRet = await invokeString("API_Bootstrap", []);
-  if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap failed: ${bootRet}`);
-  setStatus(`Connected \xB7 session ${sessionId ?? "?"} \xB7 Postgres ready`, "ok");
+  if (!bootRet.startsWith("OK")) throw new Error(`Opstarten mislukt: ${bootRet}`);
+  setStatus(`Verbonden \xB7 sessie ${sessionId ?? "?"}`, "ok");
   const stored = loadStoredAuth();
   if (stored) {
     const validated = await invokeString("API_ValidateSession", [stored.token]);
     if (validated.startsWith("ERROR")) {
       showLogin();
-      setStatus("Previous session expired \u2014 please sign in", "err");
+      setStatus("Vorige sessie verlopen \u2014 log opnieuw in", "err");
       return;
     }
     const info = JSON.parse(validated);
     await showApp(info);
-    if (!lastProjectId) setStatus(`Signed in as ${info.display_name || info.username}`, "ok");
+    if (!lastProjectId) setStatus(`Ingelogd als ${info.display_name || info.username}`, "ok");
   } else {
     showLogin();
   }
@@ -427,7 +462,7 @@ async function refreshProjectDocuments() {
   drawingListEl.innerHTML = "";
   const projectId = activeProjectId();
   if (!auth?.token || !projectId) {
-    drawingUploadHintEl.textContent = "Save the project first, then upload PDF or DWG drawings.";
+    drawingUploadHintEl.textContent = "Sla het project eerst op, upload daarna PDF- of DWG-tekeningen.";
     drawingFileInput.disabled = true;
     updateSubmitDrawingsButton(0);
     return;
@@ -442,20 +477,20 @@ async function refreshProjectDocuments() {
   try {
     parsed = await res.json();
   } catch {
-    drawingUploadHintEl.textContent = `Failed to load drawings (HTTP ${res.status})`;
+    drawingUploadHintEl.textContent = `Tekeningen laden mislukt (HTTP ${res.status})`;
     return;
   }
   if (!res.ok || !parsed.ok) {
-    drawingUploadHintEl.textContent = parsed.error || `Failed to load drawings (HTTP ${res.status})`;
+    drawingUploadHintEl.textContent = parsed.error || `Tekeningen laden mislukt (HTTP ${res.status})`;
     return;
   }
   const docs = parsed.documents ?? [];
   updateSubmitDrawingsButton(docs.length);
   if (docs.length === 0) {
-    drawingUploadHintEl.textContent = "No drawings uploaded yet.";
+    drawingUploadHintEl.textContent = "Nog geen tekeningen ge\xFCpload.";
     return;
   }
-  drawingUploadHintEl.textContent = `${docs.length} drawing${docs.length === 1 ? "" : "s"} uploaded.`;
+  drawingUploadHintEl.textContent = docs.length === 1 ? "1 tekening ge\xFCpload." : `${docs.length} tekeningen ge\xFCpload.`;
   for (const doc of docs) {
     const li = document.createElement("li");
     li.className = "drawing-list-item";
@@ -466,7 +501,7 @@ async function refreshProjectDocuments() {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "secondary";
-      btn.textContent = "Remove";
+      btn.textContent = "Verwijderen";
       btn.addEventListener("click", () => {
         void deleteDrawing(doc.id);
       });
@@ -477,10 +512,10 @@ async function refreshProjectDocuments() {
 }
 async function uploadDrawingFile(file) {
   const projectId = activeProjectId();
-  if (!auth?.token || !projectId) throw new Error("Select or save a project first");
+  if (!auth?.token || !projectId) throw new Error("Selecteer of sla eerst een project op");
   lastProjectId = projectId;
   const ext = fileExtension(file.name);
-  if (ext !== "pdf" && ext !== "dwg") throw new Error(`${file.name}: only PDF and DWG files are allowed`);
+  if (ext !== "pdf" && ext !== "dwg") throw new Error(`${file.name}: alleen PDF- en DWG-bestanden zijn toegestaan`);
   const q = new URLSearchParams({ building_id: projectId, filename: file.name });
   const res = await fetch(`/api/drawings/upload?${q}`, {
     method: "POST",
@@ -495,22 +530,22 @@ async function uploadDrawingFile(file) {
   try {
     parsed = await res.json();
   } catch {
-    throw new Error(`${file.name}: invalid server response (HTTP ${res.status})`);
+    throw new Error(`${file.name}: ongeldig serverantwoord (HTTP ${res.status})`);
   }
   if (!res.ok || !parsed.ok) {
     throw new Error(`${file.name}: ${parsed.error || res.statusText || `HTTP ${res.status}`}`);
   }
 }
 async function deleteDrawing(documentId) {
-  if (!auth?.token || !window.confirm("Remove this drawing?")) return;
-  setStatus("Removing drawing\u2026", "busy");
+  if (!auth?.token || !window.confirm("Deze tekening verwijderen?")) return;
+  setStatus("Tekening verwijderen\u2026", "busy");
   const ret = await invokeString("API_DeleteDrawing", [auth.token, documentId]);
   if (ret.startsWith("ERROR")) {
     setStatus(ret, "err");
     return;
   }
   await refreshProjectDocuments();
-  setStatus("Drawing removed", "ok");
+  setStatus("Tekening verwijderd", "ok");
 }
 function updateSubmitDrawingsButton(drawingCount = 0) {
   const canSubmit = Boolean(activeProjectId()) && currentProjectStatus === "INITIAL_REQUEST" && drawingCount > 0;
@@ -520,11 +555,11 @@ async function submitDrawingsForReview() {
   const projectId = activeProjectId();
   if (!auth?.token || !projectId) return;
   if (!window.confirm(
-    "Submit drawings for engineer review? You will not be able to upload or edit this project afterwards."
+    "Tekeningen indienen ter beoordeling door de ingenieur? Daarna kunt u dit project niet meer uploaden of wijzigen."
   )) {
     return;
   }
-  setStatus("Submitting drawings\u2026", "busy");
+  setStatus("Tekeningen indienen\u2026", "busy");
   submitDrawingsBtn.disabled = true;
   const ret = await invokeString("API_CustomerSubmitDrawings", [auth.token, projectId]);
   if (ret.startsWith("ERROR")) {
@@ -535,7 +570,7 @@ async function submitDrawingsForReview() {
   const parsed = JSON.parse(ret);
   setProjectEditingState(parsed.project_status);
   await refreshProjectList();
-  setStatus("Drawings submitted \u2014 an engineer will review them", "ok");
+  setStatus("Tekeningen ingediend \u2014 een ingenieur beoordeelt ze", "ok");
 }
 function setProjectEditingState(status) {
   currentProjectStatus = status;
@@ -553,10 +588,10 @@ function setProjectEditingState(status) {
     drawingFileInput.disabled = true;
     submitDrawingsBtn.disabled = true;
   } else if (status === "INITIAL_REQUEST") {
-    projectStatusViewEl.textContent = `${statusLabel(status)} \u2014 you can still edit or delete this project.`;
+    projectStatusViewEl.textContent = `${statusLabel(status)} \u2014 u kunt dit project nog wijzigen of verwijderen.`;
     drawingFileInput.disabled = !lastProjectId;
   } else {
-    projectStatusViewEl.textContent = "Fill in the dwelling address and save to create a new project.";
+    projectStatusViewEl.textContent = "Vul het adres van de woning in en sla op om een nieuw project te maken.";
     drawingFileInput.disabled = true;
     submitDrawingsBtn.disabled = true;
   }
@@ -577,11 +612,11 @@ function clearProjectFields() {
       el.readOnly = false;
     }
   });
-  projectDetailTitle.textContent = "New project";
+  projectDetailTitle.textContent = "Nieuw project";
   drawingListEl.innerHTML = "";
   drawingFileInput.value = "";
   drawingFileInput.disabled = true;
-  drawingUploadHintEl.textContent = "Save the project first, then upload PDF or DWG drawings.";
+  drawingUploadHintEl.textContent = "Sla het project eerst op, upload daarna PDF- of DWG-tekeningen.";
   renderProjectProgress(null);
   setProjectEditingState(null);
   highlightSelectedProject(null);
@@ -647,7 +682,7 @@ async function refreshProjectList() {
 }
 async function openProject(id) {
   if (!auth?.token) return;
-  setStatus("Loading project\u2026", "busy");
+  setStatus("Project laden\u2026", "busy");
   try {
     const ret = await invokeString("API_OpenBuilding", [auth.token, id]);
     if (ret.startsWith("ERROR")) {
@@ -656,7 +691,7 @@ async function openProject(id) {
       return;
     }
     fillProjectFromOpen(JSON.parse(ret));
-    setStatus("Project loaded", "ok");
+    setStatus("Project geladen", "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   }
@@ -664,7 +699,7 @@ async function openProject(id) {
 loginForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   loginBtn.disabled = true;
-  setStatus("Signing in\u2026", "busy");
+  setStatus("Inloggen\u2026", "busy");
   try {
     const fd = new FormData(loginForm);
     const username = String(fd.get("username") ?? "").trim();
@@ -676,7 +711,7 @@ loginForm.addEventListener("submit", async (ev) => {
     }
     const info = JSON.parse(ret);
     await showApp(info);
-    if (!lastProjectId) setStatus(`Signed in as ${info.display_name || info.username}`, "ok");
+    if (!lastProjectId) setStatus(`Ingelogd als ${info.display_name || info.username}`, "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   } finally {
@@ -691,7 +726,7 @@ logoutBtn.addEventListener("click", async () => {
   issuedAccessPassword = null;
   issuedAccessUsername = null;
   showLogin();
-  setStatus("Signed out", "ok");
+  setStatus("Uitgelogd", "ok");
   lastProjectId = null;
   currentProjectStatus = null;
 });
@@ -700,7 +735,7 @@ tabRegisterBtn.addEventListener("click", () => setAuthTab("register"));
 registerForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   registerBtn.disabled = true;
-  setStatus("Requesting access\u2026", "busy");
+  setStatus("Toegang aanvragen\u2026", "busy");
   registerResultEl.classList.add("hidden");
   try {
     const fd = new FormData(registerForm);
@@ -715,10 +750,10 @@ registerForm.addEventListener("submit", async (ev) => {
     const parsed = JSON.parse(ret);
     issuedAccessUsername = parsed.username;
     issuedAccessPassword = parsed.access_password;
-    registerMessageEl.textContent = parsed.message || "Access request submitted.";
+    registerMessageEl.textContent = parsed.message || "Toegangsaanvraag ingediend.";
     accessPasswordCodeEl.textContent = parsed.access_password;
     registerResultEl.classList.remove("hidden");
-    setStatus("Access requested", "ok");
+    setStatus("Toegang aangevraagd", "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   } finally {
@@ -731,12 +766,22 @@ gotoSigninBtn.addEventListener("click", () => {
   const pEl = loginForm.elements.namedItem("password");
   if (uEl && issuedAccessUsername) uEl.value = issuedAccessUsername;
   if (pEl && issuedAccessPassword) pEl.value = issuedAccessPassword;
-  setStatus("Sign in with your issued password", "ok");
+  setStatus("Log in met het verstrekte wachtwoord", "ok");
 });
 profileBtn.addEventListener("click", () => {
+  methodPanelEl.classList.add("hidden");
   profilePanelEl.classList.remove("hidden");
   profilePwWarningEl.classList.toggle("hidden", !auth?.must_change_password);
   void loadCustomerProfile();
+});
+methodBtn.addEventListener("click", () => {
+  if (auth?.must_change_password) return;
+  profilePanelEl.classList.add("hidden");
+  methodPanelEl.classList.remove("hidden");
+  methodPanelEl.querySelector(".method-scroll")?.focus();
+});
+methodCloseBtn.addEventListener("click", () => {
+  methodPanelEl.classList.add("hidden");
 });
 profileCloseBtn.addEventListener("click", () => {
   if (auth?.must_change_password) return;
@@ -750,11 +795,11 @@ customerProfileForm.addEventListener("submit", async (ev) => {
   }
   const c = readCustomerProfile();
   if (!c.name) {
-    setStatus("Customer name is required", "err");
+    setStatus("Klantnaam is verplicht", "err");
     return;
   }
   saveProfileBtn.disabled = true;
-  setStatus("Saving customer profile\u2026", "busy");
+  setStatus("Klantprofiel opslaan\u2026", "busy");
   try {
     const ret = await invokeString("API_SaveCustomerProfile", [
       auth.token,
@@ -772,7 +817,7 @@ customerProfileForm.addEventListener("submit", async (ev) => {
       setStatus(ret, "err");
       return;
     }
-    setStatus("Customer profile saved", "ok");
+    setStatus("Klantprofiel opgeslagen", "ok");
     if (!auth.must_change_password) profilePanelEl.classList.add("hidden");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
@@ -791,11 +836,11 @@ passwordForm.addEventListener("submit", async (ev) => {
   const newPassword = String(fd.get("new_password") ?? "");
   const confirmPassword = String(fd.get("confirm_password") ?? "");
   if (newPassword !== confirmPassword) {
-    setStatus("New passwords do not match", "err");
+    setStatus("Nieuwe wachtwoorden komen niet overeen", "err");
     return;
   }
   changePwBtn.disabled = true;
-  setStatus("Updating password\u2026", "busy");
+  setStatus("Wachtwoord bijwerken\u2026", "busy");
   try {
     const ret = await invokeString("API_ChangePassword", [auth.token, currentPassword, newPassword]);
     if (ret.startsWith("ERROR")) {
@@ -805,7 +850,7 @@ passwordForm.addEventListener("submit", async (ev) => {
     auth = { ...auth, must_change_password: false };
     storeAuth2(auth);
     profilePwWarningEl.classList.add("hidden");
-    setStatus("Password updated", "ok");
+    setStatus("Wachtwoord bijgewerkt", "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   } finally {
@@ -820,12 +865,12 @@ projectForm.addEventListener("submit", async (ev) => {
   }
   const c = readCustomerProfile();
   if (!c.name) {
-    setStatus("Set your customer name under Profile before saving a project", "err");
+    setStatus("Stel onder Profiel eerst uw klantnaam in voordat u een project opslaat", "err");
     profilePanelEl.classList.remove("hidden");
     return;
   }
   saveBtn.disabled = true;
-  setStatus("Saving project\u2026", "busy");
+  setStatus("Project opslaan\u2026", "busy");
   try {
     const p = readProjectForm();
     const projectId = projectIdInput.value.trim();
@@ -864,7 +909,7 @@ projectForm.addEventListener("submit", async (ev) => {
       external_ref: p.external_ref,
       dwell_street: p.dwell_street
     });
-    setStatus(projectId ? "Project updated" : "Project created", "ok");
+    setStatus(projectId ? "Project bijgewerkt" : "Project aangemaakt", "ok");
     setProjectEditingState("INITIAL_REQUEST");
     await refreshProjectList();
     highlightSelectedProject(lastProjectId);
@@ -877,7 +922,7 @@ projectForm.addEventListener("submit", async (ev) => {
 reloadBtn.addEventListener("click", async () => {
   if (!lastProjectId || !auth?.token) return;
   reloadBtn.disabled = true;
-  setStatus("Reloading\u2026", "busy");
+  setStatus("Herladen\u2026", "busy");
   try {
     const ret = await invokeString("API_OpenBuilding", [auth.token, lastProjectId]);
     if (ret.startsWith("ERROR")) {
@@ -885,7 +930,7 @@ reloadBtn.addEventListener("click", async () => {
       return;
     }
     fillProjectFromOpen(JSON.parse(ret));
-    setStatus("Project reloaded", "ok");
+    setStatus("Project herladen", "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   } finally {
@@ -895,13 +940,13 @@ reloadBtn.addEventListener("click", async () => {
 newProjectBtn.addEventListener("click", () => {
   clearProjectFields();
   projectDetailPanel.classList.remove("hidden");
-  setStatus("New project \u2014 set customer details under Profile if needed", "ok");
+  setStatus("Nieuw project \u2014 stel zo nodig klantgegevens in onder Profiel", "ok");
 });
 deleteProjectBtn.addEventListener("click", async () => {
   if (!lastProjectId || !auth?.token || currentProjectStatus !== "INITIAL_REQUEST") return;
-  if (!window.confirm("Delete this project? This cannot be undone.")) return;
+  if (!window.confirm("Dit project verwijderen? Dit kan niet ongedaan worden gemaakt.")) return;
   deleteProjectBtn.disabled = true;
-  setStatus("Deleting project\u2026", "busy");
+  setStatus("Project verwijderen\u2026", "busy");
   try {
     const ret = await invokeString("API_DeleteProject", [auth.token, lastProjectId]);
     if (ret.startsWith("ERROR")) {
@@ -911,7 +956,7 @@ deleteProjectBtn.addEventListener("click", async () => {
     projectDetailPanel.classList.add("hidden");
     clearProjectFields();
     await refreshProjectList();
-    setStatus("Project deleted", "ok");
+    setStatus("Project verwijderd", "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   } finally {
@@ -923,7 +968,7 @@ refreshListBtn.addEventListener("click", async () => {
   try {
     await refreshProjectList();
     if (lastProjectId) await refreshProjectDocuments();
-    setStatus("Project list refreshed", "ok");
+    setStatus("Projectlijst vernieuwd", "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   } finally {
@@ -935,18 +980,21 @@ drawingFileInput.addEventListener("change", async () => {
   const projectId = activeProjectId();
   if (!files?.length || !auth?.token || !projectId) return;
   if (currentProjectStatus && currentProjectStatus !== "INITIAL_REQUEST") {
-    setStatus("Drawings can only be uploaded while project status is Initial request", "err");
+    setStatus("Tekeningen kunnen alleen worden ge\xFCpload zolang het project nog niet is ingediend", "err");
     drawingFileInput.value = "";
     return;
   }
   drawingFileInput.disabled = true;
-  setStatus("Uploading drawings\u2026", "busy");
+  setStatus("Tekeningen uploaden\u2026", "busy");
   try {
     for (const file of [...files]) {
       await uploadDrawingFile(file);
     }
     await refreshProjectDocuments();
-    setStatus(`Uploaded ${files.length} drawing${files.length === 1 ? "" : "s"}`, "ok");
+    setStatus(
+      files.length === 1 ? "1 tekening ge\xFCpload" : `${files.length} tekeningen ge\xFCpload`,
+      "ok"
+    );
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   } finally {
@@ -960,10 +1008,11 @@ submitDrawingsBtn.addEventListener("click", () => {
 downloadReportBtn.addEventListener("click", () => {
   if (currentProjectStatus !== "PROJECT_FINISHED") return;
   setStatus(
-    "Report download will be available once concept v1.0 storage is connected. Status already shows the report as ready.",
+    "Download van het rapport volgt zodra concept v1.0-opslag is aangesloten. De status toont al dat het rapport gereed is.",
     "ok"
   );
 });
 bootstrapSession().catch((err) => {
   setStatus(err instanceof Error ? err.message : String(err), "err");
 });
+initPasswordToggles();

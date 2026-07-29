@@ -3,15 +3,20 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Acoustics Engineer — Drawing review</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <title>Geluidwering Gevels — Engineer review</title>
+  <link rel="stylesheet" href="/styles.css?v=pw-eye" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body class="engineer-body">
   <main class="page page-engineer">
     <header class="header header-compact">
-      <p class="eyebrow">Acoustics calculation service</p>
-      <h1>Engineer drawing review</h1>
+      <div class="brand">
+        <img class="brand-logo" src="/assets/stilte-logo.jpg" alt="" width="52" height="52" />
+        <div class="brand-copy">
+          <p class="brand-name">Geluidwering Gevels</p>
+          <h1 class="page-heading">Engineer drawing review</h1>
+        </div>
+      </div>
     </header>
 
     <section class="panel conn-bar" id="engineer-conn-bar" aria-live="polite">
@@ -37,7 +42,7 @@
         <span id="engineer-user-label"></span>
         <button type="button" id="engineer-logout-btn" class="secondary">Sign out</button>
         <button type="button" id="engineer-refresh-btn" class="secondary">Refresh queue</button>
-        <a id="engineer-ga-link" class="secondary-link hidden" href="/ga.html">GA-model</a>
+        <a id="engineer-ga-link" class="secondary-link hidden" href="/ga.html">Berekening gevelwering</a>
       </div>
 
       <section class="panel engineer-queue-panel">
@@ -80,39 +85,44 @@
                 <button type="button" id="engineer-scale-apply-btn">Apply</button>
                 <button type="button" id="engineer-scale-repick-btn" class="secondary">Repick points</button>
               </div>
-              <p class="hint" id="engineer-scale-hint">Click Set scale when you are ready to calibrate a floormap, facade, or section.</p>
+              <p class="hint" id="engineer-scale-hint">Klik Schaal instellen om een plattegrond, gevel of doorsnede te kalibreren.</p>
             </section>
 
-            <section class="tools-panel panel-inset" id="engineer-tools-bar">
-              <div class="tools-panel-head">
+            <details class="tools-panel panel-inset" id="engineer-tools-bar" open>
+              <summary class="tools-panel-toggle">
                 <strong>Tools</strong>
-                <div class="tools-mode-btns" role="group" aria-label="Measure tools">
-                  <button type="button" id="tool-btn-off" class="secondary tool-mode-btn active" data-tool="off">Off</button>
-                  <button type="button" id="tool-btn-length" class="secondary tool-mode-btn" data-tool="length">1. Length (m)</button>
-                  <button type="button" id="tool-btn-polyline" class="secondary tool-mode-btn" data-tool="polyline">2. Circumference (m)</button>
-                  <button type="button" id="tool-btn-polyline-area" class="secondary tool-mode-btn" data-tool="polyline">3. Area (m²)</button>
+                <span class="tools-panel-chevron" aria-hidden="true"></span>
+              </summary>
+              <div class="tools-panel-main" id="engineer-tools-main">
+                <div class="tools-panel-head">
+                  <div class="tools-mode-btns" role="group" aria-label="Measure tools">
+                    <button type="button" id="tool-btn-off" class="secondary tool-mode-btn active" data-tool="off">Off</button>
+                    <button type="button" id="tool-btn-length" class="secondary tool-mode-btn" data-tool="length">1. Length (m)</button>
+                    <button type="button" id="tool-btn-polyline" class="secondary tool-mode-btn" data-tool="polyline">2. Circumference (m)</button>
+                    <button type="button" id="tool-btn-polyline-area" class="secondary tool-mode-btn" data-tool="polyline">3. Area (m²)</button>
+                  </div>
+                  <button type="button" id="engineer-tool-clear-btn" class="secondary">Clear measure</button>
                 </div>
-                <button type="button" id="engineer-tool-clear-btn" class="secondary">Clear measure</button>
+                <!-- Hidden selects kept for sync / programmatic control -->
+                <select id="engineer-tool-select" class="hidden" aria-hidden="true">
+                  <option value="off">Off</option>
+                  <option value="length">Length</option>
+                  <option value="polyline">Polyline</option>
+                </select>
+                <div class="tools-readouts">
+                  <label class="discovery-inline">Length (m)
+                    <input id="tool-length-mm" type="text" readonly value="—" />
+                  </label>
+                  <label class="discovery-inline">Circumference (m)
+                    <input id="tool-circ-mm" type="text" readonly value="—" />
+                  </label>
+                  <label class="discovery-inline">Area (m²)
+                    <input id="tool-area-mm2" type="text" readonly value="—" />
+                  </label>
+                </div>
+                <p class="hint" id="engineer-tool-hint">Select a scaled section, then click a tool button above.</p>
               </div>
-              <!-- Hidden selects kept for sync / programmatic control -->
-              <select id="engineer-tool-select" class="hidden" aria-hidden="true">
-                <option value="off">Off</option>
-                <option value="length">Length</option>
-                <option value="polyline">Polyline</option>
-              </select>
-              <div class="tools-readouts">
-                <label class="discovery-inline">Length (m)
-                  <input id="tool-length-mm" type="text" readonly value="—" />
-                </label>
-                <label class="discovery-inline">Circumference (m)
-                  <input id="tool-circ-mm" type="text" readonly value="—" />
-                </label>
-                <label class="discovery-inline">Area (m²)
-                  <input id="tool-area-mm2" type="text" readonly value="—" />
-                </label>
-              </div>
-              <p class="hint" id="engineer-tool-hint">Select a scaled section, then click a tool button above.</p>
-            </section>
+            </details>
 
             <!-- Stays fixed under toolbar; only the PDF pane scrolls -->
             <section class="discovery-dock hidden" id="discovery-review-panel">
@@ -124,7 +134,7 @@
                 <label class="discovery-inline">Label <input id="discovery-label-input" /></label>
                 <label class="discovery-inline">Type
                   <select id="discovery-kind-select">
-                    <option value="FACADE">Façade</option>
+                    <option value="FACADE">Gevel</option>
                     <option value="CROSS_SECTION">Cross-section</option>
                     <option value="FLOORMAP">Floormap</option>
                     <option value="SECTION">Building section</option>
@@ -197,10 +207,10 @@
 
             <fieldset id="mark-section-fieldset">
               <legend>Mark a section</legend>
-              <label>Label <input id="region-label-input" placeholder="e.g. North façade" /></label>
+              <label>Label <input id="region-label-input" placeholder="bijv. Noordgevel" /></label>
               <label>Type
                 <select id="region-kind-select">
-                  <option value="FACADE">Façade</option>
+                  <option value="FACADE">Gevel</option>
                   <option value="CROSS_SECTION">Cross-section</option>
                   <option value="FLOORMAP">Floormap</option>
                   <option value="SECTION">Building section</option>
@@ -224,7 +234,7 @@
                 <select id="region-filter-kind">
                   <option value="">All types</option>
                   <option value="FLOORMAP">Floormaps</option>
-                  <option value="FACADE">Façades</option>
+                  <option value="FACADE">Gevels</option>
                   <option value="CROSS_SECTION">Cross-sections</option>
                   <option value="SECTION">Building sections</option>
                   <option value="OTHER">Other</option>
@@ -252,6 +262,6 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/engineer.js?v=analyze-panel"></script>
+  <script type="module" src="/engineer.js?v=pw-eye"></script>
 </body>
 </html>

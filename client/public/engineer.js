@@ -55,9 +55,83 @@ function resolveBppWsUrl() {
   return q || override || `ws://${location.hostname}:18080/ws`;
 }
 
+// src/password-toggle.ts
+var EYE_CLOSED = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75C21.27 9.11 17 5 12 5c-1.4 0-2.73.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78 3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/></svg>`;
+var EYE_OPEN = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 5c-5 0-9.27 3.11-11 7.5C2.73 16.89 7 20 12 20s9.27-3.11 11-7.5C21.27 8.11 17 5 12 5zm0 12.5c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>`;
+function enhancePasswordInput(input) {
+  if (input.dataset.pwToggle === "1") return;
+  if (input.closest(".pw-field")) return;
+  input.dataset.pwToggle = "1";
+  const wrap = document.createElement("div");
+  wrap.className = "pw-field";
+  input.parentNode?.insertBefore(wrap, input);
+  wrap.appendChild(input);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "pw-toggle";
+  btn.setAttribute("aria-label", "Wachtwoord tonen");
+  btn.setAttribute("aria-pressed", "false");
+  btn.innerHTML = EYE_CLOSED;
+  wrap.appendChild(btn);
+  btn.addEventListener("click", () => {
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    btn.innerHTML = show ? EYE_OPEN : EYE_CLOSED;
+    btn.setAttribute("aria-pressed", show ? "true" : "false");
+    btn.setAttribute("aria-label", show ? "Wachtwoord verbergen" : "Wachtwoord tonen");
+  });
+}
+function initPasswordToggles(root = document) {
+  root.querySelectorAll('input[type="password"]').forEach(enhancePasswordInput);
+}
+
+// src/geom.ts
+function shoelaceArea(points) {
+  if (points.length < 3) return 0;
+  let sum = 0;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    sum += a.x * b.y - b.x * a.y;
+  }
+  return Math.abs(sum) / 2;
+}
+function normalizeAspectYx(aspectYx) {
+  if (aspectYx == null || !Number.isFinite(aspectYx) || aspectYx <= 0) return 1;
+  return aspectYx;
+}
+function scaleAxes(metresPerNorm, aspectYx) {
+  const a = normalizeAspectYx(aspectYx);
+  return { mx: metresPerNorm, my: metresPerNorm * a };
+}
+function scaledSegmentLength(dx, dy, metresPerNorm, aspectYx) {
+  const { mx, my } = scaleAxes(metresPerNorm, aspectYx);
+  return Math.hypot(dx * mx, dy * my);
+}
+function scaledPathLength(points, metresPerNorm, aspectYx, closed = false) {
+  if (points.length < 2) return 0;
+  let sum = 0;
+  const n = closed ? points.length : points.length - 1;
+  for (let i = 0; i < n; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    sum += scaledSegmentLength(b.x - a.x, b.y - a.y, metresPerNorm, aspectYx);
+  }
+  return sum;
+}
+function scaledAreaM2(areaNorm, metresPerNorm, aspectYx) {
+  const { mx, my } = scaleAxes(metresPerNorm, aspectYx);
+  return areaNorm * mx * my;
+}
+function metresPerNormFromCalibration(lengthMetres, a, b, aspectYx) {
+  const dist = Math.hypot(b.x - a.x, (b.y - a.y) * normalizeAspectYx(aspectYx));
+  if (!(dist > 1e-12) || !(lengthMetres > 0)) return NaN;
+  return lengthMetres / dist;
+}
+
 // src/engineer.ts
 var BPP_WS = resolveBppWsUrl();
-var AUTH_KEY = "acoustics_engineer_auth";
+var AUTH_KEY = "app_gevelwering_engineer_auth";
 var connBarEl = document.getElementById("engineer-conn-bar");
 var connLedEl = document.getElementById("engineer-conn-led");
 var connStatusEl = document.getElementById("engineer-conn-status");
@@ -267,7 +341,7 @@ function statusLabel(status) {
 async function loadSharedApi() {
   await send(
     "exec.request",
-    { code: 'INCLUDE "fixtures/acoustics/shared_building_api.basicpp"\n' },
+    { code: 'INCLUDE "fixtures/app-gevelwering/shared_building_api.basicpp"\n' },
     "exec.completed"
   );
   const bootRet = await invokeString("API_Bootstrap", []);
@@ -362,6 +436,7 @@ async function openProject(buildingId) {
 function normalizeRegion(raw) {
   const scaleRatio = raw.scale_ratio != null ? Number(raw.scale_ratio) : NaN;
   const mpu = raw.metres_per_norm_unit != null ? Number(raw.metres_per_norm_unit) : NaN;
+  const aspect = raw.scale_aspect_yx != null ? Number(raw.scale_aspect_yx) : NaN;
   return {
     id: String(raw.id || raw.region_id || ""),
     document_id: String(raw.document_id || ""),
@@ -374,6 +449,7 @@ function normalizeRegion(raw) {
     y_max: Number(raw.y_max),
     scale_ratio: Number.isFinite(scaleRatio) ? scaleRatio : null,
     metres_per_norm_unit: Number.isFinite(mpu) ? mpu : null,
+    scale_aspect_yx: Number.isFinite(aspect) && aspect > 0 ? aspect : null,
     scale_source: raw.scale_source != null ? String(raw.scale_source) : null
   };
 }
@@ -421,14 +497,14 @@ function updateScaleUi() {
   if (scaleMmWrap) scaleMmWrap.classList.toggle("hidden", !awaitingMm);
   if (!sel) {
     scaleStatusEl.textContent = "Select a section, then Set scale";
-    scaleHintEl.textContent = "Click a floormap, facade, or section, then Set scale.";
+    scaleHintEl.textContent = "Klik een plattegrond, gevel of doorsnede, daarna Schaal instellen.";
     scaleBtn.disabled = true;
     scaleBtn.textContent = "Set scale";
     return;
   }
   if (!regionSupportsScale(sel.region_kind)) {
     scaleStatusEl.textContent = `${sel.label} cannot be scaled`;
-    scaleHintEl.textContent = "Scale applies to floormap, facade, section, and cross-section.";
+    scaleHintEl.textContent = "Schaal geldt voor plattegrond, gevel, doorsnede en dwarsdoorsnede.";
     scaleBtn.disabled = true;
     scaleBtn.textContent = "Set scale";
     return;
@@ -488,7 +564,7 @@ function updateAnalyzePanel() {
 function openAnalysisWorkspace() {
   const sel = selectedRegion();
   if (!sel || !regionSupportsScale(sel.region_kind)) {
-    setStatus("Select a floormap, fa\xE7ade, or section first", "err");
+    setStatus("Selecteer eerst een plattegrond, gevel of doorsnede", "err");
     return;
   }
   const url = analysisWorkspaceUrl(sel.id);
@@ -508,7 +584,7 @@ function endScalePick(msg) {
 function startScalePick() {
   const sel = selectedRegion();
   if (!sel || !regionSupportsScale(sel.region_kind)) {
-    setStatus("Select a floormap, facade, or section first", "err");
+    setStatus("Selecteer eerst een plattegrond, gevel of doorsnede", "err");
     return;
   }
   if (discoveryCandidates.length > 0) {
@@ -556,31 +632,27 @@ function activeScaleMpu() {
   if (mpu == null || !(mpu > 0)) return null;
   return mpu;
 }
+function sectionScaleAspect(sec) {
+  const wNorm = Math.max(1e-9, sec.x_max - sec.x_min);
+  const hNorm = Math.max(1e-9, sec.y_max - sec.y_min);
+  if (canvasWidth > 0 && canvasHeight > 0) {
+    return hNorm * canvasHeight / (wNorm * canvasWidth);
+  }
+  return normalizeAspectYx(sec.scale_aspect_yx);
+}
 function fmtMeasure(n, digits = 1) {
   if (n == null || !Number.isFinite(n)) return "\u2014";
   return n.toFixed(digits);
 }
 function pathLengthM(pts, sec, mpu, closed) {
   if (pts.length < 2) return 0;
-  let sum = 0;
-  const n = closed ? pts.length : pts.length - 1;
-  for (let i = 0; i < n; i++) {
-    const a = canvasPtToSectionLocal(pts[i], sec);
-    const b = canvasPtToSectionLocal(pts[(i + 1) % pts.length], sec);
-    sum += Math.hypot(b.x - a.x, b.y - a.y) * mpu;
-  }
-  return sum;
+  const local = pts.map((p) => canvasPtToSectionLocal(p, sec));
+  return Math.round(scaledPathLength(local, mpu, sectionScaleAspect(sec), closed) * 100) / 100;
 }
 function pathAreaM2(pts, sec, mpu) {
   if (pts.length < 3) return 0;
-  let sum = 0;
-  for (let i = 0; i < pts.length; i++) {
-    const a = canvasPtToSectionLocal(pts[i], sec);
-    const b = canvasPtToSectionLocal(pts[(i + 1) % pts.length], sec);
-    sum += a.x * b.y - b.x * a.y;
-  }
-  const areaNorm = Math.abs(sum) / 2;
-  return areaNorm * mpu * mpu;
+  const local = pts.map((p) => canvasPtToSectionLocal(p, sec));
+  return Math.round(scaledAreaM2(shoelaceArea(local), mpu, sectionScaleAspect(sec)) * 100) / 100;
 }
 function measureDisplayPoints() {
   const pts = measure.points.slice();
@@ -626,7 +698,7 @@ function updateMeasureReadouts() {
 function updateToolHint() {
   const mpu = activeScaleMpu();
   if (!mpu) {
-    toolHintEl.textContent = "Select a scaled section (floormap, facade, \u2026), then choose a measure tool.";
+    toolHintEl.textContent = "Selecteer een geschaalde sectie (plattegrond, gevel, \u2026), kies daarna een meettool.";
     return;
   }
   if (measure.tool === "length") {
@@ -724,7 +796,7 @@ function drawMeasureOverlay(ctx) {
     ctx.fill();
   }
 }
-async function saveSectionScale(sectionId, mpu) {
+async function saveSectionScale(sectionId, mpu, aspectYx) {
   if (!auth?.token) throw new Error("Not logged in");
   let httpErr = "";
   try {
@@ -736,7 +808,8 @@ async function saveSectionScale(sectionId, mpu) {
         section_id: sectionId,
         metres_per_norm_unit: mpu,
         scale_ratio: null,
-        scale_source: "CALIBRATED"
+        scale_source: "CALIBRATED",
+        scale_aspect_yx: aspectYx
       })
     });
     let body = {};
@@ -757,7 +830,7 @@ async function saveSectionScale(sectionId, mpu) {
   }
   await send(
     "exec.request",
-    { code: 'INCLUDE "fixtures/acoustics/shared_building_api.basicpp"\n' },
+    { code: 'INCLUDE "fixtures/app-gevelwering/shared_building_api.basicpp"\n' },
     "exec.completed"
   );
   const ret = await invokeString("API_SaveFloormapScale", [
@@ -765,7 +838,8 @@ async function saveSectionScale(sectionId, mpu) {
     sectionId,
     String(mpu),
     "NULL",
-    "CALIBRATED"
+    "CALIBRATED",
+    String(aspectYx)
   ]);
   if (ret.startsWith("ERROR")) {
     throw new Error(httpErr ? `${ret} (HTTP: ${httpErr})` : ret);
@@ -804,20 +878,21 @@ async function finishScalePick() {
   };
   const a = pageNormToSectionLocal(aPage.x, aPage.y, sel);
   const b = pageNormToSectionLocal(bPage.x, bPage.y, sel);
-  const normDist = Math.hypot(b.x - a.x, b.y - a.y);
-  if (normDist < 1e-6) {
+  const aspect = sectionScaleAspect(sel);
+  const metres = mm / 1e3;
+  const mpu = metresPerNormFromCalibration(metres, a, b, aspect);
+  if (!(mpu > 0) || !Number.isFinite(mpu)) {
     setStatus("Scale points too close \u2014 pick again", "err");
     scalePick = { points: [] };
     updateScaleUi();
     drawRegionsOverlay();
     return;
   }
-  const metres = mm / 1e3;
-  const mpu = metres / normDist;
   setStatus("Saving scale\u2026", "busy");
   try {
-    await saveSectionScale(sel.id, mpu);
+    await saveSectionScale(sel.id, mpu, aspect);
     sel.metres_per_norm_unit = mpu;
+    sel.scale_aspect_yx = aspect;
     sel.scale_source = "CALIBRATED";
     sel.scale_ratio = null;
     endScalePick(`Scale saved: marked line = ${mm} mm`);
@@ -840,7 +915,7 @@ async function finishScalePick() {
 function regionKindLabel(kind) {
   switch (kind) {
     case "FACADE":
-      return "Fa\xE7ade";
+      return "Gevel";
     case "SECTION":
       return "Building section";
     case "FLOORMAP":
@@ -1033,7 +1108,8 @@ async function loadActiveDocument() {
 async function renderPdfPage() {
   if (!pdfDoc) return;
   const page = await pdfDoc.getPage(pdfPageNum);
-  const viewport = page.getViewport({ scale: pdfZoom });
+  const rotation = typeof page.rotate === "number" ? page.rotate : 0;
+  const viewport = page.getViewport({ scale: pdfZoom, rotation });
   canvasWidth = Math.floor(viewport.width);
   canvasHeight = Math.floor(viewport.height);
   pdfCanvas.width = canvasWidth;
@@ -1042,6 +1118,8 @@ async function renderPdfPage() {
   overlayCanvas.height = canvasHeight;
   const ctx = pdfCanvas.getContext("2d");
   if (!ctx) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
   await page.render({ canvasContext: ctx, viewport }).promise;
   pageLabelEl.textContent = `Page ${pdfPageNum} / ${pdfTotalPages}`;
   setPageDisplay(pdfPageNum);
@@ -1259,19 +1337,21 @@ function discoverRectangularFrames(source) {
   const w = source.width;
   const h = source.height;
   if (w < 40 || h < 40) return [];
-  const ctx = source.getContext("2d", { willReadFrequently: true });
-  if (!ctx) return [];
-  const img = ctx.getImageData(0, 0, w, h);
-  const px = img.data;
   const scale = Math.min(1, 320 / Math.max(w, h));
   const sw = Math.max(32, Math.floor(w * scale));
   const sh = Math.max(32, Math.floor(h * scale));
+  const off = document.createElement("canvas");
+  off.width = sw;
+  off.height = sh;
+  const octx = off.getContext("2d", { willReadFrequently: true });
+  if (!octx) return [];
+  octx.drawImage(source, 0, 0, sw, sh);
+  const img = octx.getImageData(0, 0, sw, sh);
+  const px = img.data;
   const dark = new Uint8Array(sw * sh);
   for (let y = 0; y < sh; y++) {
     for (let x = 0; x < sw; x++) {
-      const sx = Math.min(w - 1, Math.floor(x / scale));
-      const sy = Math.min(h - 1, Math.floor(y / scale));
-      const i = (sy * w + sx) * 4;
+      const i = (y * sw + x) * 4;
       const lum = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
       dark[y * sw + x] = lum < 145 ? 1 : 0;
     }
@@ -1392,6 +1472,7 @@ async function discoverSections() {
   regionDiscoverBtn.disabled = true;
   try {
     const found = discoverRectangularFrames(pdfCanvas);
+    await renderPdfPage();
     if (found.length === 0) {
       setStatus("No rectangular sections found on this page", "err");
       return;
@@ -1821,6 +1902,15 @@ toolClearSidebarBtn?.addEventListener("click", () => {
   clearMeasure(true);
   setStatus("Measure cleared", "ok");
 });
+(() => {
+  const panel = document.getElementById("engineer-tools-bar");
+  if (!panel) return;
+  const key = "app-gevelwering-tools-collapsed";
+  panel.open = localStorage.getItem(key) !== "1";
+  panel.addEventListener("toggle", () => {
+    localStorage.setItem(key, panel.open ? "0" : "1");
+  });
+})();
 window.addEventListener("keydown", (evt) => {
   if (evt.key === "Escape" && measure.tool !== "off") {
     clearMeasure(true);
@@ -1986,4 +2076,5 @@ reviewForm.addEventListener("submit", (evt) => {
   void submitReview(evt);
 });
 updateZoomLabel();
+initPasswordToggles();
 connect();
