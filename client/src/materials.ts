@@ -54,6 +54,93 @@ type Material = {
 const BPP_WS = resolveBppWsUrl();
 const AUTH_KEY = "app_gevelwering_admin_auth";
 
+const bootParams = new URLSearchParams(location.search);
+const deepMaterialId = (bootParams.get("material_id") || bootParams.get("id") || "").trim();
+const deepQ = (bootParams.get("q") || "").trim();
+const returnHref = safeSameOriginPath(bootParams.get("return"));
+const returnLabel = (bootParams.get("return_label") || "Terug naar toekennen vlak (gevel)").trim();
+const returnLinkEl = document.getElementById("mat-return-link") as HTMLAnchorElement | null;
+const pickBarEl = document.getElementById("mat-pick-bar") as HTMLElement | null;
+const pickBtnEl = document.getElementById("mat-pick-btn") as HTMLButtonElement | null;
+const pickBtnEditorEl = document.getElementById("mat-pick-btn-editor") as HTMLButtonElement | null;
+const pickHintEl = document.getElementById("mat-pick-hint") as HTMLElement | null;
+const PICK_STORAGE_KEY = "app-gevelwering-material-pick";
+
+function safeSameOriginPath(raw: string | null): string | null {
+  if (!raw) return null;
+  try {
+    const u = new URL(raw, location.origin);
+    if (u.origin !== location.origin) return null;
+    if (!u.pathname.startsWith("/")) return null;
+    return `${u.pathname}${u.search}${u.hash}`;
+  } catch {
+    return null;
+  }
+}
+
+function setupReturnNav(): void {
+  if (!returnLinkEl) return;
+  if (!returnHref) {
+    returnLinkEl.classList.add("hidden");
+    return;
+  }
+  returnLinkEl.href = returnHref;
+  returnLinkEl.textContent = `← ${returnLabel}`;
+  returnLinkEl.classList.remove("hidden");
+}
+
+function syncPickUi(): void {
+  const canPick = Boolean(returnHref && selectedId);
+  if (pickBarEl) pickBarEl.classList.toggle("hidden", !returnHref);
+  if (pickBtnEl) pickBtnEl.disabled = !canPick;
+  if (pickBtnEditorEl) {
+    pickBtnEditorEl.classList.toggle("hidden", !returnHref);
+    pickBtnEditorEl.disabled = !canPick;
+  }
+  if (pickHintEl && returnHref) {
+    pickHintEl.textContent = canPick
+      ? "Geselecteerd materiaal wordt in het componentformulier gezet (ook als dat nog niet is opgeslagen)."
+      : "Zoek en selecteer een materiaal, daarna overnemen om terug te gaan naar het component.";
+  }
+}
+
+function pickMaterialForCaller(): void {
+  if (!returnHref || !selectedId) return;
+  const row =
+    listRows.find((m) => m.material_id === selectedId) ||
+    ({
+      material_id: selectedId,
+      catalog_id: catalogIdEl.value.trim(),
+      master_category: masterEl.value.trim(),
+      category: catEl.value.trim(),
+      name: nameEl.value.trim(),
+    } as Partial<Material>);
+  const payload: Record<string, unknown> = {
+    material_id: String(row.material_id || selectedId).trim(),
+    catalog_id: String(row.catalog_id || "").trim(),
+    master_category: String(row.master_category || "").trim(),
+    category: String(row.category || "").trim(),
+    name: String(row.name || "").trim(),
+  };
+  if (!payload.material_id || !payload.master_category) {
+    setStatus("Selecteer een materiaal met rubriek om over te nemen", "err");
+    return;
+  }
+  // Keep unsaved component geometry with the pick (same tab / storage).
+  try {
+    const draftRaw = sessionStorage.getItem("app-gevelwering-fm-component-draft");
+    if (draftRaw) payload.draft = JSON.parse(draftRaw);
+  } catch {
+    /* ignore */
+  }
+  try {
+    sessionStorage.setItem(PICK_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    /* ignore quota */
+  }
+  location.assign(returnHref);
+}
+
 const connBarEl = document.getElementById("mat-conn-bar") as HTMLElement;
 const connLedEl = document.getElementById("mat-conn-led") as HTMLElement;
 const connStatusEl = document.getElementById("mat-conn-status") as HTMLElement;
@@ -67,6 +154,7 @@ const filterForm = document.getElementById("mat-filter-form") as HTMLFormElement
 const qEl = document.getElementById("mat-q") as HTMLInputElement;
 const categoryEl = document.getElementById("mat-category") as HTMLSelectElement;
 const subcategoryFilterEl = document.getElementById("mat-subcategory") as HTMLSelectElement;
+const sourceFilterEl = document.getElementById("mat-source-filter") as HTMLSelectElement;
 const pagerLabelEl = document.getElementById("mat-pager-label") as HTMLElement;
 const prevBtn = document.getElementById("mat-prev-btn") as HTMLButtonElement;
 const nextBtn = document.getElementById("mat-next-btn") as HTMLButtonElement;
@@ -82,7 +170,7 @@ const masterEl = document.getElementById("mat-master") as HTMLSelectElement;
 const nameEl = document.getElementById("mat-name") as HTMLInputElement;
 const catEl = document.getElementById("mat-cat") as HTMLSelectElement;
 const sourceRefEl = document.getElementById("mat-source-ref") as HTMLInputElement;
-const sourceEl = document.getElementById("mat-source") as HTMLInputElement;
+const sourceEl = document.getElementById("mat-source") as HTMLSelectElement | HTMLInputElement;
 const spectrumOkEl = document.getElementById("mat-spectrum-ok") as HTMLInputElement;
 const thickEl = document.getElementById("mat-thick") as HTMLInputElement;
 const weightEl = document.getElementById("mat-weight") as HTMLInputElement;
@@ -293,6 +381,34 @@ function listCategoryFilter(): string {
   return sub ? `${master}::${sub}` : master;
 }
 
+function ensureSourceOption(value: string): void {
+  const v = (value || "eigen").trim() || "eigen";
+  if (sourceEl instanceof HTMLSelectElement) {
+    if (![...sourceEl.options].some((o) => o.value === v)) {
+      const opt = document.createElement("option");
+      opt.value = v;
+      opt.textContent = v;
+      sourceEl.appendChild(opt);
+    }
+    sourceEl.value = v;
+  } else {
+    sourceEl.value = v;
+  }
+}
+
+/** Custom catalog ids (P…/E…, not DGMR D…) must use source=eigen so ./start.sh seed keeps them. */
+function resolveSaveSource(): string {
+  const cid = catalogIdEl.value.trim().toUpperCase();
+  const isNew = !idEl.value.trim();
+  let src = (sourceEl.value || "").trim() || "eigen";
+  if (isNew) src = "eigen";
+  if ((src === "catalogusGG.pdf" || src === "GL.cat") && cid && !cid.startsWith("D")) {
+    src = "eigen";
+  }
+  ensureSourceOption(src);
+  return src;
+}
+
 function clearEditor(): void {
   selectedId = null;
   highlightSelection();
@@ -304,7 +420,7 @@ function clearEditor(): void {
   nameEl.value = "";
   catEl.value = "";
   sourceRefEl.value = "";
-  sourceEl.value = "catalogusGG.pdf";
+  ensureSourceOption("eigen");
   spectrumOkEl.checked = true;
   thickEl.value = "";
   weightEl.value = "";
@@ -324,6 +440,7 @@ function clearEditor(): void {
   ctrEl.value = "";
   editorTitleEl.textContent = "New material";
   deleteBtn.disabled = true;
+  syncPickUi();
 }
 
 function fillEditor(m: Material): void {
@@ -350,7 +467,7 @@ function fillEditor(m: Material): void {
     catEl.value = m.category;
   }
   sourceRefEl.value = m.source_ref || "";
-  sourceEl.value = m.source || "catalogusGG.pdf";
+  ensureSourceOption(m.source || "eigen");
   spectrumOkEl.checked = m.spectrum_ok === "true" || m.spectrum_ok === "t";
   thickEl.value = m.thickness_mm || "";
   weightEl.value = m.weight_kg_m2 || "";
@@ -371,6 +488,7 @@ function fillEditor(m: Material): void {
   editorTitleEl.textContent = m.material_id ? `Edit · ${m.catalog_id || ""} · ${m.name}` : "New material";
   deleteBtn.disabled = !m.material_id;
   highlightSelection();
+  syncPickUi();
 }
 
 function highlightSelection(): void {
@@ -395,11 +513,25 @@ function updatePager(): void {
   nextBtn.disabled = offset + lim >= total;
 }
 
-function selectFromList(id: string): void {
+function selectFromList(id: string, opts?: { focusFieldId?: string | null }): void {
   const row = listRows.find((m) => m.material_id === id);
   if (!row) return;
   fillEditor(row);
   setStatus(`Selected ${row.name}`, "ok");
+  const fieldId = opts?.focusFieldId;
+  if (fieldId) {
+    const el = document.getElementById(fieldId) as HTMLInputElement | HTMLSelectElement | null;
+    if (el && "focus" in el) {
+      el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      window.requestAnimationFrame(() => {
+        el.focus({ preventScroll: true });
+        if (el instanceof HTMLInputElement && el.type !== "checkbox" && typeof el.select === "function") {
+          el.select();
+        }
+      });
+      return;
+    }
+  }
   listboxEl.focus({ preventScroll: true });
 }
 
@@ -423,6 +555,7 @@ async function loadList(preferId?: string | null): Promise<void> {
     listCategoryFilter(),
     String(lim),
     String(offset),
+    (sourceFilterEl?.value || "").trim(),
   ]);
   if (ret.startsWith("ERROR")) {
     setStatus(ret, "err");
@@ -433,28 +566,32 @@ async function loadList(preferId?: string | null): Promise<void> {
   total = Number(parsed.total) || 0;
   listRows = parsed.materials ?? [];
   tbodyEl.innerHTML = listRows
-    .map(
-      (m) => `
-      <tr data-id="${esc(m.material_id)}" role="option" tabindex="-1">
-        <td>${esc(m.catalog_id || "")}</td>
-        <td>${esc(m.master_category || "")}</td>
-        <td>${esc(m.category || "")}</td>
-        <td class="mat-name-cell">${esc(m.name)}</td>
-        <td>${esc(m.thickness_mm || "")}</td>
-        <td>${esc(m.weight_kg_m2 || "")}</td>
-        <td>${esc(m.ra_dba || "")}</td>
-        <td>${esc(m.r_63_hz || "")}</td>
-        <td>${esc(m.r_125_hz || "")}</td>
-        <td>${esc(m.r_250_hz || "")}</td>
-        <td>${esc(m.r_500_hz || "")}</td>
-        <td>${esc(m.r_1000_hz || "")}</td>
-        <td>${esc(m.r_2000_hz || "")}</td>
-        <td>${esc(m.r_4000_hz || "")}</td>
-        <td>${esc(m.rw_db || "")}</td>
-        <td>${esc(m.c_db || "")}</td>
-        <td>${esc(m.ctr_db || "")}</td>
-      </tr>`,
-    )
+    .map((m) => {
+      const eigen = (m.source || "").trim().toLowerCase() === "eigen";
+      const nameCell = eigen
+        ? `${esc(m.name)} <span class="mat-eigen-badge">eigen</span>`
+        : esc(m.name);
+      return `
+      <tr data-id="${esc(m.material_id)}" role="option" tabindex="-1" title="Dubbelklik om te bewerken"${eigen ? ' class="mat-row-eigen"' : ""}>
+        <td data-field="mat-catalog-id">${esc(m.catalog_id || "")}</td>
+        <td data-field="mat-master">${esc(m.master_category || "")}</td>
+        <td data-field="mat-cat">${esc(m.category || "")}</td>
+        <td class="mat-name-cell" data-field="mat-name">${nameCell}</td>
+        <td data-field="mat-thick">${esc(m.thickness_mm || "")}</td>
+        <td data-field="mat-weight">${esc(m.weight_kg_m2 || "")}</td>
+        <td data-field="mat-ra">${esc(m.ra_dba || "")}</td>
+        <td data-field="mat-r63">${esc(m.r_63_hz || "")}</td>
+        <td data-field="mat-r125">${esc(m.r_125_hz || "")}</td>
+        <td data-field="mat-r250">${esc(m.r_250_hz || "")}</td>
+        <td data-field="mat-r500">${esc(m.r_500_hz || "")}</td>
+        <td data-field="mat-r1000">${esc(m.r_1000_hz || "")}</td>
+        <td data-field="mat-r2000">${esc(m.r_2000_hz || "")}</td>
+        <td data-field="mat-r4000">${esc(m.r_4000_hz || "")}</td>
+        <td data-field="mat-rw">${esc(m.rw_db || "")}</td>
+        <td data-field="mat-c">${esc(m.c_db || "")}</td>
+        <td data-field="mat-ctr">${esc(m.ctr_db || "")}</td>
+      </tr>`;
+    })
     .join("");
   updatePager();
 
@@ -468,6 +605,29 @@ async function loadList(preferId?: string | null): Promise<void> {
     clearEditor();
     setStatus(total === 0 ? "No materials match" : `Loaded ${listRows.length} materials`, "ok");
   }
+}
+
+/** Deep-link from GA: open editor for a specific material_id. */
+async function applyDeepLink(): Promise<void> {
+  if (!auth?.token || !deepMaterialId) return;
+  if (deepQ && !qEl.value.trim()) qEl.value = deepQ;
+  setStatus("Loading material…", "busy");
+  const ret = await invokeString("API_AdminGetMaterial", [auth.token, deepMaterialId]);
+  if (ret.startsWith("ERROR")) {
+    setStatus(ret, "err");
+    await loadList();
+    return;
+  }
+  const m = JSON.parse(ret) as Material;
+  if (m.catalog_id && !qEl.value.trim()) qEl.value = m.catalog_id;
+  offset = 0;
+  await loadList(m.material_id);
+  if (!listRows.some((r) => r.material_id === m.material_id)) {
+    fillEditor(m);
+  }
+  editorForm.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  nameEl.focus({ preventScroll: true });
+  setStatus(`Opened ${m.catalog_id || ""} · ${m.name}`, "ok");
 }
 
 async function bootstrapSession(): Promise<void> {
@@ -506,7 +666,8 @@ async function bootstrapSession(): Promise<void> {
       const info = JSON.parse(validated) as AuthInfo;
       if (info.username === "admin") {
         showAdmin({ token: stored.token, username: info.username, display_name: info.display_name });
-        await loadList();
+        if (deepMaterialId) await applyDeepLink();
+        else await loadList();
         return;
       }
     }
@@ -534,7 +695,8 @@ loginForm.addEventListener("submit", async (ev) => {
     }
     showAdmin(info);
     offset = 0;
-    await loadList();
+    if (deepMaterialId) await applyDeepLink();
+    else await loadList();
     setStatus("Admin signed in", "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
@@ -590,10 +752,22 @@ newBtn.addEventListener("click", () => {
 
 clearBtn.addEventListener("click", () => clearEditor());
 
+pickBtnEl?.addEventListener("click", () => pickMaterialForCaller());
+pickBtnEditorEl?.addEventListener("click", () => pickMaterialForCaller());
+
 tbodyEl.addEventListener("click", (ev) => {
   const tr = (ev.target as HTMLElement).closest("tr[data-id]");
   if (!tr) return;
   selectFromList(tr.getAttribute("data-id") || "");
+});
+
+tbodyEl.addEventListener("dblclick", (ev) => {
+  const td = (ev.target as HTMLElement).closest("td[data-field]");
+  const tr = (ev.target as HTMLElement).closest("tr[data-id]");
+  if (!tr) return;
+  ev.preventDefault();
+  const fieldId = td?.getAttribute("data-field") || "mat-name";
+  selectFromList(tr.getAttribute("data-id") || "", { focusFieldId: fieldId });
 });
 
 listboxEl.addEventListener("keydown", (ev) => {
@@ -657,7 +831,7 @@ editorForm.addEventListener("submit", async (ev) => {
       t1El.value.trim(),
       cavEl.value.trim(),
       t2El.value.trim(),
-      sourceEl.value.trim() || "catalogusGG.pdf",
+      resolveSaveSource(),
     ]);
     if (ret.startsWith("ERROR")) {
       setStatus(ret, "err");
@@ -696,6 +870,9 @@ deleteBtn.addEventListener("click", async () => {
 
 fillFilterRubrieken();
 fillEditorRubrieken();
+setupReturnNav();
+syncPickUi();
+if (deepQ) qEl.value = deepQ;
 
 bootstrapSession().catch((err) => {
   setStatus(err instanceof Error ? err.message : String(err), "err");

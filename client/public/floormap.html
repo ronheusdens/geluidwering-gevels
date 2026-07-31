@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Geluidwering Gevels — Drawing analysis</title>
-  <link rel="stylesheet" href="/styles.css?v=pw-eye" />
+  <link rel="stylesheet" href="/styles.css?v=compose-feedback" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body class="engineer-body">
@@ -164,6 +164,14 @@
             </div>
           </div>
 
+          <div
+            class="engineer-split-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Breedte rechterpaneel aanpassen"
+            title="Sleep om breedte aan te passen"
+          ></div>
+
           <aside class="engineer-sidebar">
             <fieldset id="fm-mark-room-fieldset">
               <legend>Ruimte</legend>
@@ -193,11 +201,41 @@
                 <label class="block-label">Filter naam
                   <input id="fm-material-filter" type="search" placeholder="zoek in naam / catalogus-id" autocomplete="off" />
                 </label>
+                <label class="checkbox-label fm-eigen-filter" id="fm-eigen-filter-label">
+                  <input id="fm-material-eigen-only" type="checkbox" />
+                  <span>Alleen eigen materialen</span>
+                  <span class="fm-eigen-filter-state" id="fm-eigen-filter-state" aria-hidden="true">uit</span>
+                </label>
                 <label class="block-label">Materiaal (naam)
                   <select id="fm-material-id" disabled>
                     <option value="">— kies rubriek eerst —</option>
                   </select>
                 </label>
+                <div class="actions fm-material-actions">
+                  <button type="button" id="fm-open-mat-btn" class="secondary" title="Opent de materiaalcatalogus (admin)">Materiaalcatalogus…</button>
+                  <button type="button" id="fm-custom-mat-toggle" class="secondary">Eigen materiaal…</button>
+                </div>
+                <div id="fm-custom-mat-panel" class="fm-custom-mat hidden">
+                  <h3>Eigen materiaal</h3>
+                  <p class="hint">Wordt opgeslagen in de catalogus (source = eigen) en geselecteerd voor dit component. Optioneel meteen gekoppeld bij opslaan van de contour.</p>
+                  <form id="fm-custom-mat-form" class="form">
+                    <label class="block-label">Rubriek
+                      <select id="fm-custom-mat-rubriek" required>
+                        <option value="">— kies rubriek —</option>
+                      </select>
+                    </label>
+                    <label class="block-label">Naam
+                      <input id="fm-custom-mat-name" maxlength="120" required placeholder="bijv. eigen glas 6-12-4" />
+                    </label>
+                    <label class="block-label">RA [dB]
+                      <input id="fm-custom-mat-ra" type="number" min="0" max="100" step="0.1" required value="30" />
+                    </label>
+                    <div class="actions">
+                      <button type="submit">Opslaan en kiezen</button>
+                      <button type="button" id="fm-custom-mat-cancel" class="secondary">Annuleren</button>
+                    </div>
+                  </form>
+                </div>
                 <div id="fm-material-spectrum" class="fm-material-spectrum hidden" aria-live="polite">
                   <p class="fm-material-spectrum-title">R-spectrum (dB) · 125–2000&nbsp;Hz + totaal</p>
                   <div class="fm-spectrum-grid" role="group" aria-label="R-spectrum 125 tot 2000 Hz en totaal RA">
@@ -215,7 +253,7 @@
                     <span class="fm-spectrum-val fm-spectrum-val--total" id="fm-ra">—</span>
                   </div>
                 </div>
-                <p class="hint">Kies rubriek + subrubriek en een catalogusmateriaal. Nodig voor de berekening gevelwering per VR.</p>
+                <p class="hint">Kies rubriek + subrubriek en een catalogusmateriaal, of maak een eigen materiaal. Nodig voor de berekening gevelwering per VR.</p>
               </div>
               <label class="block-label">Verdieping
                 <select id="fm-room-level">
@@ -239,17 +277,14 @@
             </fieldset>
 
             <fieldset id="fm-set-ops-fieldset" class="hidden">
-              <legend>Setbewerking</legend>
-              <p class="hint">Selecteer ≥2 componenten. ∩ doorsnede, ∪ vereniging, − verschil (grootste minus rest). Resultaat wordt een <strong>nieuw component</strong> met netto m²; materiaal komt uit de keuze hierboven (rubriek/subrubriek).</p>
-              <div class="set-ops-btns" role="group" aria-label="Booleaanse bewerking">
-                <button type="button" id="fm-set-intersect-btn" class="set-op-btn" title="Doorsnede (AND)">∩</button>
-                <button type="button" id="fm-set-union-btn" class="set-op-btn" title="Vereniging (OR)">∪</button>
-                <button type="button" id="fm-set-difference-btn" class="set-op-btn" title="Verschil: grootste minus rest (gevel − kozijnen)">−</button>
-              </div>
+              <legend>Compositie (+/−)</legend>
+              <p class="hint" id="fm-compose-hint">Selecteer ≥2 gesloten componenten in de lijst hieronder. Grootste = buitencontour; overige moeten er volledig in passen. Zet per deel <strong>+</strong> of <strong>−</strong>, kies een materiaal hierboven, en klik <strong>Toepassen &amp; opslaan</strong> (niet «Component opslaan» — dat is alleen voor nieuw getekende contouren). Selectie blijft staan voor een volgende compositie met ander materiaal.</p>
+              <ul id="fm-compose-parts" class="compose-parts-list" aria-label="Tekens per component"></ul>
               <div class="actions actions-stack">
                 <button type="button" id="fm-set-apply-btn">Toepassen &amp; opslaan</button>
                 <button type="button" id="fm-set-clear-sel-btn" class="secondary">Selectie wissen</button>
               </div>
+              <p class="compose-feedback" id="fm-compose-feedback" aria-live="polite"></p>
             </fieldset>
 
             <div class="saved-sections-block" id="fm-saved-block">
@@ -262,6 +297,6 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/floormap.js?v=room-area-live"></script>
+  <script type="module" src="/floormap.js?v=compose-feedback"></script>
 </body>
 </html>

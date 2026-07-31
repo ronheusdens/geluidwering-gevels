@@ -25,6 +25,7 @@ import {
   handleFloormapSubsectionDelete,
   handleFloormapSubsectionSave,
   handleFloormapSubsectionsList,
+  handleFloormapSubsectionsReorder,
   handleFloormapVrComponentsList,
 } from "./lib/floormap-api.mjs";
 import {
@@ -128,6 +129,7 @@ const server = http.createServer(async (req, res) => {
     urlPath === "/api/floormap/section" ||
     urlPath === "/api/floormap/sections" ||
     urlPath === "/api/floormap/subsections" ||
+    urlPath === "/api/floormap/subsections/reorder" ||
     urlPath === "/api/floormap/vr-components" ||
     urlPath === "/api/floormap/scale" ||
     urlPath === "/api/floormap/material-categories" ||
@@ -148,6 +150,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (urlPath === "/api/floormap/vr-components" && req.method === "GET") {
         await handleFloormapVrComponentsList(req, res, url);
+        return;
+      }
+      if (urlPath === "/api/floormap/subsections/reorder" && req.method === "POST") {
+        await handleFloormapSubsectionsReorder(req, res);
         return;
       }
       if (urlPath === "/api/floormap/subsections" && req.method === "GET") {

@@ -1,8 +1,8 @@
 # App 2: Online façade sound insulation calculation
 
-**Status:** Design driver — **distinct App 2** (façade insulation); consumes App 1 `NoiseLoad[]` (or import)  
-**Overview:** [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md)  
-**Upstream:** [road-traffic-noise-app.md](road-traffic-noise-app.md) (App 1 supplies `NoiseLoad[]`)  
+**Status:** Design driver — **app-gevelwering** (façade insulation); consumes `NoiseLoad[]` from app-berekening-wegverkeer (or import)  
+**Overview:** [app-gevelwering-overview.md](app-gevelwering-overview.md)  
+**Upstream:** [road-traffic-noise-app.md](../../../app-berekening-wegverkeer/docs/architecture/road-traffic-noise-app.md) (`NoiseLoad[]`)  
 **Related:** [server-runtime-rfc.md](../../../bppServer/docs/Architectural_aspects/09-bppserver/server-runtime-rfc.md) §2.5, sibling repo `c/bppServer`  
 **Not in scope:** coding-agent / LLM tooling (`09-agent-integration`)
 
@@ -24,7 +24,7 @@ App 2 is a **separate application** from App 1. It reads the **same shared build
 | Engineering calculation | Façade sound insulation vs loads |
 | Report + appendices | Assessment, site layout, noise loads, calculation results |
 
-Shared building data + handoff: [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md). This document is the **App 2 product workflow**; the RFC remains the **protocol/runtime** contract.
+Shared building data + handoff: [app-gevelwering-overview.md](app-gevelwering-overview.md). **Current engineer workflow (materials + compose):** [overview §5](app-gevelwering-overview.md#5-workflow-huidige-implementatie). This document remains the broader design driver; the RFC remains the **protocol/runtime** contract.
 
 ---
 
@@ -45,7 +45,7 @@ Shared building data + handoff: [app-gevelwering-suite-overview.md](app-gevelwer
 
 ### Steps 1–2 — Customer details and drawings (**shared building data**)
 
-Same building record as App 1 — see [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md) §2. App 2 does not re-own this data; it binds the project/building and reads it.
+Same building record as app-berekening-wegverkeer — see [app-gevelwering-overview.md](app-gevelwering-overview.md) §2. This app does not re-own that data; it binds the project/building and reads it.
 
 **System:** `SetCustomer` / `SetProjectSite` / `RegisterDocument` (write once; both apps read).
 
@@ -66,45 +66,40 @@ Same building record as App 1 — see [app-gevelwering-suite-overview.md](app-ge
 
 ---
 
-### Step 4 — Consultant: façade section dimensions
+### Step 4 — Consultant: floor plan + façade geometry (implemented)
 
-**Work:** all façade sections on all façades on all building levels, **including roof sections**.
+**Work:** VG/VR rooms on the floor plan; closed façade components on elevation drawings, with calibrated scale.
 
-**System model (suggested):**
+**Current UI / storage:**
 
-```
-Building
-  └── Level (0..N, including Roof)
-        └── Façade (N, E, S, W, … or named)
-              └── Section (id, width_m, height_m, area_m2, orientation, …)
-```
+| Surface | UI | Persistence |
+|---------|-----|-------------|
+| Floor plan rooms | `/floormap.html` (`FLOORMAP`) | `drawing_subsection` + VG/VR on room |
+| Façade components | `/floormap.html` (elevation region) | `drawing_subsection` + `analysis` JSON (material, compose, holes) |
+| GA rooms / vlakken | `/ga.html` | `verblijfsruimte`, `vlak`, link `facade_subsection_id` |
 
-**Entry paths (v1 → v2):**
+**Compose (+/−)** replaces early ∩/∪/− set-ops for net façade area: largest closed ring = outer; others must be fully contained; per-part +/−; apply with **Toepassen & opslaan**. See [overview §5.2](app-gevelwering-overview.md#52-compositie--op-de-gevel).
 
-| Path | v1 | Later |
-|------|----|--------|
-| Manual numeric entry via client → `invoke UpsertSection(...)` | ✅ | |
-| Import from spreadsheet / CSV of sections | ✅ optional | |
-| Assist from floor-plan scaling / CAD | ❌ | v2 |
-| GIS: footprint of **new dwelling** vs OSM buildings (context only) | ✅ assist | |
-
-**GIS assist (vector OSM):** shared project AOI extract provides **roads** and **nearby buildings** for context maps in the report — not a substitute for measured façade sections of the *new* dwelling. Traffic-noise modelling of those roads is **App 1**.
-
-`invoke SetAOI(bbox…)` / `ExtractOsm…` — typically already done in shared / App 1 flow.
+HTTP: `/api/floormap/sections`, `/api/floormap/subsection` (save), `/api/floormap/scale`, …
 
 ---
 
-### Step 5 — Consultant: material specification per section
+### Step 5 — Consultant: material assignment (implemented)
 
-**Input:** material build-up / type per façade section (glazing, wall type, roof build-up, …).
+**Catalog:** `app_gevelwering.material` — primarily `catalogusGG.pdf` seed (`source = catalogusGG.pdf`), plus engineer **eigen** rows (`source = eigen`, ids `E#####`).
 
-**System:**
+| Action | Path |
+|--------|------|
+| Admin CRUD + filter «Eigen materialen» | `/materials.html` → `API_AdminListMaterials(…, source_filter$)` |
+| Create eigen from façade component | `/floormap.html` → `POST /api/floormap/materials` `{ name, ra_dba, rubriek_nr, subsection_id? }` |
+| Pick list on façade | `GET /api/floormap/materials?master_category=&category=&q=&source=eigen` |
+| Bind to one contour | **Component opslaan** (active subsection `analysis.material_id`) |
+| Bind to compose result | Choose material → **Toepassen & opslaan** |
+| GA vlak step | Read-only material from façade component; no catalog/create UI |
 
-- Material catalog (codes → acoustic properties: Rw, Ctr, mass, etc. — domain table)
-- `invoke SetSectionMaterial(section_id$, material_code$, …)`
-- Validation: every section used in calc must have material + dimensions
+Do **not** invent a separate “custom” rubriek: place eigen materials in the existing GG rubriek/subrubriek (or Diversen). Seed on `./start.sh` deletes only non-`eigen` catalog rows.
 
-**Data objects:** `MaterialSpec`, link `Section.material_id`
+Deep-link from façade: `/materials.html?material_id=…&return=…` (**Materiaalcatalogus…** on floormap).
 
 ---
 
@@ -156,7 +151,7 @@ invoke AssessFacadeLimits()
 invoke ReportFacade()           // returns paths + summary JSON
 ```
 
-Distinct-app sketches: [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md) §5. Concurrent sessions: **&lt; 3** (RFC §5.0).
+Distinct-app sketches: [app-gevelwering-overview.md](app-gevelwering-overview.md) §2. Concurrent sessions: **&lt; 3** (RFC §5.0).
 
 ---
 
@@ -217,7 +212,7 @@ Prefer Basic++ `TYPE` records / tables for v1; CLASS wrappers optional.
 | **P4** | Report pack with three appendices |
 | **P5** | Durable project store so App 1 loads survive for later App 2 sessions |
 
-Cross-app phasing: [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md) §7.
+Cross-app phasing: [app-gevelwering-overview.md](app-gevelwering-overview.md) §6 · [wegverkeer overview](../../../app-berekening-wegverkeer/docs/architecture/app-berekening-wegverkeer-overview.md) §5.
 
 ---
 
@@ -233,7 +228,7 @@ Cross-app phasing: [app-gevelwering-suite-overview.md](app-gevelwering-suite-ove
 
 ## 9. Product decisions (defaults)
 
-Defaults live in [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md) §6. App 2–specific:
+Defaults: prefer project `NoiseLoad[]` from wegverkeer; import allowed for demos. App-specific:
 
 1. **Noise loads source:** App 1 export/project loads preferred; manual/import allowed for demos and external App 1 runs.  
 2. **Report format:** HTML/Markdown + JSON first; PDF later.  
@@ -243,4 +238,4 @@ Defaults live in [app-gevelwering-suite-overview.md](app-gevelwering-suite-overv
 
 ## 10. Next working step
 
-Implement App 2 **P0** procedures `UseProjectNoiseLoads` / `ImportNoiseLoads` / `ComputeInsulation` / `AssessFacadeLimits` / `ReportFacade` consuming App 1 mock loads — see [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md) §8.
+Implement **P0** procedures `UseProjectNoiseLoads` / `ImportNoiseLoads` / `ComputeInsulation` / `AssessFacadeLimits` / `ReportFacade` consuming mock loads — see [app-gevelwering-overview.md](app-gevelwering-overview.md) §7.

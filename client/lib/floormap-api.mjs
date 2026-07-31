@@ -480,20 +480,21 @@ export async function handleFloormapVrComponentsList(req, res, url) {
           .filter((id) => UUID_RE.test(id)),
       ),
     ];
-    /** @type {Map<string, number|null>} */
-    const raByMaterial = new Map();
+    /** @type {Map<string, { ra_dba: number|null, catalog_id: string|null }>} */
+    const matById = new Map();
     if (matIds.length) {
       const { rows: mats } = await client.query(
-        `SELECT id::text AS id, ra_dba
+        `SELECT id::text AS id, ra_dba, catalog_id
          FROM app_gevelwering.material
          WHERE id = ANY($1::uuid[])`,
         [matIds],
       );
       for (const m of mats) {
-        raByMaterial.set(
-          String(m.id),
-          m.ra_dba != null && Number.isFinite(Number(m.ra_dba)) ? Number(m.ra_dba) : null,
-        );
+        matById.set(String(m.id), {
+          ra_dba:
+            m.ra_dba != null && Number.isFinite(Number(m.ra_dba)) ? Number(m.ra_dba) : null,
+          catalog_id: m.catalog_id != null && String(m.catalog_id).trim() ? String(m.catalog_id).trim() : null,
+        });
       }
     }
     json(req, res, 200, {
@@ -513,6 +514,9 @@ export async function handleFloormapVrComponentsList(req, res, url) {
               ? "length"
               : "area";
         const mid = s.material_id != null ? String(s.material_id) : "";
+        const matInfo = mid && matById.has(mid) ? matById.get(mid) : null;
+        const catalogFromAnalysis =
+          a.catalog_id != null && String(a.catalog_id).trim() ? String(a.catalog_id).trim() : null;
         const liveArea = qkind === "length" ? null : liveAreaM2FromRow(s);
         const liveLen = qkind === "length" ? liveLengthMFromRow(s) : null;
         return {
@@ -529,9 +533,10 @@ export async function handleFloormapVrComponentsList(req, res, url) {
           length_m: liveLen,
           ga_ready: Boolean(s.ga_ready),
           material_id: s.material_id,
+          catalog_id: matInfo?.catalog_id || catalogFromAnalysis,
           master_category: s.master_category,
           material_name: s.material_name,
-          ra_dba: mid && raByMaterial.has(mid) ? raByMaterial.get(mid) : null,
+          ra_dba: matInfo ? matInfo.ra_dba : null,
           boolean_op: a.boolean_op || null,
         };
       }),
@@ -848,15 +853,22 @@ export async function handleFloormapSubsectionSave(req, res) {
       );
       row = upd.rows[0];
     } else {
+      const { rows: sortRows } = await client.query(
+        `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_sort
+         FROM app_gevelwering.drawing_subsection
+         WHERE section_id = $1::uuid`,
+        [sectionId],
+      );
+      const nextSort = Number(sortRows[0]?.next_sort) || 0;
       const ins = await client.query(
         `INSERT INTO app_gevelwering.drawing_subsection
            (section_id, building_id, document_id, page_index, label, level_hint, vg_nr, vr_nr, geom_kind,
             points, area_norm, perimeter_norm, area_m2, perimeter_m, metres_per_norm_unit,
-            analysis, analysis_status, created_by)
+            analysis, analysis_status, sort_order, created_by)
          VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, 'POLYLINE',
                  $9::jsonb, $10, $11, $12, $13, $14, COALESCE($15::jsonb, '{}'::jsonb),
-                 'READY_FOR_ANALYSIS', $16::uuid)
-         RETURNING id::text AS id, vg_nr, vr_nr, area_norm, perimeter_norm, area_m2, perimeter_m, metres_per_norm_unit, analysis`,
+                 'READY_FOR_ANALYSIS', $16, $17::uuid)
+         RETURNING id::text AS id, vg_nr, vr_nr, area_norm, perimeter_norm, area_m2, perimeter_m, metres_per_norm_unit, analysis, sort_order`,
         [
           sectionId,
           sec.building_id,
@@ -873,6 +885,7 @@ export async function handleFloormapSubsectionSave(req, res) {
           periM,
           mpu,
           analysisJson,
+          nextSort,
           session.user_id,
         ],
       );
@@ -904,33 +917,42 @@ export async function handleFloormapSubsectionSave(req, res) {
       );
     }
 
-    // Keep GA vlak S/l in sync with façade geometry (single component; grouped materials
+    // Keep GA vlak S in sync with façade geometry (single component; grouped materials
     // are re-summed live in the GA UI from current façade subsections).
+    // Note: app_gevelwering.vlak has area_m2 only (no length_m / quantity_kind columns).
     if (
       row?.id &&
       sec.region_kind !== "FLOORMAP" &&
-      ((quantityKind === "area" && areaM2 != null && Number.isFinite(areaM2)) ||
-        (quantityKind === "length" && periM != null && Number.isFinite(periM)))
+      quantityKind === "area" &&
+      areaM2 != null &&
+      Number.isFinite(areaM2)
     ) {
-      if (quantityKind === "length") {
-        await client.query(
-          `UPDATE app_gevelwering.vlak
-           SET length_m = $2::double precision,
-               quantity_kind = 'length',
-               updated_at = now()
-           WHERE facade_subsection_id = $1::uuid`,
-          [row.id, periM],
-        );
-      } else {
-        await client.query(
-          `UPDATE app_gevelwering.vlak
-           SET area_m2 = $2::double precision,
-               quantity_kind = 'area',
-               updated_at = now()
-           WHERE facade_subsection_id = $1::uuid`,
-          [row.id, areaM2],
-        );
-      }
+      await client.query(
+        `UPDATE app_gevelwering.vlak
+         SET area_m2 = $2::double precision,
+             updated_at = now()
+         WHERE facade_subsection_id = $1::uuid`,
+        [row.id, areaM2],
+      );
+      await client.query(
+        `UPDATE app_gevelwering.verblijfsruimte vr
+         SET ga_dba = NULL,
+             lbi_dba = NULL,
+             gak_dba = NULL,
+             updated_at = now()
+         FROM app_gevelwering.vlak v
+         WHERE v.verblijfsruimte_id = vr.id
+           AND v.facade_subsection_id = $1::uuid`,
+        [row.id],
+      );
+    } else if (
+      row?.id &&
+      sec.region_kind !== "FLOORMAP" &&
+      quantityKind === "length" &&
+      periM != null &&
+      Number.isFinite(periM)
+    ) {
+      // Length quantities live on drawing_subsection.analysis; invalidate linked GA results.
       await client.query(
         `UPDATE app_gevelwering.verblijfsruimte vr
          SET ga_dba = NULL,
@@ -962,7 +984,12 @@ export async function handleFloormapSubsectionSave(req, res) {
       return;
     }
     console.error("floormap subsection save failed:", err);
-    json(req, res, 500, { ok: false, error: "failed to save subsection" });
+    const detail =
+      err && typeof err === "object" && typeof err.message === "string" ? err.message : "";
+    json(req, res, 500, {
+      ok: false,
+      error: detail ? `failed to save subsection: ${detail}` : "failed to save subsection",
+    });
   } finally {
     client.release();
   }
@@ -1006,6 +1033,111 @@ export async function handleFloormapSubsectionDelete(req, res, url) {
   } catch (err) {
     console.error("floormap subsection delete failed:", err);
     json(req, res, 500, { ok: false, error: "failed to delete subsection" });
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * POST /api/floormap/subsections/reorder
+ * body: { section_id, ordered_ids: string[] }
+ * Sets sort_order = index for each id; ordered_ids must match all subsections of the section.
+ */
+export async function handleFloormapSubsectionsReorder(req, res) {
+  if (requireHttpsOrReject(req, res)) return;
+  if (req.method !== "POST") {
+    json(req, res, 405, { ok: false, error: "method not allowed" });
+    return;
+  }
+  const token = parseSessionToken(req);
+  if (!token) {
+    json(req, res, 401, { ok: false, error: "Authorization: Bearer <session_token> required" });
+    return;
+  }
+
+  let body;
+  try {
+    body = await readJsonBody(req, 256 * 1024);
+  } catch {
+    json(req, res, 400, { ok: false, error: "invalid JSON body" });
+    return;
+  }
+
+  const sectionId = String(body.section_id || "").trim();
+  const orderedIds = Array.isArray(body.ordered_ids)
+    ? body.ordered_ids.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+
+  if (!UUID_RE.test(sectionId)) {
+    json(req, res, 400, { ok: false, error: "invalid section_id" });
+    return;
+  }
+  if (orderedIds.length === 0) {
+    json(req, res, 400, { ok: false, error: "ordered_ids is required" });
+    return;
+  }
+  if (orderedIds.some((id) => !UUID_RE.test(id))) {
+    json(req, res, 400, { ok: false, error: "invalid id in ordered_ids" });
+    return;
+  }
+  if (new Set(orderedIds).size !== orderedIds.length) {
+    json(req, res, 400, { ok: false, error: "ordered_ids contains duplicates" });
+    return;
+  }
+
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    const session = await resolveEngineerSession(client, token);
+    if (!session) {
+      json(req, res, 403, { ok: false, error: "engineer access required" });
+      return;
+    }
+
+    const { rows: existing } = await client.query(
+      `SELECT id::text AS id
+       FROM app_gevelwering.drawing_subsection
+       WHERE section_id = $1::uuid
+       ORDER BY sort_order ASC, created_at ASC`,
+      [sectionId],
+    );
+    const existingIds = existing.map((r) => r.id);
+    if (existingIds.length !== orderedIds.length) {
+      json(req, res, 400, {
+        ok: false,
+        error: "ordered_ids must include every subsection of this section",
+      });
+      return;
+    }
+    const existingSet = new Set(existingIds);
+    if (orderedIds.some((id) => !existingSet.has(id))) {
+      json(req, res, 400, {
+        ok: false,
+        error: "ordered_ids contains ids not in this section",
+      });
+      return;
+    }
+
+    await client.query("BEGIN");
+    for (let i = 0; i < orderedIds.length; i += 1) {
+      await client.query(
+        `UPDATE app_gevelwering.drawing_subsection
+         SET sort_order = $2,
+             updated_at = now()
+         WHERE id = $1::uuid AND section_id = $3::uuid`,
+        [orderedIds[i], i, sectionId],
+      );
+    }
+    await client.query("COMMIT");
+    json(req, res, 200, { ok: true, section_id: sectionId, count: orderedIds.length });
+  } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      /* ignore */
+    }
+    console.error("floormap subsections reorder failed:", err);
+    json(req, res, 500, { ok: false, error: "failed to reorder subsections" });
   } finally {
     client.release();
   }
@@ -1080,9 +1212,10 @@ export async function handleFloormapMaterialCategoriesGet(req, res, url) {
 }
 
 /**
- * GET /api/floormap/materials?master_category=&category=&q=&limit=
+ * GET /api/floormap/materials?master_category=&category=&q=&source=&limit=
  * Catalog pick list for façade set-ops (engineer).
  * `category` filters by subrubriek name (optional).
+ * `source=eigen` limits to engineer-created materials; master_category optional then.
  */
 export async function handleFloormapMaterialsList(req, res, url) {
   if (requireHttpsOrReject(req, res)) return;
@@ -1096,8 +1229,10 @@ export async function handleFloormapMaterialsList(req, res, url) {
     return;
   }
   const masterCategory = (url.searchParams.get("master_category") || "").trim();
-  if (!masterCategory) {
-    json(req, res, 400, { ok: false, error: "master_category is required" });
+  const sourceFilter = (url.searchParams.get("source") || "").trim().toLowerCase();
+  const eigenOnly = sourceFilter === "eigen";
+  if (!masterCategory && !eigenOnly) {
+    json(req, res, 400, { ok: false, error: "master_category is required (unless source=eigen)" });
     return;
   }
   const subCategory = (url.searchParams.get("category") || "").trim();
@@ -1114,15 +1249,19 @@ export async function handleFloormapMaterialsList(req, res, url) {
       json(req, res, 403, { ok: false, error: "engineer access required" });
       return;
     }
-    const rub = rubriekByName(masterCategory);
+    const rub = masterCategory ? rubriekByName(masterCategory) : null;
     const params = [];
-    let where;
+    /** @type {string[]} */
+    const clauses = [];
+    if (eigenOnly) {
+      clauses.push("source = 'eigen'");
+    }
     if (rub) {
       params.push(rub.nr);
-      where = "rubriek_nr = $1";
-    } else {
+      clauses.push(`rubriek_nr = $${params.length}`);
+    } else if (masterCategory) {
       params.push(masterCategory);
-      where = "master_category = $1";
+      clauses.push(`master_category = $${params.length}`);
     }
     if (subCategory) {
       const subMeta =
@@ -1132,19 +1271,20 @@ export async function handleFloormapMaterialsList(req, res, url) {
         );
       if (subMeta) {
         params.push(subMeta.nr);
-        where += ` AND subrubriek_nr = $${params.length}`;
+        clauses.push(`subrubriek_nr = $${params.length}`);
       } else {
         params.push(subCategory);
-        where += ` AND category = $${params.length}`;
+        clauses.push(`category = $${params.length}`);
       }
     }
     if (q) {
       const needle = q.replace(/[%_\\]/g, "").trim();
       if (needle) {
         params.push(`%${needle}%`);
-        where += ` AND (name ILIKE $${params.length} OR catalog_id ILIKE $${params.length})`;
+        clauses.push(`(name ILIKE $${params.length} OR catalog_id ILIKE $${params.length})`);
       }
     }
+    const where = clauses.length ? clauses.join(" AND ") : "TRUE";
     params.push(limit);
     const { rows } = await client.query(
       `SELECT id::text AS material_id,
@@ -1155,6 +1295,7 @@ export async function handleFloormapMaterialsList(req, res, url) {
               master_category,
               name,
               COALESCE(category, '') AS category,
+              COALESCE(source, '') AS source,
               thickness_mm,
               ra_dba,
               r_125_hz,
@@ -1171,9 +1312,10 @@ export async function handleFloormapMaterialsList(req, res, url) {
     const numOrNull = (v) => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
     json(req, res, 200, {
       ok: true,
-      master_category: rub ? rub.name : masterCategory,
+      master_category: rub ? rub.name : masterCategory || null,
       rubriek_nr: rub ? rub.nr : null,
       category: subCategory || null,
+      source: eigenOnly ? "eigen" : null,
       materials: rows.map((r) => ({
         material_id: r.material_id,
         catalog_id: r.catalog_id,
@@ -1183,6 +1325,7 @@ export async function handleFloormapMaterialsList(req, res, url) {
         master_category: r.master_category,
         name: r.name,
         category: r.category || "",
+        source: r.source || "",
         thickness_mm: numOrNull(r.thickness_mm),
         ra_dba: numOrNull(r.ra_dba),
         r_125_hz: numOrNull(r.r_125_hz),

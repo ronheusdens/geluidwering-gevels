@@ -46,6 +46,7 @@ export function collectSupersededSourceIds(subsections: GaComponentLike[]): Set<
     const ca = asAnalysis(c.analysis);
     const src = ca.source_subsection_ids;
     if (!Array.isArray(src) || src.length < 2 || !ca.boolean_op) continue;
+    // compose | difference | legacy ∩∪ — same supersession rules
     const cMat = ca.material_id != null ? String(ca.material_id).trim() : "";
     const cCat = ca.master_category != null ? String(ca.master_category).trim().toLowerCase() : "";
     for (const sid of src) {

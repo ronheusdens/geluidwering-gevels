@@ -87,6 +87,7 @@ function initPasswordToggles(root = document) {
 
 // src/ga-calc.ts
 var CR_DB = 3;
+var GRENZWAARDE_LBIK_DB = 33;
 function round1(x) {
   return Math.round(Number(x) * 10) / 10;
 }
@@ -125,6 +126,11 @@ function computeVrGa(input) {
   const Lb = Number(input.geluidsbelasting_dba);
   const Cr = input.cr_db != null ? Number(input.cr_db) : CR_DB;
   const vlakken2 = Array.isArray(input.vlakken) ? input.vlakken : [];
+  const emptyToets = {
+    lbik_dba: null,
+    gak_required_dba: null,
+    voldoet: null
+  };
   const elements = [];
   for (const v of vlakken2) {
     const kind = v.quantity_kind === "length" ? "length" : "area";
@@ -161,7 +167,8 @@ function computeVrGa(input) {
       ga_dba: null,
       lbi_dba: null,
       gak_dba: null,
-      gak_corr_db: null
+      gak_corr_db: null,
+      ...emptyToets
     };
   }
   let cl = 0;
@@ -173,6 +180,12 @@ function computeVrGa(input) {
       cl = e.cl_db;
       cg = e.cg_db;
     }
+  }
+  if (input.cl_db != null && Number.isFinite(Number(input.cl_db))) {
+    cl = Number(input.cl_db);
+  }
+  if (input.cg_db != null && Number.isFinite(Number(input.cg_db))) {
+    cg = Number(input.cg_db);
   }
   for (const e of elements) {
     e.ras = partialRas({ ra_dba: e.ra_dba, quantity: e.quantity }, sRef);
@@ -194,7 +207,8 @@ function computeVrGa(input) {
       ga_dba: null,
       lbi_dba: null,
       gak_dba: null,
-      gak_corr_db: null
+      gak_corr_db: null,
+      ...emptyToets
     };
   }
   const d2m = rPrime + cg + ruimte + cl;
@@ -202,6 +216,9 @@ function computeVrGa(input) {
   const lbi = Number.isFinite(Lb) ? Lb - ga : null;
   const gakCorr = stot > 0 ? gakCorrectionDb(V, T, stot) : null;
   const gak = gakCorr != null ? ga - gakCorr : null;
+  const gakRequired = Number.isFinite(Lb) ? Lb - GRENZWAARDE_LBIK_DB : null;
+  const lbik = gak != null && Number.isFinite(Lb) ? Lb - gak : null;
+  const voldoet = lbik != null ? lbik <= GRENZWAARDE_LBIK_DB : null;
   return {
     ok: true,
     reason: null,
@@ -217,7 +234,10 @@ function computeVrGa(input) {
     ga_dba: ga,
     lbi_dba: lbi,
     gak_dba: gak,
-    gak_corr_db: gakCorr
+    gak_corr_db: gakCorr,
+    lbik_dba: lbik,
+    gak_required_dba: gakRequired,
+    voldoet
   };
 }
 
@@ -276,14 +296,10 @@ var vlakQtyLabelEl = document.getElementById("ga-vlak-qty-label");
 var vlakClEl = document.getElementById("ga-vlak-cl");
 var vlakCgEl = document.getElementById("ga-vlak-cg");
 var vlakGakEl = document.getElementById("ga-vlak-gak");
+var vlakSaveBtn = document.getElementById("ga-vlak-save-btn");
+var vlakCancelBtn = document.getElementById("ga-vlak-cancel-btn");
 var vlakListEl = document.getElementById("ga-vlak-list");
-var customMatToggleBtn = document.getElementById("ga-custom-mat-toggle");
-var customMatPanelEl = document.getElementById("ga-custom-mat-panel");
-var customMatForm = document.getElementById("ga-custom-mat-form");
-var customMatRubriekEl = document.getElementById("ga-custom-mat-rubriek");
-var customMatNameEl = document.getElementById("ga-custom-mat-name");
-var customMatRaEl = document.getElementById("ga-custom-mat-ra");
-var customMatCancelBtn = document.getElementById("ga-custom-mat-cancel");
+var recalcBtn = document.getElementById("ga-recalc-btn");
 var vrResultsHintEl = document.getElementById("ga-vr-results-hint");
 var resSEl = document.getElementById("ga-res-s");
 var resRpEl = document.getElementById("ga-res-rp");
@@ -291,6 +307,8 @@ var resDEl = document.getElementById("ga-res-d");
 var resGaEl = document.getElementById("ga-res-ga");
 var resLbiEl = document.getElementById("ga-res-lbi");
 var resGakEl = document.getElementById("ga-res-gak");
+var resLbikEl = document.getElementById("ga-res-lbik");
+var resToetsEl = document.getElementById("ga-res-toets");
 var ws = null;
 var sessionId = null;
 var auth = null;
@@ -306,8 +324,10 @@ var vgs = [];
 var selectedVgId = null;
 var vrs = [];
 var selectedVrId = null;
+var selectedVlakId = null;
 var vlakken = [];
 var freshResultVrIds = /* @__PURE__ */ new Set();
+var vrVoldoet = /* @__PURE__ */ new Map();
 var freeRooms = [];
 var floormapRoomsById = /* @__PURE__ */ new Map();
 var vrFacades = [];
@@ -391,17 +411,6 @@ async function loadSharedApi() {
 }
 async function apiGet(url) {
   const res = await fetch(url, { credentials: "include", headers: apiAuthHeaders(auth.token) });
-  const body = await res.json();
-  if (!res.ok || body.ok === false) throw new Error(body.error || `HTTP ${res.status}`);
-  return body;
-}
-async function apiPost(url, payload) {
-  const res = await fetch(url, {
-    method: "POST",
-    credentials: "include",
-    headers: { ...apiAuthHeaders(auth.token), "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
   const body = await res.json();
   if (!res.ok || body.ok === false) throw new Error(body.error || `HTTP ${res.status}`);
   return body;
@@ -750,21 +759,13 @@ function groupFacadesForPick(facades, usedIds) {
 }
 function formatFacadeGroupOption(g) {
   const f = g.members[0];
-  const mat = f.master_category && f.material_name ? `${f.master_category}: ${f.material_name}` : f.material_name || f.master_category || null;
-  const qty = g.quantity_kind === "length" ? g.length_m != null ? `l=${Number(g.length_m).toFixed(2)} m` : null : g.area_m2 != null ? `${Number(g.area_m2).toFixed(2)} m\xB2` : null;
-  const countBit = g.members.length > 1 ? `${g.members.length}\xD7` : null;
-  const bits = [
-    g.members.length > 1 ? mat || g.label || "(zonder label)" : g.label || "(zonder label)",
-    g.members.length > 1 ? null : mat,
-    countBit,
-    booleanOpShort(f.boolean_op),
-    qty,
-    g.members.length === 1 ? f.section_label || null : null,
-    f.region_kind && f.region_kind !== "FACADE" ? f.region_kind : null,
-    g.ga_ready ? null : "geen materiaal",
-    g.used ? "al gekoppeld" : null
-  ].filter(Boolean);
-  return bits.join(" \xB7 ");
+  const code = (f.catalog_id || "").trim() || null;
+  const name = (f.material_name || "").trim() || null;
+  if (code && name) return `${code} \xB7 ${name}`;
+  if (code) return code;
+  if (name) return name;
+  if (!g.ga_ready) return g.label?.trim() || "geen materiaal";
+  return g.label?.trim() || "(zonder label)";
 }
 function fillFacadeSelect() {
   const prev = vlakFacadeEl.value;
@@ -790,6 +791,9 @@ function fillFacadeSelect() {
     o.dataset.ready = g.ga_ready ? "1" : "0";
     o.dataset.memberIds = g.memberIds.join(",");
     o.dataset.count = String(g.members.length);
+    const primary = g.members[0];
+    o.dataset.materialId = (primary?.material_id || "").trim();
+    o.dataset.catalogId = (primary?.catalog_id || "").trim();
     vlakFacadeEl.appendChild(o);
   }
   vlakFacadeEl.size = Math.min(8, Math.max(3, shown.length + 1));
@@ -804,12 +808,6 @@ function fillFacadeSelect() {
   else vlakFacadeEl.value = "";
   onFacadePick(true);
   updateFacadeHint();
-}
-function booleanOpShort(op) {
-  if (op === "union") return "\u222A";
-  if (op === "intersect") return "\u2229";
-  if (op === "difference") return "\u2212";
-  return null;
 }
 function selectedVrNr() {
   const vr = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
@@ -849,6 +847,7 @@ async function loadFacadesForSelectedVr() {
       vr_nr: s.vr_nr != null ? String(s.vr_nr) : null,
       ga_ready: Boolean(s.ga_ready),
       material_name: s.material_name || null,
+      catalog_id: s.catalog_id != null && String(s.catalog_id).trim() ? String(s.catalog_id).trim() : null,
       master_category: s.master_category || null,
       material_id: s.material_id != null ? String(s.material_id) : null,
       ra_dba: s.ra_dba != null ? Number(s.ra_dba) : null,
@@ -884,8 +883,18 @@ function updateFacadeHint() {
     vlakFacadePreviewEl.classList.add("is-empty");
     return;
   }
-  vlakFacadePreviewEl.textContent = opt.textContent || "\u2014";
-  vlakFacadePreviewEl.classList.remove("is-empty");
+  const fac = vrFacades.find((f) => f.id === id);
+  const code = (fac?.catalog_id || opt.dataset.catalogId || "").trim();
+  const name = (fac?.material_name || "").trim();
+  const hasMat = Boolean((fac?.material_id || opt.dataset.materialId || "").trim());
+  if (hasMat) {
+    const matLabel = code && name ? `${code} \xB7 ${name}` : code || name || "materiaal gekoppeld";
+    vlakFacadePreviewEl.textContent = `Materiaal: ${matLabel} (wijzig op geveltekening)`;
+  } else {
+    vlakFacadePreviewEl.textContent = "Geen materiaal op deze component \u2014 koppel het op de geveltekening, daarna hier als vlak toevoegen.";
+  }
+  vlakFacadePreviewEl.classList.toggle("is-empty", !hasMat);
+  vlakFacadePreviewEl.classList.toggle("is-warn", !hasMat);
 }
 function updateRoomPreview() {
   if (!roomPreviewEl) return;
@@ -1088,6 +1097,7 @@ async function loadVrs(preferVrId) {
     const vr = vrs.find((r) => r.verblijfsruimte_id === id);
     if (!vr || vr.ga_dba == null && vr.lbi_dba == null && vr.gak_dba == null) {
       freshResultVrIds.delete(id);
+      vrVoldoet.delete(id);
     }
   }
   if (keepVr && vrs.some((r) => r.verblijfsruimte_id === keepVr)) selectedVrId = keepVr;
@@ -1131,12 +1141,16 @@ function renderVrs() {
       const bits = [
         r.ga_dba != null ? `GA=${round1(r.ga_dba)}` : null,
         r.lbi_dba != null ? `Lbi=${round1(r.lbi_dba)}` : null,
-        r.gak_dba != null ? `GA;k=${round1(r.gak_dba)}` : null
+        r.gak_dba != null ? `GA;k=${round1(r.gak_dba)}` : null,
+        vrVoldoet.get(r.verblijfsruimte_id) === true ? "Voldoet" : vrVoldoet.get(r.verblijfsruimte_id) === false ? "Voldoet niet" : null
       ].filter(Boolean);
       btn.textContent += ` \xB7 ${bits.join(" \xB7 ")}`;
     }
     btn.addEventListener("click", () => {
       selectedVrId = r.verblijfsruimte_id;
+      selectedVlakId = null;
+      if (vlakSaveBtn) vlakSaveBtn.textContent = "Vlak toevoegen";
+      vlakCancelBtn?.classList.add("hidden");
       fillVrEdit(r);
       renderVrs();
       void loadVlakken();
@@ -1244,8 +1258,13 @@ function clearVrResults(hint) {
   if (resGaEl) resGaEl.textContent = "\u2014";
   if (resLbiEl) resLbiEl.textContent = "\u2014";
   if (resGakEl) resGakEl.textContent = "\u2014";
+  if (resLbikEl) resLbikEl.textContent = "\u2014";
+  if (resToetsEl) {
+    resToetsEl.textContent = "\u2014";
+    resToetsEl.classList.remove("toets-ok", "toets-fail");
+  }
 }
-async function refreshVrCalc() {
+async function refreshVrCalc(opts) {
   const vr = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
   const variant = variants.find((v) => v.variant_id === selectedVariantId);
   if (!auth || !vr) {
@@ -1259,13 +1278,21 @@ async function refreshVrCalc() {
   const facadeById = new Map(vrFacades.map((f) => [f.id, f]));
   const calcVlakken = vlakken.map((v) => {
     const fac = v.facade_subsection_id ? facadeById.get(v.facade_subsection_id) : void 0;
-    const live = liveVlakQty(v);
+    const kind = v.quantity_kind === "length" ? "length" : "area";
+    let qty = kind === "length" ? Number(v.length_m ?? 0) : Number(v.area_m2 ?? 0);
+    if (fac) {
+      if (kind === "length" && fac.length_m != null && Number.isFinite(Number(fac.length_m))) {
+        qty = Number(fac.length_m);
+      } else if (kind === "area" && fac.area_m2 != null && Number.isFinite(Number(fac.area_m2))) {
+        qty = Number(fac.area_m2);
+      }
+    }
     return {
       label: v.omschrijving,
       ra_dba: fac?.ra_dba != null ? Number(fac.ra_dba) : NaN,
-      quantity_kind: live.kind,
-      area_m2: live.kind === "area" ? live.qty : null,
-      length_m: live.kind === "length" ? live.qty : null,
+      quantity_kind: kind,
+      area_m2: kind === "area" ? qty : null,
+      length_m: kind === "length" ? qty : null,
       meenemen_gak: Boolean(v.meenemen_gak),
       cl_db: Number(v.cl_db) || 0,
       cg_db: Number(v.cg_db) || 0
@@ -1278,19 +1305,26 @@ async function refreshVrCalc() {
     );
     return;
   }
+  const formCl = Number(vlakClEl?.value);
+  const formCg = Number(vlakCgEl?.value);
+  const useForm = Boolean(opts?.useFormCorrections);
   const metrics = effectiveVrMetrics(vr);
   const result = computeVrGa({
     volume_m3: metrics.volume,
     t0_s: Number(vr.t0_s) || 0.5,
     geluidsbelasting_dba: Number(variant?.geluidsbelasting_dba ?? 0),
-    vlakken: calcVlakken
+    vlakken: calcVlakken,
+    cl_db: useForm && Number.isFinite(formCl) ? formCl : void 0,
+    cg_db: useForm && Number.isFinite(formCg) ? formCg : void 0
   });
   if (!result.ok) {
     clearVrResults(result.reason || "Berekening niet mogelijk.");
     return;
   }
   if (vrResultsHintEl) {
-    vrResultsHintEl.textContent = `Cr=${result.cr_db} dB \xB7 CL=${round1(result.cl_db)} \xB7 Cg=${round1(result.cg_db)} \xB7 Ruimte=${fmtRes(result.ruimte_db)} dB`;
+    const req = result.gak_required_dba != null ? ` \xB7 GA;k \u2265 ${fmtRes(result.gak_required_dba)} dB (Lb\u2212${GRENZWAARDE_LBIK_DB})` : "";
+    const preview = useForm ? " \xB7 (live CL/Cg)" : "";
+    vrResultsHintEl.textContent = `Cr=${result.cr_db} dB \xB7 CL=${round1(result.cl_db)} \xB7 Cg=${round1(result.cg_db)} \xB7 Ruimte=${fmtRes(result.ruimte_db)} dB \xB7 grens Lbi;k \u2264 ${GRENZWAARDE_LBIK_DB} dB${req}${preview}`;
     vrResultsHintEl.classList.remove("hidden");
   }
   if (resSEl) {
@@ -1301,11 +1335,28 @@ async function refreshVrCalc() {
   if (resGaEl) resGaEl.textContent = `${fmtRes(result.ga_dba)} dB`;
   if (resLbiEl) resLbiEl.textContent = `${fmtRes(result.lbi_dba)} dB`;
   if (resGakEl) resGakEl.textContent = `${fmtRes(result.gak_dba)} dB`;
+  if (resLbikEl) resLbikEl.textContent = `${fmtRes(result.lbik_dba)} dB`;
+  if (resToetsEl) {
+    resToetsEl.classList.remove("toets-ok", "toets-fail");
+    if (result.voldoet === true) {
+      resToetsEl.textContent = "Voldoet";
+      resToetsEl.classList.add("toets-ok");
+    } else if (result.voldoet === false) {
+      resToetsEl.textContent = "Voldoet niet";
+      resToetsEl.classList.add("toets-fail");
+    } else {
+      resToetsEl.textContent = "\u2014";
+    }
+  }
   vr.ga_dba = result.ga_dba != null ? round1(result.ga_dba) : null;
   vr.lbi_dba = result.lbi_dba != null ? round1(result.lbi_dba) : null;
   vr.gak_dba = result.gak_dba != null ? round1(result.gak_dba) : null;
+  if (result.voldoet != null) vrVoldoet.set(vr.verblijfsruimte_id, result.voldoet);
+  else vrVoldoet.delete(vr.verblijfsruimte_id);
   freshResultVrIds.add(vr.verblijfsruimte_id);
   renderVrs();
+  const shouldPersist = opts?.persist !== false && !useForm;
+  if (!shouldPersist) return;
   try {
     const ret = await invokeString("API_SaveVerblijfsruimteResults", [
       auth.token,
@@ -1317,6 +1368,44 @@ async function refreshVrCalc() {
     void ret;
   } catch {
   }
+}
+function clearVlakEdit() {
+  selectedVlakId = null;
+  vlakNameEl.value = "";
+  if (vlakClEl) vlakClEl.value = "0";
+  if (vlakCgEl) vlakCgEl.value = "0";
+  vlakGakEl.checked = true;
+  if (vlakSaveBtn) vlakSaveBtn.textContent = "Vlak toevoegen";
+  vlakCancelBtn?.classList.add("hidden");
+  renderVlakken();
+}
+function fillVlakEdit(v) {
+  selectedVlakId = v.vlak_id;
+  vlakNameEl.value = v.omschrijving || "";
+  const live = liveVlakQty(v);
+  if (v.facade_subsection_id) {
+    const facId = v.facade_subsection_id;
+    if (![...vlakFacadeEl.options].some((o) => o.value === facId)) {
+      const opt = document.createElement("option");
+      opt.value = facId;
+      opt.textContent = v.omschrijving || facId.slice(0, 8);
+      opt.dataset.quantityKind = live.kind;
+      if (live.kind === "length") opt.dataset.length = String(live.qty);
+      else opt.dataset.area = String(live.qty);
+      vlakFacadeEl.appendChild(opt);
+    }
+    vlakFacadeEl.value = facId;
+    updateFacadeHint();
+  }
+  syncVlakQtyUi(live.kind, String(live.qty), true);
+  if (vlakClEl) vlakClEl.value = String(Number(v.cl_db) || 0);
+  if (vlakCgEl) vlakCgEl.value = String(Number(v.cg_db) || 0);
+  vlakGakEl.checked = Boolean(v.meenemen_gak);
+  if (vlakSaveBtn) vlakSaveBtn.textContent = "Opslaan & herberekenen";
+  vlakCancelBtn?.classList.remove("hidden");
+  renderVlakken();
+  vlakClEl?.focus();
+  vlakClEl?.select();
 }
 function renderVlakken() {
   vlakListEl.innerHTML = "";
@@ -1334,14 +1423,21 @@ function renderVlakken() {
     vlakListEl.appendChild(li);
     return;
   }
+  const dominantId = dominantAreaVlakId(vlakken);
   for (const v of vlakken) {
     const li = document.createElement("li");
     li.className = "drawing-list-item";
-    const info = document.createElement("span");
+    if (v.vlak_id === selectedVlakId) li.classList.add("selected");
+    const info = document.createElement("button");
+    info.type = "button";
     info.className = "drawing-list-select";
     const live = liveVlakQty(v);
     const qtyTxt = live.kind === "length" ? `l=${live.qty.toFixed(2)} m` : `S=${live.qty.toFixed(2)} m\xB2`;
-    info.textContent = `${v.omschrijving} \xB7 ${qtyTxt} \xB7 GA;k=${v.meenemen_gak ? "ja" : "nee"}`;
+    const corrTxt = `CL=${round1(Number(v.cl_db) || 0)} \xB7 Cg=${round1(Number(v.cg_db) || 0)}`;
+    const domBit = v.vlak_id === dominantId ? " \xB7 CL/Cg actief" : "";
+    info.textContent = `${v.omschrijving} \xB7 ${qtyTxt} \xB7 ${corrTxt} \xB7 GA;k=${v.meenemen_gak ? "ja" : "nee"}${domBit}`;
+    info.title = "Klik om CL/Cg te wijzigen en opnieuw te berekenen";
+    info.addEventListener("click", () => fillVlakEdit(v));
     li.appendChild(info);
     const actions = document.createElement("span");
     actions.className = "drawing-list-actions";
@@ -1354,6 +1450,7 @@ function renderVlakken() {
         if (!auth) return;
         const ret = await invokeString("API_DeleteVlak", [auth.token, v.vlak_id]);
         if (ret.startsWith("ERROR")) throw new Error(ret);
+        if (selectedVlakId === v.vlak_id) clearVlakEdit();
         await loadVlakken();
       })().catch((e) => setConn("err", String(e)));
     });
@@ -1361,6 +1458,19 @@ function renderVlakken() {
     li.appendChild(actions);
     vlakListEl.appendChild(li);
   }
+}
+function dominantAreaVlakId(list) {
+  let bestId = null;
+  let best = -1;
+  for (const v of list) {
+    const live = liveVlakQty(v);
+    if (live.kind !== "area") continue;
+    if (live.qty > best) {
+      best = live.qty;
+      bestId = v.vlak_id;
+    }
+  }
+  return bestId;
 }
 async function openBuilding(id) {
   buildingId = id.trim();
@@ -1596,6 +1706,7 @@ variantForm.addEventListener("submit", (ev) => {
     const data = parseJsonOk(ret);
     selectedVariantId = data.variant_id;
     await loadVariants();
+    await refreshVrCalc();
     setConn("ok", "Variant opgeslagen");
   })().catch((e) => setConn("err", String(e)));
 });
@@ -1721,95 +1832,119 @@ vlakForm.addEventListener("submit", (ev) => {
   ev.preventDefault();
   void (async () => {
     if (!auth || !selectedVrId) throw new Error("Selecteer een VR");
+    const editingId = selectedVlakId;
     const fac = vlakFacadeEl.value;
     const opt = vlakFacadeEl.selectedOptions[0];
+    if (!fac && !editingId) throw new Error("Selecteer een gevelcomponent");
+    if (!editingId) {
+      const hasMat = Boolean((opt?.dataset.materialId || "").trim());
+      if (!hasMat) {
+        throw new Error(
+          "Deze component heeft nog geen materiaal \u2014 koppel het op de geveltekening, daarna hier als vlak toevoegen"
+        );
+      }
+    }
     const isLen = (opt?.dataset.quantityKind || vlakAreaEl.dataset.quantityKind) === "length";
     const qty = vlakAreaEl.value || "0";
+    const facadeId = fac || "";
+    const clVal = vlakClEl?.value || "0";
+    const cgVal = vlakCgEl?.value || "0";
     const ret = await invokeString("API_SaveVlak", [
       auth.token,
       selectedVrId,
-      "",
+      editingId || "",
       vlakNameEl.value.trim() || "Vlak",
       isLen ? "0" : qty,
-      vlakClEl?.value || "0",
-      vlakCgEl?.value || "0",
+      clVal,
+      cgVal,
       vlakGakEl.checked ? "true" : "false",
       "0",
-      fac,
+      facadeId,
       isLen ? "length" : "area",
       isLen ? qty : ""
     ]);
     if (ret.startsWith("ERROR")) throw new Error(ret);
-    vlakNameEl.value = "";
     await loadVlakken();
-    setConn("ok", "Vlak toegevoegd");
-  })().catch((e) => setConn("err", String(e)));
-});
-function setCustomMatPanelOpen(open) {
-  if (!customMatPanelEl) return;
-  customMatPanelEl.classList.toggle("hidden", !open);
-  if (open) void ensureCustomMatRubrieken();
-}
-async function ensureCustomMatRubrieken() {
-  if (!customMatRubriekEl || !auth || customMatRubriekEl.options.length > 1) return;
-  const data = await apiGet("/api/floormap/material-categories");
-  customMatRubriekEl.innerHTML = "";
-  const ph = document.createElement("option");
-  ph.value = "";
-  ph.textContent = "\u2014 kies rubriek \u2014";
-  customMatRubriekEl.appendChild(ph);
-  for (const c of data.categories || []) {
-    if (c.rubriek_nr == null) continue;
-    const o = document.createElement("option");
-    o.value = String(c.rubriek_nr);
-    o.textContent = c.label || c.master_category;
-    customMatRubriekEl.appendChild(o);
-  }
-}
-customMatToggleBtn?.addEventListener("click", () => {
-  if (!vlakFacadeEl.value) {
-    setConn("err", "Selecteer eerst een gevelcomponent");
-    return;
-  }
-  setCustomMatPanelOpen(true);
-  if (customMatNameEl && !customMatNameEl.value.trim()) {
-    const opt = vlakFacadeEl.selectedOptions[0];
-    customMatNameEl.value = (opt?.dataset.label || "").trim();
-  }
-});
-customMatCancelBtn?.addEventListener("click", () => {
-  setCustomMatPanelOpen(false);
-});
-customMatForm?.addEventListener("submit", (ev) => {
-  ev.preventDefault();
-  void (async () => {
-    if (!auth) throw new Error("Niet ingelogd");
-    const fac = vlakFacadeEl.value;
-    if (!fac) throw new Error("Selecteer eerst een gevelcomponent");
-    const rubriek = Number(customMatRubriekEl?.value || "");
-    const name = (customMatNameEl?.value || "").trim();
-    const ra = Number(customMatRaEl?.value);
-    if (!rubriek) throw new Error("Kies een rubriek");
-    if (!name) throw new Error("Naam is verplicht");
-    if (!Number.isFinite(ra)) throw new Error("RA is verplicht");
-    setConn("busy", "Eigen materiaal opslaan\u2026");
-    const data = await apiPost("/api/floormap/materials", {
-      name,
-      ra_dba: ra,
-      rubriek_nr: rubriek,
-      subsection_id: fac
-    });
-    setCustomMatPanelOpen(false);
-    if (customMatNameEl) customMatNameEl.value = "";
-    await loadFacadesForSelectedVr();
-    if ([...vlakFacadeEl.options].some((o) => o.value === fac)) {
-      vlakFacadeEl.value = fac;
-      onFacadePick(false);
+    for (const v of vlakken) {
+      if (v.quantity_kind === "length") continue;
+      if (editingId && v.vlak_id === editingId) continue;
+      const live = liveVlakQty(v);
+      if (live.kind !== "area") continue;
+      const sameCl = Number(v.cl_db) === Number(clVal) && Number(v.cg_db) === Number(cgVal);
+      if (sameCl) continue;
+      const syncRet = await invokeString("API_SaveVlak", [
+        auth.token,
+        selectedVrId,
+        v.vlak_id,
+        v.omschrijving || "Vlak",
+        String(live.qty),
+        clVal,
+        cgVal,
+        v.meenemen_gak ? "true" : "false",
+        String(v.sort_order || 0),
+        v.facade_subsection_id || "",
+        "area",
+        ""
+      ]);
+      if (syncRet.startsWith("ERROR")) throw new Error(syncRet);
     }
+    await loadVlakken();
+    clearVlakEdit();
+    await refreshVrCalc({ persist: true });
     setConn(
       "ok",
-      data.assigned ? `Materiaal \xAB${data.material.name}\xBB gekoppeld (RA ${data.material.ra_dba}) \u2014 voeg nu het vlak toe` : `Materiaal \xAB${data.material.name}\xBB opgeslagen`
+      editingId ? `Vlak bijgewerkt \u2014 CL=${clVal} dB meegenomen in GA/GA;k` : "Vlak toegevoegd"
     );
+  })().catch((e) => setConn("err", String(e)));
+});
+vlakCancelBtn?.addEventListener("click", () => {
+  clearVlakEdit();
+  void refreshVrCalc();
+  setConn("ok", "Bewerken geannuleerd");
+});
+var corrPreviewTimer = null;
+function scheduleCorrPreview() {
+  if (corrPreviewTimer) clearTimeout(corrPreviewTimer);
+  corrPreviewTimer = setTimeout(() => {
+    void refreshVrCalc({ useFormCorrections: true, persist: false });
+  }, 120);
+}
+vlakClEl?.addEventListener("input", () => scheduleCorrPreview());
+vlakCgEl?.addEventListener("input", () => scheduleCorrPreview());
+recalcBtn?.addEventListener("click", () => {
+  void (async () => {
+    if (!auth || !selectedVrId || !vlakken.length) {
+      await refreshVrCalc({ useFormCorrections: true, persist: false });
+      setConn("ok", "GA / GA;k herberekend (live CL/Cg)");
+      return;
+    }
+    const clVal = vlakClEl?.value || "0";
+    const cgVal = vlakCgEl?.value || "0";
+    for (const v of vlakken) {
+      const live = liveVlakQty(v);
+      if (live.kind !== "area") continue;
+      const syncRet = await invokeString("API_SaveVlak", [
+        auth.token,
+        selectedVrId,
+        v.vlak_id,
+        v.omschrijving || "Vlak",
+        String(live.qty),
+        clVal,
+        cgVal,
+        v.meenemen_gak ? "true" : "false",
+        String(v.sort_order || 0),
+        v.facade_subsection_id || "",
+        "area",
+        ""
+      ]);
+      if (syncRet.startsWith("ERROR")) throw new Error(syncRet);
+    }
+    await loadVlakken();
+    clearVlakEdit();
+    if (vlakClEl) vlakClEl.value = clVal;
+    if (vlakCgEl) vlakCgEl.value = cgVal;
+    await refreshVrCalc({ persist: true });
+    setConn("ok", `Herberekend met CL=${clVal} dB \xB7 Cg=${cgVal} dB`);
   })().catch((e) => setConn("err", String(e)));
 });
 if (buildingId) buildingIdEl.value = buildingId;

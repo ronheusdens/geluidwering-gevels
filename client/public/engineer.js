@@ -85,6 +85,82 @@ function initPasswordToggles(root = document) {
   root.querySelectorAll('input[type="password"]').forEach(enhancePasswordInput);
 }
 
+// src/layout-split.ts
+var STORAGE_KEY = "app-gevelwering-sidebar-width-px";
+var MIN_SIDEBAR_PX = 260;
+var MIN_VIEWER_PX = 280;
+var DEFAULT_SIDEBAR_PX = 420;
+function clampSidebarWidth(layout, widthPx) {
+  const rect = layout.getBoundingClientRect();
+  const handle = layout.querySelector(".engineer-split-handle");
+  const handleW = handle?.offsetWidth ?? 8;
+  if (rect.width < MIN_SIDEBAR_PX + MIN_VIEWER_PX + handleW) {
+    return Math.min(Math.max(widthPx, MIN_SIDEBAR_PX), 760);
+  }
+  const max = Math.max(MIN_SIDEBAR_PX, rect.width - MIN_VIEWER_PX - handleW);
+  return Math.min(Math.max(widthPx, MIN_SIDEBAR_PX), max);
+}
+function applySidebarWidth(layout, widthPx) {
+  const clamped = clampSidebarWidth(layout, widthPx);
+  layout.style.setProperty("--engineer-sidebar-width", `${Math.round(clamped)}px`);
+}
+function initEngineerLayoutSplit(root = document) {
+  const layout = root.querySelector(".engineer-layout");
+  const handle = root.querySelector(".engineer-split-handle");
+  if (!layout || !handle) return;
+  const stored = Number(localStorage.getItem(STORAGE_KEY));
+  const initial = Number.isFinite(stored) && stored > 0 ? stored : DEFAULT_SIDEBAR_PX;
+  applySidebarWidth(layout, initial);
+  const onResize = () => {
+    const current = Number.parseFloat(
+      getComputedStyle(layout).getPropertyValue("--engineer-sidebar-width")
+    );
+    if (Number.isFinite(current) && current > 0) applySidebarWidth(layout, current);
+  };
+  window.addEventListener("resize", onResize);
+  let dragging = false;
+  let pointerId = null;
+  const endDrag = (evt) => {
+    if (!dragging) return;
+    dragging = false;
+    layout.classList.remove("is-resizing");
+    document.body.classList.remove("engineer-resizing");
+    if (evt && pointerId != null) {
+      try {
+        handle.releasePointerCapture(pointerId);
+      } catch {
+      }
+    }
+    pointerId = null;
+    const current = Number.parseFloat(
+      getComputedStyle(layout).getPropertyValue("--engineer-sidebar-width")
+    );
+    if (Number.isFinite(current) && current > 0) {
+      localStorage.setItem(STORAGE_KEY, String(Math.round(current)));
+    }
+  };
+  handle.addEventListener("pointerdown", (evt) => {
+    if (evt.button !== 0) return;
+    if (window.matchMedia("(max-width: 1100px)").matches) return;
+    evt.preventDefault();
+    dragging = true;
+    pointerId = evt.pointerId;
+    layout.classList.add("is-resizing");
+    document.body.classList.add("engineer-resizing");
+    handle.setPointerCapture(evt.pointerId);
+  });
+  handle.addEventListener("pointermove", (evt) => {
+    if (!dragging) return;
+    const rect = layout.getBoundingClientRect();
+    applySidebarWidth(layout, rect.right - evt.clientX);
+  });
+  handle.addEventListener("pointerup", endDrag);
+  handle.addEventListener("pointercancel", endDrag);
+  handle.addEventListener("lostpointercapture", () => {
+    if (dragging) endDrag();
+  });
+}
+
 // src/geom.ts
 function shoelaceArea(points) {
   if (points.length < 3) return 0;
@@ -1911,6 +1987,15 @@ toolClearSidebarBtn?.addEventListener("click", () => {
     localStorage.setItem(key, panel.open ? "0" : "1");
   });
 })();
+(() => {
+  const panel = document.getElementById("engineer-queue-bar");
+  if (!panel) return;
+  const key = "app-gevelwering-engineer-queue-collapsed";
+  panel.open = localStorage.getItem(key) !== "1";
+  panel.addEventListener("toggle", () => {
+    localStorage.setItem(key, panel.open ? "0" : "1");
+  });
+})();
 window.addEventListener("keydown", (evt) => {
   if (evt.key === "Escape" && measure.tool !== "off") {
     clearMeasure(true);
@@ -2077,4 +2162,5 @@ reviewForm.addEventListener("submit", (evt) => {
 });
 updateZoomLabel();
 initPasswordToggles();
+initEngineerLayoutSplit();
 connect();

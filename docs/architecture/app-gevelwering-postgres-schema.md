@@ -1,7 +1,7 @@
 # Acoustics apps — PostgreSQL schema (DDL)
 
 **Status:** Design DDL for shared building store (Acoustics apps + bppServer Postgres)  
-**Related:** [app-gevelwering-suite-overview.md](app-gevelwering-suite-overview.md), [server-runtime-rfc.md](../../../bppServer/docs/Architectural_aspects/09-bppserver/server-runtime-rfc.md) §2.5  
+**Related:** [app-gevelwering-overview.md](app-gevelwering-overview.md), [server-runtime-rfc.md](../../../bppServer/docs/Architectural_aspects/09-bppserver/server-runtime-rfc.md) §2.5  
 **Store:** PostgreSQL  
 **Not in scope:** coding-agent / LLM tooling
 
@@ -196,7 +196,7 @@ ALTER TABLE app_gevelwering.building
 | `API_AdminListCustomers(token$)` | admin-only customer list with outstanding + drawing counts |
 | `API_AdminListCustomerProjects(token$, customer_id$)` | admin-only all projects for one customer |
 | `API_AdminUpdateProjectStatus(token$, building$, status$)` | admin-only update of `building.project_status` |
-| `API_AdminListMaterials(token$, q$, category$, limit$, offset$)` | admin material catalog search (paginated) |
+| `API_AdminListMaterials(token$, q$, category$, limit$, offset$, source_filter$)` | admin material catalog search (paginated); `source_filter$` = `eigen` \| `catalogus` \| empty |
 | `API_AdminGetMaterial(token$, material_id$)` | admin load one material |
 | `API_AdminSaveMaterial(token$, …)` | admin insert/update material + R spectrum |
 | `API_AdminDeleteMaterial(token$, material_id$)` | admin delete material |
@@ -279,23 +279,25 @@ Engineer-only room geometry on committed `FLOORMAP` sections (customer progress 
 | Lifecycle | `analysis_status` | `DRAFT` \| `READY_FOR_ANALYSIS` \| `ANALYZED` |
 | Level hint | `level_hint` | `GROUND` \| `FIRST` \| … \| `OTHER` |
 
-APIs: Basic++ `API_ListFloormapSections`, `API_SaveFloormapScale`; HTTP `/api/floormap/*` for section list, subsection CRUD (JSON polylines), and scale + room recompute. UI: `/floormap.html` (entry from engineer saved FLOORMAP sections).
+APIs: Basic++ `API_ListFloormapSections`, `API_SaveFloormapScale`; HTTP `/api/floormap/*` for section list, subsection CRUD (JSON polylines), scale + room recompute, materials list/create, and **`POST /api/floormap/subsections/reorder`** (`section_id` + `ordered_ids`) for persistent list order via `drawing_subsection.sort_order`. UI: `/floormap.html` — rooms on `FLOORMAP`; façade components + **compositie (+/−)** on elevation regions; **Omhoog/Omlaag** in the saved-components list. Material/compose workflow: [overview §5](app-gevelwering-overview.md#5-workflow-huidige-implementatie).
 
-### DDL 0.2.12 — material catalog (GL.cat)
+### DDL 0.2.12+ — material catalog (catalogusGG + eigen)
 
-Shared reference catalog for App 2 façade sound reduction. Seeded from DGMR `GL.cat` (3618 rows).
+Shared reference catalog for façade sound reduction. Primary seed: DGMR **catalogusGG.pdf** (`source = 'catalogusGG.pdf'`). Legacy GL.cat seed may still run earlier in `./start.sh`.
 
 | Object | Storage | Notes |
 |--------|---------|--------|
-| Material | `app_gevelwering.material` | One row per GLMATR01 record |
-| Identity | `source` + `catalog_index` / `material_no` | Default `source = 'GL.cat'` |
-| Spectrum | `r_125_hz` … `r_4000_hz` + `r_db[6]` | Octave-band R (dB); array order 125…4000 |
-| Glass parse | `glass_t1_mm`, `glass_cavity_mm`, `glass_t2_mm` | From name when `Glas a-b-c…` |
-| Category | `category` | Optional `GDG` / `GDL` / `GDR` / `GE` from name |
+| Material | `app_gevelwering.material` | Catalog + engineer rows |
+| Identity | `(source, catalog_id)` unique; also `catalog_index` / `material_no` | Catalog ids `D#####`; eigen ids `E#####` |
+| Source | `source` | `catalogusGG.pdf` \| `GL.cat` \| **`eigen`** |
+| Taxonomy | `rubriek_nr` 1–9, `subrubriek_nr`, `master_category`, `category` | GG taxonomy (`material-taxonomy.mjs`); no separate “custom” rubriek |
+| Spectrum | `r_63_hz` … `r_4000_hz`, `ra_dba`, `rw_db` / `c_db` / `ctr_db` | Octave-band R + single-number ratings |
 
-DDL: `sql/app_gevelwering_0_2_12.sql`. Seed (idempotent upsert): `sql/app_gevelwering_0_2_12_gl_material_seed.sql` (regenerate via `docs/gl_cat_to_table.py GL.cat --sql …`). Applied by `./start.sh`.
+**Seed safety:** `sql/app_gevelwering_0_2_14_catalogus_gg_seed.sql` deletes only `source IN ('catalogusGG.pdf','GL.cat')` — eigen and other non-catalog rows (e.g. `P#####`) are kept. Rubriek assign (`0_2_21_assign_rubriek.py`) skips `source = eigen`. Admin save forces `source = eigen` for new rows and for catalog ids that are not DGMR `D#####`.
 
-**Admin CRUD UI:** `/materials.html` (`src/materials.ts`) — WebSocket `API_AdminListMaterials`, `API_AdminGetMaterial`, `API_AdminSaveMaterial`, `API_AdminDeleteMaterial` (username `admin` only). Linked from `/admin.html`. Engineer façade assignment to materials is a later DDL/API.
+**Admin CRUD UI:** `/materials.html` — `API_AdminListMaterials(…, source_filter$)` with `eigen` \| `catalogus` \| empty; badge for eigen rows. New materials default `source = eigen`.
+
+**Engineer assignment:** façade pick list `GET /api/floormap/materials`; create eigen `POST /api/floormap/materials` from `/floormap.html` (not GA); bind via subsection `analysis.material_id` / compose apply. GA vlak UI shows material read-only. Workflow: [overview §5](app-gevelwering-overview.md#5-workflow-huidige-implementatie).
 
 ---
 

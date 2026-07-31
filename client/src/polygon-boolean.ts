@@ -1,9 +1,12 @@
 /** Boolean polygon ops for façade components (section-local 0–1 rings). */
 
 import polygonClipping from "polygon-clipping";
-import { closeRing, shoelaceArea, type Pt } from "./geom.ts";
+import { closeRing, ringVertexCount, shoelaceArea, type Pt } from "./geom.ts";
 
-export type BooleanOp = "intersect" | "union" | "difference";
+/** Legacy ∩/∪/− plus signed compose. */
+export type BooleanOp = "intersect" | "union" | "difference" | "compose";
+
+export type ComposeSign = "+" | "-";
 
 /** Result polygon: outer ring minus optional holes (net area for insulation). */
 export type BooleanPolygon = {
@@ -13,9 +16,17 @@ export type BooleanPolygon = {
   areaNorm: number;
 };
 
+export type SignedRing = {
+  ring: Pt[];
+  sign: ComposeSign;
+};
+
 type PcRing = [number, number][];
 type PcPoly = PcRing[];
 type PcMulti = PcPoly[];
+
+const AREA_EPS = 1e-10;
+const CONTAIN_EPS = 1e-8;
 
 function ringToPc(points: Pt[]): PcRing {
   const closed = closeRing(points);
@@ -50,21 +61,97 @@ function resultToPolygons(multi: PcMulti): BooleanPolygon[] {
       const hole = poly[i];
       if (!hole || hole.length < 3) continue;
       const pts = ptsFromRing(hole);
-      if (shoelaceArea(pts) > 1e-10) holes.push(pts);
+      if (shoelaceArea(pts) > AREA_EPS) holes.push(pts);
     }
     const areaNorm = netAreaNorm(outer, holes);
-    if (areaNorm > 1e-10) out.push({ outer, holes, areaNorm });
+    if (areaNorm > AREA_EPS) out.push({ outer, holes, areaNorm });
   }
   out.sort((a, b) => b.areaNorm - a.areaNorm);
   return out;
 }
 
+function multiArea(multi: PcMulti): number {
+  return resultToPolygons(multi).reduce((s, p) => s + p.areaNorm, 0);
+}
+
+/** Ray-cast point-in-polygon (closed ring). Boundary counts as inside. */
+export function pointInRing(pt: Pt, ring: Pt[]): boolean {
+  const closed = closeRing(ring);
+  const n = ringVertexCount(closed);
+  if (n < 3) return false;
+  let inside = false;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const a = closed[i];
+    const b = closed[j];
+    const onEdge =
+      Math.abs((b.x - a.x) * (pt.y - a.y) - (b.y - a.y) * (pt.x - a.x)) < 1e-12 &&
+      pt.x >= Math.min(a.x, b.x) - 1e-12 &&
+      pt.x <= Math.max(a.x, b.x) + 1e-12 &&
+      pt.y >= Math.min(a.y, b.y) - 1e-12 &&
+      pt.y <= Math.max(a.y, b.y) + 1e-12;
+    if (onEdge) return true;
+    const intersect =
+      a.y > pt.y !== b.y > pt.y &&
+      pt.x < ((b.x - a.x) * (pt.y - a.y)) / (b.y - a.y + 1e-30) + a.x;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
 /**
- * Apply ∩, ∪ or − across 2+ rings.
- * For − (difference): largest input ring is the subject; others are subtracted
- * (e.g. gevel − kozijnen). Holes are preserved so net area is correct.
+ * True if `inner` is closed and lies entirely inside `outer`
+ * (all vertices inside + negligible area of inner outside outer).
+ */
+export function ringFullyContained(inner: Pt[], outer: Pt[]): boolean {
+  if (ringVertexCount(inner) < 3 || ringVertexCount(outer) < 3) return false;
+  if (shoelaceArea(inner) < AREA_EPS || shoelaceArea(outer) < AREA_EPS) return false;
+  const closedInner = closeRing(inner);
+  const n = ringVertexCount(closedInner);
+  for (let i = 0; i < n; i++) {
+    if (!pointInRing(closedInner[i], outer)) return false;
+  }
+  try {
+    const leftover = polygonClipping.difference([ringToPc(inner)], [ringToPc(outer)]);
+    return multiArea(leftover) <= CONTAIN_EPS;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Material region = union of all `+` rings, then subtract all `−` rings.
+ * Used for façade compose (outer + openings −, or only glass +, etc.).
+ */
+export function composeSigned(parts: SignedRing[]): BooleanPolygon {
+  const plus = parts.filter((p) => p.sign === "+");
+  const minus = parts.filter((p) => p.sign === "-");
+  if (plus.length < 1) {
+    throw new Error("Minstens één deel met + is verplicht");
+  }
+  const plusPolys: PcPoly[] = plus.map((p) => [ringToPc(p.ring)]);
+  let result: PcMulti =
+    plusPolys.length === 1
+      ? [plusPolys[0]]
+      : polygonClipping.union(plusPolys[0], ...plusPolys.slice(1));
+  if (minus.length > 0) {
+    const minusPolys: PcPoly[] = minus.map((p) => [ringToPc(p.ring)]);
+    result = polygonClipping.difference(result, ...minusPolys);
+  }
+  const out = resultToPolygons(result);
+  if (out.length < 1) {
+    throw new Error("Compositie is leeg (niets over na +/−)");
+  }
+  return out[0];
+}
+
+/**
+ * Apply ∩, ∪ or − across 2+ rings (legacy).
+ * For − (difference): largest input ring is the subject; others are subtracted.
  */
 export function booleanCombine(op: BooleanOp, rings: Pt[][]): BooleanPolygon[] {
+  if (op === "compose") {
+    throw new Error("Gebruik composeSigned voor compose");
+  }
   if (rings.length < 2) {
     throw new Error("Selecteer minstens 2 componenten");
   }

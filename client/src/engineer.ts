@@ -1,6 +1,7 @@
 import { loadAuth, storeAuth as persistAuth, syncSessionCookie, apiAuthHeaders } from "./auth-store";
 import { resolveBppWsUrl } from "./ws-url";
 import { initPasswordToggles } from "./password-toggle";
+import { initEngineerLayoutSplit } from "./layout-split";
 import {
   metresPerNormFromCalibration,
   normalizeAspectYx,
@@ -2139,6 +2140,16 @@ toolClearSidebarBtn?.addEventListener("click", () => {
   });
 })();
 
+(() => {
+  const panel = document.getElementById("engineer-queue-bar") as HTMLDetailsElement | null;
+  if (!panel) return;
+  const key = "app-gevelwering-engineer-queue-collapsed";
+  panel.open = localStorage.getItem(key) !== "1";
+  panel.addEventListener("toggle", () => {
+    localStorage.setItem(key, panel.open ? "0" : "1");
+  });
+})();
+
 window.addEventListener("keydown", (evt) => {
   if (evt.key === "Escape" && measure.tool !== "off") {
     clearMeasure(true);
@@ -2325,4 +2336,5 @@ reviewForm.addEventListener("submit", (evt) => {
 
 updateZoomLabel();
 initPasswordToggles();
+initEngineerLayoutSplit();
 connect();

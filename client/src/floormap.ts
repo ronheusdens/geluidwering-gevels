@@ -3,6 +3,7 @@
  * Crop viewer, scale calibrate, polyline discovery review, saved rooms/components.
  * Works for FLOORMAP, FACADE, SECTION, and CROSS_SECTION.
  */
+import { initEngineerLayoutSplit, getEngineerSidebarWidthPx, setEngineerSidebarWidthPx } from "./layout-split";
 import {
   clampPath,
   closeRing,
@@ -22,7 +23,14 @@ import {
   translateRing,
   type Pt,
 } from "./geom";
-import { booleanCombineLargest, type BooleanOp, type BooleanPolygon } from "./polygon-boolean";
+import {
+  booleanCombineLargest,
+  composeSigned,
+  ringFullyContained,
+  type BooleanOp,
+  type BooleanPolygon,
+  type ComposeSign,
+} from "./polygon-boolean";
 import { collectBooleanSourceIds, collectSupersededSourceIds } from "./ga-vr-components";
 import { isLengthQuantityRubriek } from "../lib/material-taxonomy.mjs";
 import { discoverRoomPolylines, pixelsToSectionNorm } from "./room-discover";
@@ -72,6 +80,7 @@ type CatalogMaterial = {
   master_category: string;
   name: string;
   category: string;
+  source?: string;
   thickness_mm: number | null;
   ra_dba: number | null;
   r_125_hz?: number | null;
@@ -93,7 +102,12 @@ type SubsectionAnalysis = {
   material_kind?: string;
   boolean_op?: BooleanOp | string;
   source_subsection_ids?: string[];
-  /** Hole rings for difference results (net area = outer − holes). */
+  source_labels?: string[];
+  /** Outer contour id for compose (shared across multiple material compositions). */
+  outer_subsection_id?: string;
+  /** Per-source sign for compose: "+" include, "-" subtract. */
+  constituent_signs?: Record<string, ComposeSign | string>;
+  /** Hole rings for difference/compose results (net area = outer − holes). */
   holes?: Pt[][];
   area_norm?: number;
   area_m2?: number;
@@ -120,6 +134,7 @@ type RoomSubsection = {
   /** Scale snapshot stored with the room (metres per section-local unit). */
   metres_per_norm_unit: number | null;
   analysis_status: string;
+  sort_order: number;
   analysis?: SubsectionAnalysis | null;
 };
 
@@ -152,6 +167,8 @@ const BPP_WS = resolveBppWsUrl();
 const AUTH_KEY = "app_gevelwering_engineer_auth";
 const URL_BUILDING = params.get("building_id") || "";
 const URL_SECTION = params.get("section_id") || "";
+const COMPONENT_DRAFT_KEY = "app-gevelwering-fm-component-draft";
+const MATERIAL_PICK_KEY = "app-gevelwering-material-pick";
 
 const connBarEl = document.getElementById("fm-conn-bar") as HTMLElement;
 const connLedEl = document.getElementById("fm-conn-led") as HTMLElement;
@@ -205,15 +222,25 @@ const roomClearBtn = document.getElementById("fm-room-clear-btn") as HTMLButtonE
 const discoverBtnSide = document.getElementById("fm-discover-btn-side") as HTMLButtonElement | null;
 const setOpsFieldset = document.getElementById("fm-set-ops-fieldset") as HTMLElement | null;
 const materialBlockEl = document.getElementById("fm-material-block") as HTMLElement | null;
-const setIntersectBtn = document.getElementById("fm-set-intersect-btn") as HTMLButtonElement | null;
-const setUnionBtn = document.getElementById("fm-set-union-btn") as HTMLButtonElement | null;
-const setDifferenceBtn = document.getElementById("fm-set-difference-btn") as HTMLButtonElement | null;
+const composePartsEl = document.getElementById("fm-compose-parts") as HTMLUListElement | null;
+const composeFeedbackEl = document.getElementById("fm-compose-feedback") as HTMLElement | null;
 const materialCategoryEl = document.getElementById("fm-material-category") as HTMLSelectElement | null;
 const materialSubcategoryEl = document.getElementById(
   "fm-material-subcategory",
 ) as HTMLSelectElement | null;
 const materialFilterEl = document.getElementById("fm-material-filter") as HTMLInputElement | null;
+const materialEigenOnlyEl = document.getElementById("fm-material-eigen-only") as HTMLInputElement | null;
+const materialEigenFilterLabelEl = document.getElementById("fm-eigen-filter-label") as HTMLElement | null;
+const materialEigenFilterStateEl = document.getElementById("fm-eigen-filter-state") as HTMLElement | null;
 const materialIdEl = document.getElementById("fm-material-id") as HTMLSelectElement | null;
+const openMatCatalogBtn = document.getElementById("fm-open-mat-btn") as HTMLButtonElement | null;
+const customMatToggleBtn = document.getElementById("fm-custom-mat-toggle") as HTMLButtonElement | null;
+const customMatPanelEl = document.getElementById("fm-custom-mat-panel") as HTMLElement | null;
+const customMatForm = document.getElementById("fm-custom-mat-form") as HTMLFormElement | null;
+const customMatRubriekEl = document.getElementById("fm-custom-mat-rubriek") as HTMLSelectElement | null;
+const customMatNameEl = document.getElementById("fm-custom-mat-name") as HTMLInputElement | null;
+const customMatRaEl = document.getElementById("fm-custom-mat-ra") as HTMLInputElement | null;
+const customMatCancelBtn = document.getElementById("fm-custom-mat-cancel") as HTMLButtonElement | null;
 const materialSpectrumEl = document.getElementById("fm-material-spectrum") as HTMLElement | null;
 const materialR125El = document.getElementById("fm-r125") as HTMLElement | null;
 const materialR250El = document.getElementById("fm-r250") as HTMLElement | null;
@@ -344,11 +371,9 @@ function resolveComponentVgVr(selected: RoomSubsection[]): {
   if (form.error) return form;
   if (form.vg_nr != null && form.vr_nr != null) return form;
 
-  if (selectedBooleanOp === "difference") {
-    const subj = differenceSubject(selected);
-    if (subj?.vg_nr != null && subj.vr_nr) {
-      return { vg_nr: Number(subj.vg_nr), vr_nr: String(subj.vr_nr) };
-    }
+  const subj = differenceSubject(selected);
+  if (subj?.vg_nr != null && subj.vr_nr) {
+    return { vg_nr: Number(subj.vg_nr), vr_nr: String(subj.vr_nr) };
   }
 
   const vrs = [
@@ -438,25 +463,26 @@ function syncWorkspaceLabels(kind?: string | null): void {
   if (roomsHintEl) {
     roomsHintEl.textContent = floormap
       ? `Elke ${n.singular} toont VG/VR, oppervlakte (m²) en omtrek (m) bij ingestelde schaal.`
-      : `Elke ${n.singular} met VG/VR telt later mee in de berekening gevelwering voor die VR. Bronnen van ∩/∪/− doen niet mee (geen dubbeltelling). Selecteer voor setbewerking.`;
+      : `Elke ${n.singular} met VG/VR telt later mee in de berekening gevelwering voor die VR. Alleen bronnen met hetzelfde materiaal (of zonder materiaal) worden vervangen door een compositie — andere materialen blijven beschikbaar. Selecteer voor +/− compositie.`;
   }
   vgVrRowEl?.classList.remove("hidden");
   if (vgVrHintEl) {
     vgVrHintEl.classList.remove("hidden");
     vgVrHintEl.textContent = floormap
       ? "Zelfde VG + andere VR = ruimten in hetzelfde verblijfsgebied. VR is uniek per project (bijv. 1, 3A)."
-      : "Koppel aan een VR (zelfde als plattegrond). De berekening gevelwering neemt per VR alleen eindcomponenten mee — niet de bronnen van een setbewerking.";
+      : "Koppel aan een VR (zelfde als plattegrond). Meerdere composities (materialen) binnen dezelfde buitencontour zijn mogelijk.";
   }
   setOpsFieldset?.classList.toggle("hidden", floormap);
   materialBlockEl?.classList.toggle("hidden", floormap);
   if (floormap) {
     selectedSetIds.clear();
+    constituentSigns.clear();
     booleanPreview = null;
   } else {
     materialCategoriesLoaded = false;
     void ensureMaterialCategories();
   }
-  syncBooleanOpButtons();
+  renderComposeParts();
 }
 
 let ws: WebSocket | null = null;
@@ -469,9 +495,10 @@ let buildingId = URL_BUILDING;
 let sections: FloormapSection[] = [];
 let activeSection: FloormapSection | null = null;
 let rooms: RoomSubsection[] = [];
-/** Multi-select for gevel set ops (component ids). */
+/** Multi-select for gevel compose (component ids). */
 let selectedSetIds = new Set<string>();
-let selectedBooleanOp: BooleanOp = "intersect";
+/** Per selected id: + include / − subtract. Defaults applied when selecting. */
+let constituentSigns = new Map<string, ComposeSign>();
 let booleanPreview: BooleanPolygon | null = null;
 type MaterialCategoryOpt = {
   rubriek_nr?: number | null;
@@ -1095,8 +1122,107 @@ function closePendingPolygon(): void {
 }
 
 function parseBooleanOp(raw: unknown): BooleanOp | null {
-  if (raw === "intersect" || raw === "union" || raw === "difference") return raw;
+  if (raw === "intersect" || raw === "union" || raw === "difference" || raw === "compose") {
+    return raw;
+  }
   return null;
+}
+
+function isOpenComponent(r: RoomSubsection): boolean {
+  if (r.analysis?.open_path) return true;
+  if (r.analysis?.quantity_kind === "length") return true;
+  return ringVertexCount(r.points) < 3;
+}
+
+function ensureDefaultSigns(selected: RoomSubsection[]): void {
+  if (selected.length < 1) return;
+  const outer = differenceSubject(selected);
+  for (const r of selected) {
+    if (constituentSigns.has(r.id)) continue;
+    constituentSigns.set(r.id, outer && r.id === outer.id ? "+" : "-");
+  }
+  for (const id of [...constituentSigns.keys()]) {
+    if (!selectedSetIds.has(id)) constituentSigns.delete(id);
+  }
+}
+
+function buildComposeParts(selected: RoomSubsection[]): {
+  outer: RoomSubsection;
+  parts: Array<{ room: RoomSubsection; sign: ComposeSign }>;
+  signs: Record<string, ComposeSign>;
+} {
+  if (selected.length < 2) throw new Error("Selecteer minstens 2 componenten");
+  for (const r of selected) {
+    if (isOpenComponent(r)) {
+      throw new Error(`“${r.label || r.id}” is geen gesloten vlak`);
+    }
+  }
+  ensureDefaultSigns(selected);
+  const outer = differenceSubject(selected);
+  if (!outer) throw new Error("Geen buitencontour");
+  for (const r of selected) {
+    if (r.id === outer.id) continue;
+    if (!ringFullyContained(r.points, outer.points)) {
+      throw new Error(
+        `“${r.label || r.id}” past niet volledig binnen de buitencontour “${outer.label || outer.id}”`,
+      );
+    }
+  }
+  const parts = selected.map((room) => ({
+    room,
+    sign: (constituentSigns.get(room.id) || (room.id === outer.id ? "+" : "-")) as ComposeSign,
+  }));
+  if (!parts.some((p) => p.sign === "+")) {
+    throw new Error("Minstens één deel met + is verplicht");
+  }
+  const signs: Record<string, ComposeSign> = {};
+  for (const p of parts) signs[p.room.id] = p.sign;
+  return { outer, parts, signs };
+}
+
+function renderComposeParts(): void {
+  if (!composePartsEl) return;
+  composePartsEl.replaceChildren();
+  if (isFloormapKind()) return;
+  const selected = rooms.filter((r) => selectedSetIds.has(r.id));
+  if (selected.length < 1) return;
+  ensureDefaultSigns(selected);
+  const outer = differenceSubject(selected);
+  for (const r of sortByAreaDesc(selected)) {
+    const li = document.createElement("li");
+    li.className = "compose-part-row";
+    if (outer && r.id === outer.id) li.classList.add("is-outer");
+    const label = document.createElement("span");
+    label.className = "compose-part-label";
+    label.textContent = r.label || "(zonder label)";
+    label.title = label.textContent;
+    li.appendChild(label);
+    if (outer && r.id === outer.id) {
+      const badge = document.createElement("span");
+      badge.className = "compose-part-badge";
+      badge.textContent = "buiten";
+      li.appendChild(badge);
+    }
+    const btns = document.createElement("div");
+    btns.className = "compose-sign-btns";
+    const sign = constituentSigns.get(r.id) || (outer && r.id === outer.id ? "+" : "-");
+    for (const s of ["+", "-"] as ComposeSign[]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = `compose-sign-btn secondary ${s === "+" ? "sign-plus" : "sign-minus"}`;
+      if (sign === s) b.classList.add("active");
+      b.textContent = s === "+" ? "+" : "−";
+      b.title = s === "+" ? "Meenemen in compositie" : "Aftrekken van compositie";
+      b.addEventListener("click", () => {
+        constituentSigns.set(r.id, s);
+        renderComposeParts();
+        updateBooleanPreview();
+      });
+      btns.appendChild(b);
+    }
+    li.appendChild(btns);
+    composePartsEl.appendChild(li);
+  }
 }
 
 /** Palette for ∩/∪/− result + matching lighter source tint. */
@@ -1226,10 +1352,38 @@ async function recalculateBooleanDependents(rootId: string): Promise<number> {
         continue;
       }
       try {
-        const result = booleanCombineLargest(
-          op,
-          srcRooms.map((r) => r.points),
-        );
+        let result: BooleanPolygon;
+        if (op === "compose") {
+          const stored = dep.analysis?.constituent_signs || {};
+          const outerId = dep.analysis?.outer_subsection_id || differenceSubject(srcRooms)?.id;
+          const signed = srcRooms.map((r) => {
+            const raw = stored[r.id];
+            const sign: ComposeSign =
+              raw === "+" || raw === "-"
+                ? raw
+                : outerId && r.id === outerId
+                  ? "+"
+                  : "-";
+            return { ring: r.points, sign };
+          });
+          const outer = outerId ? srcRooms.find((r) => r.id === outerId) : differenceSubject(srcRooms);
+          if (outer) {
+            for (const r of srcRooms) {
+              if (r.id === outer.id) continue;
+              if (!ringFullyContained(r.points, outer.points)) {
+                throw new Error(
+                  `“${r.label}” past niet meer binnen buitencontour “${outer.label}”`,
+                );
+              }
+            }
+          }
+          result = composeSigned(signed);
+        } else {
+          result = booleanCombineLargest(
+            op,
+            srcRooms.map((r) => r.points),
+          );
+        }
         const mpu =
           dep.metres_per_norm_unit != null && dep.metres_per_norm_unit > 0
             ? dep.metres_per_norm_unit
@@ -1495,6 +1649,10 @@ async function applyMaterialSelectionFromAnalysis(a?: SubsectionAnalysis | null)
   }
   materialCategoryEl.value = master;
   renderMaterialSubcategoryOptions();
+  // Load whole rubriek first so a deep-linked material_id is always selectable.
+  if (materialSubcategoryEl) materialSubcategoryEl.value = "";
+  await loadMaterialsForCategory(master, "");
+  if (mid) renderMaterialNameOptions(catalogMaterials, mid);
   if (sub && materialSubcategoryEl) {
     if (![...materialSubcategoryEl.options].some((o) => o.value === sub)) {
       const opt = document.createElement("option");
@@ -1504,16 +1662,14 @@ async function applyMaterialSelectionFromAnalysis(a?: SubsectionAnalysis | null)
     }
     materialSubcategoryEl.value = sub;
   }
-  await loadMaterialsForCategory(master, "");
-  if (mid) renderMaterialNameOptions(catalogMaterials, mid);
   syncPendingRoomButtons();
   updateMaterialQuantityHint();
   updateMaterialSpectrumPreview();
 }
 
-/** For −: default materiaalkiezer from largest selected component (subject). */
+/** Prefer material from outer (largest) selected component. */
 async function defaultMaterialFromDifferenceSubject(): Promise<void> {
-  if (selectedBooleanOp !== "difference" || isFloormapKind()) return;
+  if (isFloormapKind()) return;
   const selected = rooms.filter((r) => selectedSetIds.has(r.id));
   if (!selected.length) return;
   const subj = differenceSubject(selected);
@@ -1548,28 +1704,21 @@ function fmtPerim(_r: RoomSubsection): string {
   return "";
 }
 
-function syncBooleanOpButtons(): void {
-  setIntersectBtn?.classList.toggle("active", selectedBooleanOp === "intersect");
-  setUnionBtn?.classList.toggle("active", selectedBooleanOp === "union");
-  setDifferenceBtn?.classList.toggle("active", selectedBooleanOp === "difference");
-}
-
 function updateBooleanPreview(): void {
   booleanPreview = null;
   if (isFloormapKind() || selectedSetIds.size < 2) {
+    renderComposeParts();
     drawOverlay();
     return;
   }
   try {
-    const rings = rooms.filter((r) => selectedSetIds.has(r.id)).map((r) => r.points);
-    if (rings.length < 2) {
-      drawOverlay();
-      return;
-    }
-    booleanPreview = booleanCombineLargest(selectedBooleanOp, rings);
+    const selected = rooms.filter((r) => selectedSetIds.has(r.id));
+    const { parts } = buildComposeParts(selected);
+    booleanPreview = composeSigned(parts.map((p) => ({ ring: p.room.points, sign: p.sign })));
   } catch {
     booleanPreview = null;
   }
+  renderComposeParts();
   drawOverlay();
 }
 
@@ -1679,7 +1828,8 @@ function renderMaterialNameOptions(materials: CatalogMaterial[], selectedId?: st
     const code = (m.catalog_id || "").trim();
     const ra = m.ra_dba != null ? ` · RA ${m.ra_dba}` : "";
     const sub = m.category ? ` · ${m.category}` : "";
-    opt.textContent = code ? `${code} · ${m.name}${sub}${ra}` : `${m.name}${sub}${ra}`;
+    const eigen = (m.source || "").trim().toLowerCase() === "eigen" ? " · eigen" : "";
+    opt.textContent = code ? `${code} · ${m.name}${sub}${ra}${eigen}` : `${m.name}${sub}${ra}${eigen}`;
     opt.title = code ? `${code} · ${m.name}` : m.name;
     materialIdEl.appendChild(opt);
   }
@@ -1706,7 +1856,8 @@ async function ensureMaterialCategories(): Promise<void> {
 async function loadMaterialsForCategory(category: string, q = ""): Promise<void> {
   if (!auth?.token || !materialIdEl) return;
   const keep = materialIdEl.value;
-  if (!category) {
+  const eigenOnly = Boolean(materialEigenOnlyEl?.checked);
+  if (!category && !eigenOnly) {
     catalogMaterials = [];
     renderMaterialNameOptions([]);
     materialIdEl.disabled = true;
@@ -1716,11 +1867,12 @@ async function loadMaterialsForCategory(category: string, q = ""): Promise<void>
   materialIdEl.disabled = true;
   try {
     const params = new URLSearchParams({
-      master_category: category,
       limit: "1000",
     });
+    if (category) params.set("master_category", category);
+    if (eigenOnly) params.set("source", "eigen");
     const sub = (materialSubcategoryEl?.value || "").trim();
-    if (sub) params.set("category", sub);
+    if (sub && category) params.set("category", sub);
     if (q.trim()) params.set("q", q.trim());
     const data = await apiGet<{ materials: CatalogMaterial[] }>(
       `/api/floormap/materials?${params.toString()}`,
@@ -1748,43 +1900,59 @@ function scheduleMaterialFilterReload(): void {
 function booleanOpSymbol(op?: string | null): string {
   if (op === "union") return "∪";
   if (op === "intersect") return "∩";
-  if (op === "difference") return "−";
+  if (op === "difference" || op === "compose") return "±";
   return "";
+}
+
+function setComposeFeedback(text: string, kind: "ok" | "err" | "busy" | "clear" = "clear"): void {
+  if (!composeFeedbackEl) return;
+  composeFeedbackEl.classList.remove("is-ok", "is-err", "is-busy");
+  if (kind === "clear" || !text) {
+    composeFeedbackEl.textContent = "";
+    return;
+  }
+  composeFeedbackEl.textContent = text;
+  composeFeedbackEl.classList.add(kind === "ok" ? "is-ok" : kind === "err" ? "is-err" : "is-busy");
 }
 
 async function applyBooleanSet(): Promise<void> {
   if (!activeSection || !auth || isFloormapKind()) return;
   if (selectedSetIds.size < 2) {
-    setStatus("Selecteer minstens 2 componenten", "err");
+    const msg = "Selecteer minstens 2 componenten";
+    setComposeFeedback(msg, "err");
+    setStatus(msg, "err");
     return;
   }
   const selected = rooms.filter((r) => selectedSetIds.has(r.id));
   if (selected.length < 2) {
-    setStatus("Selecteer minstens 2 componenten", "err");
+    const msg = "Selecteer minstens 2 componenten";
+    setComposeFeedback(msg, "err");
+    setStatus(msg, "err");
     return;
   }
-  if (selectedBooleanOp === "difference" && !selectedCatalogMaterial()) {
+  if (!selectedCatalogMaterial()) {
     await defaultMaterialFromDifferenceSubject();
   }
   let mat = selectedCatalogMaterial();
-  if (!mat && selectedBooleanOp === "difference") {
+  if (!mat) {
     mat = catalogMaterialFromAnalysis(differenceSubject(selected)?.analysis);
   }
   if (!mat) {
-    setStatus("Kies rubriek, subrubriek en materiaal (boven bij component)", "err");
+    const msg = "Kies rubriek, subrubriek en materiaal (boven bij component)";
+    setComposeFeedback(msg, "err");
+    setStatus(msg, "err");
     return;
   }
   setApplyBtn && (setApplyBtn.disabled = true);
-  setStatus(`${booleanOpSymbol(selectedBooleanOp)} berekenen…`, "busy");
+  setComposeFeedback("Compositie berekenen en opslaan…", "busy");
+  setStatus("Compositie berekenen…", "busy");
   try {
-    const rings = selected.map((r) => r.points);
-    const result = booleanCombineLargest(selectedBooleanOp, rings);
-    const sym = booleanOpSymbol(selectedBooleanOp);
-    let nameParts = selected.map((r) => r.label);
-    if (selectedBooleanOp === "difference") {
-      nameParts = sortByAreaDesc(selected).map((r) => r.label);
-    }
-    const names = nameParts.join(sym);
+    const { outer, parts, signs } = buildComposeParts(selected);
+    const result = composeSigned(parts.map((p) => ({ ring: p.room.points, sign: p.sign })));
+    const nameParts = sortByAreaDesc(selected).map((r) => {
+      const s = signs[r.id] || "-";
+      return `${s}${r.label || "?"}`;
+    });
     const mpu = activeScaleMpu();
     const areaM2 =
       mpu != null
@@ -1794,6 +1962,7 @@ async function applyBooleanSet(): Promise<void> {
     const label = `${mat.master_category}: ${mat.name}${areaBit}`;
     const vgVr = resolveComponentVgVr(selected);
     if (vgVr.error) {
+      setComposeFeedback(vgVr.error, "err");
       setStatus(vgVr.error, "err");
       return;
     }
@@ -1817,7 +1986,9 @@ async function applyBooleanSet(): Promise<void> {
         material_name: mat.name,
         catalog_id: mat.catalog_id,
         category: mat.category || undefined,
-        boolean_op: selectedBooleanOp,
+        boolean_op: "compose",
+        outer_subsection_id: outer.id,
+        constituent_signs: signs,
         source_subsection_ids: selected.map((r) => r.id),
         source_labels: nameParts,
         holes: result.holes,
@@ -1825,18 +1996,21 @@ async function applyBooleanSet(): Promise<void> {
         area_m2: areaM2,
       },
     });
-    selectedSetIds.clear();
+    // Keep selection so another material compose can be made in the same outer.
     booleanPreview = null;
     await loadRooms();
+    updateBooleanPreview();
     const savedM2 = saved.area_m2 != null ? Number(saved.area_m2) : areaM2;
-    setStatus(
+    const okMsg =
       savedM2 != null
-        ? `Nieuw component opgeslagen: ${label} (netto ${savedM2.toFixed(2)} m²)`
-        : `Nieuw component opgeslagen: ${label}`,
-      "ok",
-    );
+        ? `Opgeslagen: ${label} (netto ${savedM2.toFixed(2)} m²). Selectie blijft staan voor een volgende compositie.`
+        : `Opgeslagen: ${label}. Selectie blijft staan voor een volgende compositie.`;
+    setComposeFeedback(okMsg, "ok");
+    setStatus(okMsg, "ok");
   } catch (err) {
-    setStatus(err instanceof Error ? err.message : String(err), "err");
+    const msg = err instanceof Error ? err.message : String(err);
+    setComposeFeedback(msg, "err");
+    setStatus(msg, "err");
   } finally {
     if (setApplyBtn) setApplyBtn.disabled = false;
   }
@@ -1884,7 +2058,7 @@ function renderRoomList(): void {
   const booleanSourceIds = allowSetSelect ? collectBooleanSourceIds(rooms) : new Set<string>();
   const supersededIds = allowSetSelect ? collectSupersededSourceIds(rooms) : new Set<string>();
   const boolGroups = allowSetSelect ? assignBooleanListGroups(rooms) : new Map<string, BoolListRole>();
-  for (const r of rooms) {
+  rooms.forEach((r, index) => {
     const li = document.createElement("li");
     li.className = "drawing-list-item";
     if (allowSetSelect) li.classList.add("drawing-list-item--set");
@@ -1899,10 +2073,13 @@ function renderRoomList(): void {
       cb.type = "checkbox";
       cb.className = "set-select-cb";
       cb.checked = selectedSetIds.has(r.id);
-      cb.title = "Selecteer voor ∩ / ∪ / −";
+      cb.title = "Selecteer voor +/− compositie";
       cb.addEventListener("change", () => {
         if (cb.checked) selectedSetIds.add(r.id);
-        else selectedSetIds.delete(r.id);
+        else {
+          selectedSetIds.delete(r.id);
+          constituentSigns.delete(r.id);
+        }
         updateBooleanPreview();
         void defaultMaterialFromDifferenceSubject();
         renderRoomList();
@@ -1950,6 +2127,29 @@ function renderRoomList(): void {
     li.appendChild(info);
     const actions = document.createElement("span");
     actions.className = "drawing-list-actions";
+
+    const upBtn = document.createElement("button");
+    upBtn.type = "button";
+    upBtn.className = "secondary drawing-list-move";
+    upBtn.textContent = "Omhoog";
+    upBtn.title = "Verplaats omhoog in de lijst";
+    upBtn.disabled = index === 0;
+    upBtn.addEventListener("click", () => {
+      void moveRoom(index, -1);
+    });
+    actions.appendChild(upBtn);
+
+    const downBtn = document.createElement("button");
+    downBtn.type = "button";
+    downBtn.className = "secondary drawing-list-move";
+    downBtn.textContent = "Omlaag";
+    downBtn.title = "Verplaats omlaag in de lijst";
+    downBtn.disabled = index >= rooms.length - 1;
+    downBtn.addEventListener("click", () => {
+      void moveRoom(index, 1);
+    });
+    actions.appendChild(downBtn);
+
     if (activeSection?.region_kind === "FLOORMAP" && buildingId) {
       const ga = document.createElement("a");
       ga.className = "secondary-link";
@@ -1973,7 +2173,7 @@ function renderRoomList(): void {
     actions.appendChild(btn);
     li.appendChild(actions);
     listEl.appendChild(li);
-  }
+  });
 }
 
 async function refreshLinkedRooms(): Promise<void> {
@@ -2084,6 +2284,7 @@ async function loadRooms(): Promise<void> {
         r.metres_per_norm_unit != null && Number(r.metres_per_norm_unit) > 0
           ? Number(r.metres_per_norm_unit)
           : null,
+      sort_order: Number.isFinite(Number(r.sort_order)) ? Number(r.sort_order) : 0,
       analysis: (() => {
         if (!(r.analysis && typeof r.analysis === "object")) return null;
         const a = r.analysis as SubsectionAnalysis;
@@ -2093,7 +2294,11 @@ async function loadRooms(): Promise<void> {
         return { ...a, holes };
       })(),
     }));
+    rooms.sort((a, b) => a.sort_order - b.sort_order || a.label.localeCompare(b.label));
     selectedSetIds = new Set([...selectedSetIds].filter((id) => rooms.some((r) => r.id === id)));
+    for (const id of [...constituentSigns.keys()]) {
+      if (!selectedSetIds.has(id)) constituentSigns.delete(id);
+    }
     renderRoomList();
   } catch (err) {
     rooms = [];
@@ -2222,6 +2427,7 @@ async function openSection(sectionId: string): Promise<void> {
       "ok",
     );
   }
+  await restoreAfterCatalogReturn();
 }
 
 async function loadCroppedPdf(sec: FloormapSection): Promise<void> {
@@ -2459,7 +2665,7 @@ function drawOverlay(): void {
         : "";
     drawPolyline(ctx, booleanPreview.outer, "#2e7d32", "rgba(46,125,50,0.28)", 2.5, {
       dash: [6, 3],
-      label: `${booleanOpSymbol(selectedBooleanOp)}${areaBit}`,
+      label: `±${areaBit}`,
       holes: booleanPreview.holes,
     });
   }
@@ -2918,6 +3124,41 @@ async function deleteRoom(id: string): Promise<void> {
   }
 }
 
+/** Persist list order after swapping two adjacent components (delta = −1 or +1). */
+async function moveRoom(index: number, delta: -1 | 1): Promise<void> {
+  if (!auth?.token || !activeSection) return;
+  const j = index + delta;
+  if (index < 0 || j < 0 || index >= rooms.length || j >= rooms.length) return;
+  const prev = rooms.slice();
+  const next = rooms.slice();
+  const tmp = next[index];
+  next[index] = next[j];
+  next[j] = tmp;
+  next.forEach((r, i) => {
+    r.sort_order = i;
+  });
+  rooms = next;
+  renderRoomList();
+  drawOverlay();
+  try {
+    await apiPost("/api/floormap/subsections/reorder", {
+      section_id: activeSection.id,
+      ordered_ids: rooms.map((r) => r.id),
+    });
+    setStatus("Volgorde opgeslagen", "ok");
+  } catch (err) {
+    rooms = prev;
+    renderRoomList();
+    drawOverlay();
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+    try {
+      await loadRooms();
+    } catch {
+      /* keep reverted local order */
+    }
+  }
+}
+
 function hitVertex(norm: Pt, points: Pt[], pxRadius = 8): number {
   const thresh = pxRadius / Math.max(canvasWidth, 1);
   const n = points.length > 1 && Math.hypot(points[0].x - points[points.length - 1].x, points[0].y - points[points.length - 1].y) < 1e-6
@@ -3097,28 +3338,15 @@ loadBuildingBtn.addEventListener("click", () => {
   void loadFloormapSections(buildingInput.value);
 });
 
-setIntersectBtn?.addEventListener("click", () => {
-  selectedBooleanOp = "intersect";
-  syncBooleanOpButtons();
-  updateBooleanPreview();
-});
-setUnionBtn?.addEventListener("click", () => {
-  selectedBooleanOp = "union";
-  syncBooleanOpButtons();
-  updateBooleanPreview();
-});
-setDifferenceBtn?.addEventListener("click", () => {
-  selectedBooleanOp = "difference";
-  syncBooleanOpButtons();
-  updateBooleanPreview();
-  void defaultMaterialFromDifferenceSubject();
-});
 setApplyBtn?.addEventListener("click", () => {
   void applyBooleanSet();
 });
 setClearSelBtn?.addEventListener("click", () => {
   selectedSetIds.clear();
+  constituentSigns.clear();
   booleanPreview = null;
+  setComposeFeedback("", "clear");
+  renderComposeParts();
   renderRoomList();
   drawOverlay();
   setStatus("Selectie gewist", "ok");
@@ -3137,21 +3365,417 @@ materialSubcategoryEl?.addEventListener("change", () => {
 materialFilterEl?.addEventListener("input", () => {
   scheduleMaterialFilterReload();
 });
+materialEigenOnlyEl?.addEventListener("change", () => {
+  syncEigenOnlyFilterUi();
+  // Turning the filter off should show the full category again (not a sticky eigen-id search).
+  if (!materialEigenOnlyEl.checked && materialFilterEl?.value.trim()) {
+    materialFilterEl.value = "";
+  }
+  void loadMaterialsForCategory(
+    (materialCategoryEl?.value || "").trim(),
+    (materialFilterEl?.value || "").trim(),
+  );
+});
+
+function syncEigenOnlyFilterUi(): void {
+  const on = Boolean(materialEigenOnlyEl?.checked);
+  materialEigenFilterLabelEl?.classList.toggle("is-on", on);
+  if (materialEigenFilterStateEl) materialEigenFilterStateEl.textContent = on ? "aan" : "uit";
+  if (materialEigenOnlyEl) {
+    materialEigenOnlyEl.setAttribute("aria-checked", on ? "true" : "false");
+  }
+}
 materialIdEl?.addEventListener("change", () => {
   syncPendingRoomButtons();
   updateMaterialQuantityHint();
   updateMaterialSpectrumPreview();
 });
 
+function openMaterialCatalogEditor(): void {
+  const mat = selectedCatalogMaterial();
+  const matUrl = new URL("/materials.html", location.origin);
+  if (mat?.material_id) matUrl.searchParams.set("material_id", mat.material_id);
+  if (mat?.catalog_id) matUrl.searchParams.set("q", mat.catalog_id);
+  stashComponentDraftForCatalog();
+  matUrl.searchParams.set("return", componentReturnPath());
+  matUrl.searchParams.set("return_label", "Terug naar gevelcomponent");
+  location.assign(matUrl.toString());
+}
+
+function componentReturnPath(): string {
+  const u = new URL("/floormap.html", location.origin);
+  if (buildingId) u.searchParams.set("building_id", buildingId);
+  if (activeSection?.id) u.searchParams.set("section_id", activeSection.id);
+  u.searchParams.set("from_catalog", "1");
+  return `${u.pathname}${u.search}`;
+}
+
+type ComponentDraft = {
+  v: 1;
+  buildingId: string;
+  sectionId: string;
+  pending: {
+    points: Pt[];
+    holes: Pt[][];
+    closed: boolean;
+    editingId: string | null;
+    drawing: boolean;
+  } | null;
+  label: string;
+  vg: string;
+  vr: string;
+  level: string;
+  /** View state before opening materials catalog. */
+  viewZoom?: number;
+  scrollLeft?: number;
+  scrollTop?: number;
+  sidebarWidthPx?: number;
+};
+
+type MaterialPickPayload = {
+  material_id: string;
+  catalog_id?: string;
+  master_category: string;
+  category?: string;
+  name?: string;
+  /** Optional draft bundled at pick-time so geometry survives return. */
+  draft?: ComponentDraft | null;
+};
+
+function stashComponentDraftForCatalog(): void {
+  if (!activeSection || !buildingId) return;
+  const sidebarWidthPx = getEngineerSidebarWidthPx() ?? undefined;
+  const draft: ComponentDraft = {
+    v: 1,
+    buildingId,
+    sectionId: activeSection.id,
+    pending: pendingRoom
+      ? {
+          points: pendingRoom.points.map((p) => ({ ...p })),
+          holes: (pendingRoom.holes || []).map((ring) => ring.map((p) => ({ ...p }))),
+          closed: pendingRoom.closed,
+          editingId: pendingRoom.editingId,
+          drawing: pendingRoom.drawing,
+        }
+      : null,
+    label: (roomLabelInput?.value || "").trim(),
+    vg: (roomVgInput?.value || "").trim(),
+    vr: (roomVrInput?.value || "").trim(),
+    level: (roomLevelSelect?.value || "").trim() || "OTHER",
+    viewZoom,
+    scrollLeft: pdfScrollEl?.scrollLeft ?? 0,
+    scrollTop: pdfScrollEl?.scrollTop ?? 0,
+    sidebarWidthPx,
+  };
+  try {
+    sessionStorage.setItem(COMPONENT_DRAFT_KEY, JSON.stringify(draft));
+  } catch {
+    /* ignore quota */
+  }
+}
+
+function readSessionJson<T>(key: string): T | null {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function coerceDraftPoints(raw: unknown): Pt[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Pt[] = [];
+  for (const p of raw) {
+    if (!p || typeof p !== "object") continue;
+    const x = Number((p as Pt).x);
+    const y = Number((p as Pt).y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    out.push({ x, y });
+  }
+  return out;
+}
+
+function coerceDraftHoles(raw: unknown): Pt[][] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((ring) => coerceDraftPoints(ring)).filter((ring) => ring.length >= 3);
+}
+
+function idsMatch(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+async function restoreAfterCatalogReturn(): Promise<void> {
+  if (!activeSection || !buildingId) return;
+  const urlParams = new URLSearchParams(location.search);
+  const fromCatalog = urlParams.get("from_catalog") === "1";
+  const pick = readSessionJson<MaterialPickPayload>(MATERIAL_PICK_KEY);
+  if (!fromCatalog && !pick) return;
+
+  if (fromCatalog) {
+    urlParams.delete("from_catalog");
+    const qs = urlParams.toString();
+    history.replaceState({}, "", `${location.pathname}${qs ? `?${qs}` : ""}${location.hash}`);
+  }
+
+  const storedDraft = readSessionJson<ComponentDraft>(COMPONENT_DRAFT_KEY);
+  if (storedDraft) sessionStorage.removeItem(COMPONENT_DRAFT_KEY);
+  if (pick) sessionStorage.removeItem(MATERIAL_PICK_KEY);
+
+  const draft = (pick?.draft && pick.draft.v === 1 ? pick.draft : null) || storedDraft;
+
+  const draftOk =
+    Boolean(draft) &&
+    draft!.v === 1 &&
+    idsMatch(draft!.sectionId, activeSection.id) &&
+    (!draft!.buildingId || idsMatch(draft!.buildingId, buildingId));
+
+  if (draftOk && draft?.pending) {
+    const points = coerceDraftPoints(draft.pending.points);
+    if (points.length > 0) {
+      const holes = coerceDraftHoles(draft.pending.holes);
+      // Keep only short in-progress draws open; ≥3 pts → closed so Opslaan werkt.
+      const keepOpen = Boolean(draft.pending.drawing) && !draft.pending.closed && points.length < 3;
+      const closed = !keepOpen && (Boolean(draft.pending.closed) || points.length >= 3);
+      pendingRoom = {
+        points: closed ? closeRing(points) : points,
+        holes: closed ? holes : [],
+        closed,
+        editingId: draft.pending.editingId || null,
+        dragVertex: null,
+        drawing: !closed && Boolean(draft.pending.drawing),
+      };
+      if (roomLabelInput) roomLabelInput.value = draft.label || "";
+      if (roomVgInput) roomVgInput.value = draft.vg || "";
+      if (roomVrInput) roomVrInput.value = draft.vr || "";
+      if (roomLevelSelect) roomLevelSelect.value = draft.level || "OTHER";
+      syncToolButtons();
+      updateMeasureReadouts();
+      updateToolHint();
+      renderRoomList();
+      drawOverlay();
+    }
+  } else if (draftOk && draft) {
+    if (roomLabelInput && draft.label) roomLabelInput.value = draft.label;
+    if (roomVgInput && draft.vg) roomVgInput.value = draft.vg;
+    if (roomVrInput && draft.vr) roomVrInput.value = draft.vr;
+    if (roomLevelSelect && draft.level) roomLevelSelect.value = draft.level;
+  }
+
+  if (pick?.material_id && pick.master_category && !isFloormapKind()) {
+    await applyMaterialSelectionFromAnalysis({
+      material_id: pick.material_id,
+      master_category: pick.master_category,
+      category: pick.category || "",
+      material_name: pick.name || "",
+      catalog_id: pick.catalog_id || "",
+    });
+    if (materialIdEl && pick.material_id && materialIdEl.value !== pick.material_id) {
+      if (![...materialIdEl.options].some((o) => o.value === pick.material_id)) {
+        const opt = document.createElement("option");
+        opt.value = pick.material_id;
+        opt.textContent = `${pick.catalog_id || pick.material_id} · ${pick.name || "materiaal"}`;
+        materialIdEl.appendChild(opt);
+        if (!catalogMaterials.some((m) => m.material_id === pick.material_id)) {
+          catalogMaterials.push({
+            material_id: pick.material_id,
+            catalog_id: pick.catalog_id || "",
+            material_no: 0,
+            master_category: pick.master_category,
+            name: pick.name || pick.material_id,
+            category: pick.category || "",
+            thickness_mm: null,
+            ra_dba: null,
+          });
+        }
+      }
+      materialIdEl.value = pick.material_id;
+      materialIdEl.disabled = false;
+      updateMaterialSpectrumPreview();
+    }
+    const label = (pick.name || pick.catalog_id || pick.material_id).trim();
+    setStatus(
+      pendingRoom
+        ? `Materiaal «${label}» overgenomen — sla het component op om te koppelen`
+        : `Materiaal «${label}» geselecteerd voor het component`,
+      "ok",
+    );
+  } else if (draftOk && pendingRoom) {
+    setStatus("Componentconcept hersteld na catalogus", "ok");
+  }
+
+  if (draftOk && draft) await restoreViewStateFromDraft(draft);
+  syncPendingRoomButtons();
+}
+
+async function restoreViewStateFromDraft(draft: ComponentDraft): Promise<void> {
+  if (draft.sidebarWidthPx != null && draft.sidebarWidthPx > 0) {
+    setEngineerSidebarWidthPx(draft.sidebarWidthPx);
+  }
+
+  const z = Number(draft.viewZoom);
+  if (Number.isFinite(z) && z > 0) {
+    await setViewZoom(z);
+  }
+
+  const left = Number(draft.scrollLeft);
+  const top = Number(draft.scrollTop);
+  const hasScroll = (Number.isFinite(left) && left > 0) || (Number.isFinite(top) && top > 0);
+  if (hasScroll && pdfScrollEl) {
+    const applyScroll = () => {
+      pdfScrollEl.scrollLeft = Math.max(0, left || 0);
+      pdfScrollEl.scrollTop = Math.max(0, top || 0);
+    };
+    applyScroll();
+    requestAnimationFrame(applyScroll);
+  } else if (pendingRoom?.points.length) {
+    queueMicrotask(() => {
+      if (pendingRoom?.points.length) scrollToRing(pendingRoom.points);
+    });
+  }
+}
+
+function setCustomMatPanelOpen(open: boolean): void {
+  if (!customMatPanelEl) return;
+  customMatPanelEl.classList.toggle("hidden", !open);
+  if (open) void ensureCustomMatRubrieken();
+}
+
+async function ensureCustomMatRubrieken(): Promise<void> {
+  if (!customMatRubriekEl || !auth) return;
+  await ensureMaterialCategories();
+  if (customMatRubriekEl.options.length > 1) return;
+  customMatRubriekEl.replaceChildren();
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = "— kies rubriek —";
+  customMatRubriekEl.appendChild(ph);
+  for (const c of materialCategoryMeta) {
+    if (c.rubriek_nr == null) continue;
+    const o = document.createElement("option");
+    o.value = String(c.rubriek_nr);
+    o.textContent = c.label || c.master_category;
+    customMatRubriekEl.appendChild(o);
+  }
+  const current = materialCategoryMeta.find((c) => c.master_category === (materialCategoryEl?.value || "").trim());
+  if (current?.rubriek_nr != null) customMatRubriekEl.value = String(current.rubriek_nr);
+}
+
+openMatCatalogBtn?.addEventListener("click", () => {
+  openMaterialCatalogEditor();
+});
+
+customMatToggleBtn?.addEventListener("click", () => {
+  setCustomMatPanelOpen(true);
+  if (customMatNameEl && !customMatNameEl.value.trim()) {
+    customMatNameEl.value = (roomLabelInput?.value || "").trim();
+  }
+});
+
+customMatCancelBtn?.addEventListener("click", () => {
+  setCustomMatPanelOpen(false);
+});
+
+customMatForm?.addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  void (async () => {
+    if (!auth?.token) throw new Error("Niet ingelogd");
+    const rubriek = Number(customMatRubriekEl?.value || "");
+    const name = (customMatNameEl?.value || "").trim();
+    const ra = Number(customMatRaEl?.value);
+    if (!Number.isInteger(rubriek) || rubriek < 1) throw new Error("Kies een rubriek");
+    if (!name) throw new Error("Naam is verplicht");
+    if (!Number.isFinite(ra) || ra < 0 || ra > 100) throw new Error("RA moet tussen 0 en 100 liggen");
+
+    const subsectionId = pendingRoom?.editingId || "";
+    setStatus("Eigen materiaal opslaan…", "busy");
+    const data = await apiPost<{
+      material: {
+        material_id: string;
+        name: string;
+        ra_dba: number;
+        catalog_id: string;
+        master_category: string;
+        rubriek_nr?: number;
+      };
+      assigned: boolean;
+    }>("/api/floormap/materials", {
+      name,
+      ra_dba: ra,
+      rubriek_nr: rubriek,
+      subsection_id: subsectionId || undefined,
+    });
+
+    const master =
+      data.material.master_category ||
+      materialCategoryMeta.find((c) => c.rubriek_nr === rubriek)?.master_category ||
+      "";
+    await ensureMaterialCategories();
+    if (materialCategoryEl && master) {
+      if (![...materialCategoryEl.options].some((o) => o.value === master)) {
+        const opt = document.createElement("option");
+        opt.value = master;
+        opt.textContent = master;
+        materialCategoryEl.appendChild(opt);
+      }
+      materialCategoryEl.value = master;
+      renderMaterialSubcategoryOptions();
+    }
+    if (materialEigenOnlyEl) {
+      // Keep full catalog visible; the new eigen row is selected below.
+      materialEigenOnlyEl.checked = false;
+      syncEigenOnlyFilterUi();
+    }
+    if (materialFilterEl) materialFilterEl.value = "";
+    await loadMaterialsForCategory(master, "");
+    if (materialIdEl) {
+      if (![...materialIdEl.options].some((o) => o.value === data.material.material_id)) {
+        const opt = document.createElement("option");
+        opt.value = data.material.material_id;
+        opt.textContent = `${data.material.catalog_id} · ${data.material.name} · eigen`;
+        materialIdEl.appendChild(opt);
+        if (!catalogMaterials.some((m) => m.material_id === data.material.material_id)) {
+          catalogMaterials.push({
+            material_id: data.material.material_id,
+            catalog_id: data.material.catalog_id,
+            material_no: 0,
+            master_category: master,
+            name: data.material.name,
+            category: "",
+            thickness_mm: null,
+            ra_dba: data.material.ra_dba,
+          });
+        }
+      }
+      materialIdEl.value = data.material.material_id;
+      materialIdEl.disabled = false;
+    }
+    updateMaterialSpectrumPreview();
+    syncPendingRoomButtons();
+    setCustomMatPanelOpen(false);
+    if (customMatNameEl) customMatNameEl.value = "";
+    if (data.assigned && subsectionId) {
+      await loadRooms();
+      setStatus(`Materiaal «${data.material.name}» opgeslagen en gekoppeld aan component`, "ok");
+    } else {
+      setStatus(
+        `Materiaal «${data.material.name}» opgeslagen — kies Component opslaan om te koppelen`,
+        "ok",
+      );
+    }
+  })().catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
+});
+
 function updateMaterialQuantityHint(): void {
-  const hint = materialBlockEl?.querySelector(".hint");
+  const hint = materialBlockEl?.querySelector(".hint:last-of-type") || materialBlockEl?.querySelector(".hint");
   if (!(hint instanceof HTMLElement)) return;
   if (selectedIsKierdichting()) {
     hint.textContent =
       "Rubriek 9 (kierdichting): lengte in meters wordt opgeslagen (pad ≥2 punten of gesloten omtrek). Geen oppervlakte.";
   } else {
     hint.textContent =
-      "Kies rubriek + subrubriek en een catalogusmateriaal. Nodig voor de berekening gevelwering per VR.";
+      "Kies rubriek + subrubriek en een catalogusmateriaal, of maak een eigen materiaal. Nodig voor de berekening gevelwering per VR.";
   }
 }
 
@@ -3160,6 +3784,7 @@ backPickerBtn.addEventListener("click", () => {
   endCalibrate();
   clearMeasure(false);
   selectedSetIds.clear();
+  constituentSigns.clear();
   booleanPreview = null;
   workspacePanelEl.classList.add("hidden");
   pickerPanelEl.classList.remove("hidden");
@@ -3237,6 +3862,7 @@ nudgeUpBtn.addEventListener("click", () => nudgeCurrent(0, -0.01));
 nudgeDownBtn.addEventListener("click", () => nudgeCurrent(0, 0.01));
 
 syncPendingRoomButtons();
+syncEigenOnlyFilterUi();
 
 function connect(): void {
   setStatus("Connecting…", "busy");
@@ -3280,4 +3906,5 @@ function connect(): void {
 
 buildingInput.value = buildingId;
 initPasswordToggles();
+initEngineerLayoutSplit();
 connect();

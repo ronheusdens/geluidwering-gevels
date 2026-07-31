@@ -45,10 +45,15 @@
         <a id="engineer-ga-link" class="secondary-link hidden" href="/ga.html">Berekening gevelwering</a>
       </div>
 
-      <section class="panel engineer-queue-panel">
-        <h2>Review queue</h2>
-        <div id="engineer-queue-list" class="admin-projects-list"></div>
-      </section>
+      <details class="panel tools-panel engineer-queue-panel" id="engineer-queue-bar" open>
+        <summary class="tools-panel-toggle">
+          <strong>Review queue</strong>
+          <span class="tools-panel-chevron" aria-hidden="true"></span>
+        </summary>
+        <div class="tools-panel-main engineer-queue-body">
+          <div id="engineer-queue-list" class="admin-projects-list"></div>
+        </div>
+      </details>
 
       <section class="panel hidden engineer-workspace-panel" id="engineer-review-panel">
         <div class="engineer-workspace-head">
@@ -168,6 +173,14 @@
               </div>
             </div>
           </div>
+
+          <div
+            class="engineer-split-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Breedte rechterpaneel aanpassen"
+            title="Sleep om breedte aan te passen"
+          ></div>
 
           <aside class="engineer-sidebar">
             <fieldset id="engineer-tools-fieldset">

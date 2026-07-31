@@ -2,7 +2,10 @@
 -- app-gevelwering DDL 0.2.14 seed: catalogusGG.pdf → app_gevelwering.material
 
 BEGIN;
-DELETE FROM app_gevelwering.material;
+-- Only refresh DGMR catalog seed rows; preserve eigen and any other non-catalog sources
+-- (e.g. admin-created P##### that were mistakenly tagged catalogusGG.pdf).
+DELETE FROM app_gevelwering.material
+ WHERE source IN ('catalogusGG.pdf', 'GL.cat');
 
 INSERT INTO app_gevelwering.material (catalog_index, catalog_id, material_no, master_category, name, category, thickness_mm, weight_kg_m2, ra_dba, source_ref, r_63_hz, r_125_hz, r_250_hz, r_500_hz, r_1000_hz, r_2000_hz, spectrum_ok, supplier, phone, buildup, cavity_fill, laminate, glass_t1_mm, glass_cavity_mm, glass_t2_mm, rqa_dba, c_dm3_s, dna_dba, height_mm, depth_mm, length_mm, sh_mm, doorlaat_m2_m, r_db, source) VALUES
   (0, 'D00118', 118, 'Elementen', 'Triplex 4 mm', NULL, 4.0, 4.0, 11.7, 'IL-HR-13-01aai en w...', 0.0, 3.0, 9.0, 12.0, 18.0, 26.0, TRUE, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ARRAY[0.0, 3.0, 9.0, 12.0, 18.0, 26.0]::double precision[], 'catalogusGG.pdf'),

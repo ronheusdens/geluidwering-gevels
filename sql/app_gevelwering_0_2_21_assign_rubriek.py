@@ -355,7 +355,8 @@ def main() -> int:
             "COPY ("
             "SELECT id::text, COALESCE(master_category,''), COALESCE(name,''), "
             "COALESCE(category,''), COALESCE(rubriek_nr::text,''), "
-            "COALESCE(subrubriek_nr::text,'') FROM app_gevelwering.material"
+            "COALESCE(subrubriek_nr::text,''), COALESCE(source,'') "
+            "FROM app_gevelwering.material"
             ") TO STDOUT WITH (FORMAT csv)",
         ],
         capture_output=True,
@@ -368,10 +369,15 @@ def main() -> int:
     reader = csv.reader(io.StringIO(proc.stdout))
     updates: list[str] = []
     counts: dict[int, int] = {i: 0 for i in range(1, 10)}
+    skipped_eigen = 0
     for row in reader:
         if len(row) < 6:
             continue
         mid, master, name, category, rub_s, sub_s = row[:6]
+        source = row[6] if len(row) > 6 else ""
+        if source.strip().lower() == "eigen":
+            skipped_eigen += 1
+            continue
         rub = assign_rubriek(master, name)
         sub = assign_sub(rub, name)
         if (rub, sub) not in SUB_NAMES:
@@ -410,7 +416,7 @@ def main() -> int:
             print(apply.stderr, file=sys.stderr)
             return 1
 
-    print(f"material rubriek assign: updated={len(updates)}")
+    print(f"material rubriek assign: updated={len(updates)} skipped_eigen={skipped_eigen}")
     for nr in range(1, 10):
         print(f"  rubriek {nr}: {counts.get(nr, 0)}")
     return 0

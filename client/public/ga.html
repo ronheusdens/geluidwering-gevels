@@ -150,41 +150,25 @@
 
           <div class="ga-col">
             <h2>Vlakken</h2>
-            <p class="hint" id="ga-vlak-facade-hint">Selecteer een VR in het midden; dan verschijnen alleen gevelcomponenten van die VR.</p>
+            <p class="hint" id="ga-vlak-facade-hint">Selecteer een VR in het midden; dan verschijnen alleen gevelcomponenten van die VR. Materiaal koppel je op de geveltekening (componentdefinitie), niet hier.</p>
             <form id="ga-vlak-form" class="form">
               <label class="block-label">Gevelcomponent (voor gekozen VR)
-                <select id="ga-vlak-facade" class="ga-facade-select" size="5">
+                <select id="ga-vlak-facade" class="ga-facade-select" size="5" title="Materiaal staat op de gevelcomponent; wijzig het op de geveltekening">
                   <option value="">— selecteer eerst een VR —</option>
                 </select>
               </label>
               <p class="ga-room-preview is-empty" id="ga-vlak-facade-preview">—</p>
               <label>Omschrijving vlak <input id="ga-vlak-name" maxlength="80" placeholder="bijv. voorzijde" /></label>
               <label><span id="ga-vlak-qty-label">S [m²]</span> <input id="ga-vlak-area" type="number" min="0" step="0.01" value="0" /></label>
-              <label>CL [dB] <input id="ga-vlak-cl" type="number" step="0.1" value="0" title="Geluidsniveaucorrectie" /></label>
-              <label>Cg [dB] <input id="ga-vlak-cg" type="number" step="0.1" value="0" title="Gevelstructuurcorrectie" /></label>
+              <label>CL [dB] <input id="ga-vlak-cl" type="number" step="0.1" min="0" max="100" value="0" title="Geluidsniveaucorrectie (telt mee via het grootste geveloppervlak)" /></label>
+              <label>Cg [dB] <input id="ga-vlak-cg" type="number" step="0.1" value="0" title="Gevelstructuurcorrectie (telt mee via het grootste geveloppervlak)" /></label>
               <label class="inline-check"><input id="ga-vlak-gak" type="checkbox" checked /> Meenemen in GA;k (Stot)</label>
+              <p class="hint" id="ga-vlak-edit-hint">CL en Cg tellen 1:1 mee in GA en GA;k (D<sub>2m,nT</sub> = R′ + Cg + Ruimte + CL). Wijzig CL en zie de resultaten direct meelopen; of klik <strong>Herberekenen GA / GA;k</strong>.</p>
               <div class="actions">
-                <button type="submit">Vlak toevoegen</button>
-                <button type="button" id="ga-custom-mat-toggle" class="secondary">Eigen materiaal…</button>
+                <button type="submit" id="ga-vlak-save-btn">Vlak toevoegen</button>
+                <button type="button" id="ga-vlak-cancel-btn" class="secondary hidden">Annuleer bewerken</button>
               </div>
             </form>
-            <div id="ga-custom-mat-panel" class="ga-custom-mat hidden">
-              <h3>Eigen materiaal</h3>
-              <p class="hint">Wordt gekoppeld aan de geselecteerde gevelcomponent; daarna kun je het vlak toevoegen.</p>
-              <form id="ga-custom-mat-form" class="form">
-                <label>Rubriek
-                  <select id="ga-custom-mat-rubriek" required>
-                    <option value="">— kies rubriek —</option>
-                  </select>
-                </label>
-                <label>Naam <input id="ga-custom-mat-name" maxlength="120" required placeholder="bijv. eigen glas 6-12-4" /></label>
-                <label>RA [dB] <input id="ga-custom-mat-ra" type="number" min="0" max="100" step="0.1" required value="30" /></label>
-                <div class="actions">
-                  <button type="submit">Opslaan en koppelen</button>
-                  <button type="button" id="ga-custom-mat-cancel" class="secondary">Annuleren</button>
-                </div>
-              </form>
-            </div>
             <ul id="ga-vlak-list" class="drawing-list"></ul>
             <div class="ga-results" id="ga-vr-results" aria-live="polite">
               <h3>Resultaten VR</h3>
@@ -196,13 +180,18 @@
                 <div><dt>GA</dt><dd id="ga-res-ga">—</dd></div>
                 <div><dt>Lbi</dt><dd id="ga-res-lbi">—</dd></div>
                 <div><dt>GA;k</dt><dd id="ga-res-gak">—</dd></div>
+                <div><dt>Lbi;k</dt><dd id="ga-res-lbik">—</dd></div>
+                <div><dt>Toets (≤&nbsp;33&nbsp;dB)</dt><dd id="ga-res-toets">—</dd></div>
               </dl>
+              <div class="actions">
+                <button type="button" id="ga-recalc-btn" class="secondary">Herberekenen GA / GA;k</button>
+              </div>
             </div>
           </div>
         </div>
       </section>
     </section>
   </main>
-  <script type="module" src="/ga.js?v=vlak-merge"></script>
+  <script type="module" src="/ga.js?v=cl-live"></script>
 </body>
 </html>

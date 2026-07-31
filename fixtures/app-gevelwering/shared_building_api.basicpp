@@ -447,8 +447,8 @@ END PROCEDURE
 
 REM --- Admin material catalog (app_gevelwering.material / catalogusGG.pdf) ---
 
-PROCEDURE API_AdminListMaterials(session_token$, q$, category$, limit$, offset$) AS STRING
-    DIM sql$, rid%, n%, i%, out$, t$, username$, qq$, cat$, lim$, off$, total$
+PROCEDURE API_AdminListMaterials(session_token$, q$, category$, limit$, offset$, source_filter$) AS STRING
+    DIM sql$, rid%, n%, i%, out$, t$, username$, qq$, cat$, lim$, off$, total$, sfilt$
     DIM mid$, cid$, mno$, mname$, mcat$, mmaster$, thick$, wt$, ra$
     DIM r63$, r125$, r250$, r500$, r1k$, r2k$, r4k$, rw$, c$, ctr$
     DIM gt1$, gcav$, gt2$, bref$, src$, sok$
@@ -480,6 +480,7 @@ PROCEDURE API_AdminListMaterials(session_token$, q$, category$, limit$, offset$)
     cat$ = SUBSTITUTE$(category$, "'", "''")
     lim$ = SUBSTITUTE$(limit$, "'", "''")
     off$ = SUBSTITUTE$(offset$, "'", "''")
+    sfilt$ = LCASE$(SUBSTITUTE$(source_filter$, "'", "''"))
     IF lim$ = "" THEN
         lim$ = "10"
     END IF
@@ -511,6 +512,13 @@ PROCEDURE API_AdminListMaterials(session_token$, q$, category$, limit$, offset$)
             END IF
         ELSE
             sql$ = sql$ + " AND master_category = '" + cat$ + "'"
+        END IF
+    END IF
+    IF sfilt$ = "eigen" THEN
+        sql$ = sql$ + " AND source = 'eigen'"
+    ELSE
+        IF sfilt$ = "catalogus" OR sfilt$ = "catalog" THEN
+            sql$ = sql$ + " AND COALESCE(source, '') <> 'eigen'"
         END IF
     END IF
     rid% = POSTGRES_QUERY(g_conn%, sql$)
@@ -555,6 +563,13 @@ PROCEDURE API_AdminListMaterials(session_token$, q$, category$, limit$, offset$)
             END IF
         ELSE
             sql$ = sql$ + " AND master_category = '" + cat$ + "'"
+        END IF
+    END IF
+    IF sfilt$ = "eigen" THEN
+        sql$ = sql$ + " AND source = 'eigen'"
+    ELSE
+        IF sfilt$ = "catalogus" OR sfilt$ = "catalog" THEN
+            sql$ = sql$ + " AND COALESCE(source, '') <> 'eigen'"
         END IF
     END IF
     sql$ = sql$ + " ORDER BY master_category, category, material_no ASC LIMIT " + lim$ + " OFFSET " + off$
@@ -820,7 +835,14 @@ PROCEDURE API_AdminSaveMaterial(session_token$, material_id$, catalog_id$, maste
     at2$ = SUBSTITUTE$(glass_t2$, "'", "''")
     src$ = SUBSTITUTE$(source$, "'", "''")
     IF src$ = "" THEN
-        src$ = "catalogusGG.pdf"
+        src$ = "eigen"
+    END IF
+    REM New rows and custom catalog ids (P…/E…, not DGMR D…) must not use catalog seed sources.
+    IF mid$ = "" THEN
+        src$ = "eigen"
+    END IF
+    IF (src$ = "catalogusGG.pdf" OR src$ = "GL.cat") AND LEFT$(UCASE$(cid$), 1) <> "D" THEN
+        src$ = "eigen"
     END IF
     IF sok$ = "1" OR sok$ = "true" OR sok$ = "t" OR sok$ = "yes" THEN
         sok_sql$ = "true"

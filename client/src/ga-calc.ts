@@ -11,9 +11,14 @@
  *   Lbi    = Lb − GA
  *   GA;k   = GA − 10·log10(max(V/Stot, 3) / (6·T))
  *            Stot = som S van vlakken met meenemen_gak (lengte telt niet mee)
+ *   Lbi;k  = Lb − GA;k   (karakteristiek binnenniveau)
+ *   Toets  = Lbi;k ≤ 33 dB (grenswaarde) → Voldoet
  */
 
 export const CR_DB = 3;
+
+/** Grenswaarde karakteristiek binnenniveau Lbi;k (dB) voor toetsing VG/VR. */
+export const GRENZWAARDE_LBIK_DB = 33;
 
 export function round1(x: number): number {
   return Math.round(Number(x) * 10) / 10;
@@ -73,6 +78,9 @@ export type GaVrInput = {
   geluidsbelasting_dba: number;
   vlakken: GaVlakInput[];
   cr_db?: number;
+  /** Optional VR-level overrides (e.g. form CL/Cg while editing). */
+  cl_db?: number;
+  cg_db?: number;
 };
 
 export type GaElementResult = {
@@ -103,6 +111,12 @@ export type GaVrResult = {
   lbi_dba: number | null;
   gak_dba: number | null;
   gak_corr_db: number | null;
+  /** Karakteristiek binnenniveau Lb − GA;k. */
+  lbik_dba: number | null;
+  /** Vereiste GA;k = Lb − 33. */
+  gak_required_dba: number | null;
+  /** Lbi;k ≤ 33 dB. */
+  voldoet: boolean | null;
 };
 
 export function computeVrGa(input: GaVrInput): GaVrResult {
@@ -111,6 +125,12 @@ export function computeVrGa(input: GaVrInput): GaVrResult {
   const Lb = Number(input.geluidsbelasting_dba);
   const Cr = input.cr_db != null ? Number(input.cr_db) : CR_DB;
   const vlakken = Array.isArray(input.vlakken) ? input.vlakken : [];
+
+  const emptyToets = {
+    lbik_dba: null as number | null,
+    gak_required_dba: null as number | null,
+    voldoet: null as boolean | null,
+  };
 
   const elements: GaElementResult[] = [];
   for (const v of vlakken) {
@@ -158,6 +178,7 @@ export function computeVrGa(input: GaVrInput): GaVrResult {
       lbi_dba: null,
       gak_dba: null,
       gak_corr_db: null,
+      ...emptyToets,
     };
   }
 
@@ -170,6 +191,12 @@ export function computeVrGa(input: GaVrInput): GaVrResult {
       cl = e.cl_db;
       cg = e.cg_db;
     }
+  }
+  if (input.cl_db != null && Number.isFinite(Number(input.cl_db))) {
+    cl = Number(input.cl_db);
+  }
+  if (input.cg_db != null && Number.isFinite(Number(input.cg_db))) {
+    cg = Number(input.cg_db);
   }
 
   for (const e of elements) {
@@ -193,6 +220,7 @@ export function computeVrGa(input: GaVrInput): GaVrResult {
       lbi_dba: null,
       gak_dba: null,
       gak_corr_db: null,
+      ...emptyToets,
     };
   }
 
@@ -201,6 +229,9 @@ export function computeVrGa(input: GaVrInput): GaVrResult {
   const lbi = Number.isFinite(Lb) ? Lb - ga : null;
   const gakCorr = stot > 0 ? gakCorrectionDb(V, T, stot) : null;
   const gak = gakCorr != null ? ga - gakCorr : null;
+  const gakRequired = Number.isFinite(Lb) ? Lb - GRENZWAARDE_LBIK_DB : null;
+  const lbik = gak != null && Number.isFinite(Lb) ? Lb - gak : null;
+  const voldoet = lbik != null ? lbik <= GRENZWAARDE_LBIK_DB : null;
 
   return {
     ok: true,
@@ -218,5 +249,8 @@ export function computeVrGa(input: GaVrInput): GaVrResult {
     lbi_dba: lbi,
     gak_dba: gak,
     gak_corr_db: gakCorr,
+    lbik_dba: lbik,
+    gak_required_dba: gakRequired,
+    voldoet,
   };
 }

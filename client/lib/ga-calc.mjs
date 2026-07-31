@@ -11,9 +11,14 @@
  *   Lbi    = Lb − GA
  *   GA;k   = GA − 10·log10(max(V/Stot, 3) / (6·T))
  *            Stot = som S van vlakken met meenemen_gak (lengte telt niet mee)
+ *   Lbi;k  = Lb − GA;k
+ *   Toets  = Lbi;k ≤ 33 dB → Voldoet
  */
 
 export const CR_DB = 3;
+
+/** Grenswaarde karakteristiek binnenniveau Lbi;k (dB). */
+export const GRENZWAARDE_LBIK_DB = 33;
 
 /** @param {number} x */
 export function round1(x) {
@@ -152,6 +157,9 @@ export function computeVrGa(input) {
       lbi_dba: null,
       gak_dba: null,
       gak_corr_db: null,
+      lbik_dba: null,
+      gak_required_dba: null,
+      voldoet: null,
     };
   }
 
@@ -165,6 +173,12 @@ export function computeVrGa(input) {
       cl = e.cl_db;
       cg = e.cg_db;
     }
+  }
+  if (input.cl_db != null && Number.isFinite(Number(input.cl_db))) {
+    cl = Number(input.cl_db);
+  }
+  if (input.cg_db != null && Number.isFinite(Number(input.cg_db))) {
+    cg = Number(input.cg_db);
   }
 
   for (const e of elements) {
@@ -188,6 +202,9 @@ export function computeVrGa(input) {
       lbi_dba: null,
       gak_dba: null,
       gak_corr_db: null,
+      lbik_dba: null,
+      gak_required_dba: null,
+      voldoet: null,
     };
   }
 
@@ -196,6 +213,9 @@ export function computeVrGa(input) {
   const lbi = Number.isFinite(Lb) ? Lb - ga : null;
   const gakCorr = stot > 0 ? gakCorrectionDb(V, T, stot) : null;
   const gak = gakCorr != null ? ga - gakCorr : null;
+  const gakRequired = Number.isFinite(Lb) ? Lb - GRENZWAARDE_LBIK_DB : null;
+  const lbik = gak != null && Number.isFinite(Lb) ? Lb - gak : null;
+  const voldoet = lbik != null ? lbik <= GRENZWAARDE_LBIK_DB : null;
 
   return {
     ok: true,
@@ -213,5 +233,8 @@ export function computeVrGa(input) {
     lbi_dba: lbi,
     gak_dba: gak,
     gak_corr_db: gakCorr,
+    lbik_dba: lbik,
+    gak_required_dba: gakRequired,
+    voldoet,
   };
 }

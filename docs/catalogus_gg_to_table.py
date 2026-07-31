@@ -370,7 +370,10 @@ def write_pg_seed(rows: list[dict], path: Path) -> None:
         "-- acoustics DDL 0.2.14 seed: catalogusGG.pdf → app_gevelwering.material",
         "",
         "BEGIN;",
-        "DELETE FROM app_gevelwering.material;",
+        "-- Only refresh DGMR catalog seed rows; preserve eigen and any other non-catalog sources",
+        "-- (e.g. admin-created P##### that were mistakenly tagged catalogusGG.pdf).",
+        "DELETE FROM app_gevelwering.material",
+        " WHERE source IN ('catalogusGG.pdf', 'GL.cat');",
         "",
     ]
     batch: list[str] = []
