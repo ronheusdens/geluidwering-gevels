@@ -161,6 +161,311 @@ function initEngineerLayoutSplit(root = document) {
   });
 }
 
+// src/project-menu.ts
+var RECENT_KEY = "app-gevelwering-recent-projects";
+var RECENT_MAX = 8;
+function parseJsonOk(raw) {
+  if (raw.startsWith("ERROR")) throw new Error(raw);
+  return JSON.parse(raw);
+}
+function projectTitle(meta) {
+  const label = (meta.label || "").trim();
+  const ref = (meta.external_ref || "").trim();
+  if (label && ref) return `${label} (${ref})`;
+  if (label) return label;
+  if (ref) return ref;
+  const id = meta.building_id || "";
+  return id ? `${id.slice(0, 8)}\u2026` : "Geen project";
+}
+function loadRecentProjects() {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((p) => p?.building_id) : [];
+  } catch {
+    return [];
+  }
+}
+function rememberRecentProject(entry) {
+  const id = entry.building_id.trim();
+  if (!id) return;
+  const next = {
+    building_id: id,
+    label: (entry.label || "").trim(),
+    external_ref: (entry.external_ref || "").trim() || void 0,
+    at: Date.now()
+  };
+  const rest = loadRecentProjects().filter((p) => p.building_id !== id);
+  localStorage.setItem(RECENT_KEY, JSON.stringify([next, ...rest].slice(0, RECENT_MAX)));
+}
+function removeRecentProject(buildingId) {
+  const id = buildingId.trim();
+  if (!id) return;
+  localStorage.setItem(
+    RECENT_KEY,
+    JSON.stringify(loadRecentProjects().filter((p) => p.building_id !== id))
+  );
+}
+async function cleanupProjectFolder(buildingId, headers) {
+  try {
+    await fetch("/api/reports/cleanup-project-folder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({ building_id: buildingId })
+    });
+  } catch {
+  }
+}
+function mountProjectMenu(root, host) {
+  root.classList.add("file-menu");
+  root.innerHTML = `
+    <div class="file-menu-bar">
+      <details class="file-menu-details" id="pm-root">
+        <summary class="file-menu-summary">Bestand</summary>
+        <ul class="file-menu-list" role="menu">
+          <li><button type="button" role="menuitem" data-act="open">Openen\u2026</button></li>
+          <li class="file-menu-recent-wrap">
+            <details class="file-menu-recent">
+              <summary>Recent</summary>
+              <ul class="file-menu-recent-list" id="pm-recent"></ul>
+            </details>
+          </li>
+          <li><button type="button" role="menuitem" data-act="save">Project opslaan</button></li>
+          <li><button type="button" role="menuitem" data-act="rename">Hernoemen\u2026</button></li>
+          <li><button type="button" role="menuitem" data-act="delete" class="danger">Verwijderen\u2026</button></li>
+        </ul>
+      </details>
+      <span class="file-menu-project-title" id="pm-title" aria-live="polite">Geen project</span>
+    </div>
+    <dialog class="file-menu-dialog" id="pm-open-dialog">
+      <form method="dialog" class="file-menu-dialog-form">
+        <h2>Project openen</h2>
+        <p class="hint">Kies een lopend project om verder te werken.</p>
+        <ul class="file-menu-project-list" id="pm-open-list"></ul>
+        <p class="hint hidden" id="pm-open-empty">Geen openstaande projecten.</p>
+        <div class="actions">
+          <button type="submit" value="cancel" class="secondary">Annuleren</button>
+        </div>
+      </form>
+    </dialog>
+  `;
+  const detailsEl = root.querySelector("#pm-root");
+  const titleEl = root.querySelector("#pm-title");
+  const recentEl = root.querySelector("#pm-recent");
+  const dialogEl = root.querySelector("#pm-open-dialog");
+  const openListEl = root.querySelector("#pm-open-list");
+  const openEmptyEl = root.querySelector("#pm-open-empty");
+  function status(state, text) {
+    host.onStatus?.(state, text);
+  }
+  function refreshTitle() {
+    const id = host.getBuildingId();
+    const meta = host.getProjectMeta();
+    const title = projectTitle({ ...meta, building_id: id });
+    titleEl.textContent = id ? title : "Geen project";
+    host.setTitle?.(id ? title : "Geen project");
+  }
+  function rememberCurrent() {
+    const id = host.getBuildingId();
+    if (!id) return;
+    const meta = host.getProjectMeta();
+    rememberRecentProject({
+      building_id: id,
+      label: meta.label,
+      external_ref: meta.external_ref
+    });
+    renderRecent();
+    refreshTitle();
+  }
+  function closeMenu() {
+    detailsEl.open = false;
+    const recent = root.querySelector(".file-menu-recent");
+    if (recent) recent.open = false;
+  }
+  function renderRecent() {
+    recentEl.innerHTML = "";
+    const items = loadRecentProjects();
+    if (!items.length) {
+      const li = document.createElement("li");
+      li.className = "hint";
+      li.textContent = "Nog geen recente projecten";
+      recentEl.appendChild(li);
+      return;
+    }
+    for (const p of items) {
+      const li = document.createElement("li");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = projectTitle(p);
+      btn.addEventListener("click", () => {
+        closeMenu();
+        void openProject2(p.building_id);
+      });
+      li.appendChild(btn);
+      recentEl.appendChild(li);
+    }
+  }
+  async function openProject2(buildingId) {
+    status("busy", "Project openen\u2026");
+    try {
+      await host.openBuilding(buildingId);
+      rememberCurrent();
+      status("ok", "Project geopend");
+    } catch (err) {
+      status("err", err instanceof Error ? err.message : String(err));
+    }
+  }
+  async function showOpenDialog() {
+    const token = host.getToken();
+    if (!token) {
+      status("err", "Log eerst in");
+      return;
+    }
+    closeMenu();
+    openListEl.innerHTML = "";
+    openEmptyEl.classList.add("hidden");
+    status("busy", "Projecten laden\u2026");
+    try {
+      const ret = await host.invokeString("API_EngineerListProjects", [token]);
+      const data = parseJsonOk(ret);
+      const projects = data.projects || [];
+      if (!projects.length) {
+        openEmptyEl.classList.remove("hidden");
+      }
+      for (const p of projects) {
+        const li = document.createElement("li");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        const title = projectTitle(p);
+        btn.textContent = p.customer_name ? `${title} \u2014 ${p.customer_name}` : title;
+        if (p.project_status) {
+          btn.title = p.project_status;
+        }
+        btn.addEventListener("click", () => {
+          dialogEl.close();
+          void openProject2(p.building_id);
+        });
+        li.appendChild(btn);
+        openListEl.appendChild(li);
+      }
+      status("ok", `${projects.length} project(en)`);
+      if (typeof dialogEl.showModal === "function") dialogEl.showModal();
+      else dialogEl.setAttribute("open", "");
+    } catch (err) {
+      status("err", err instanceof Error ? err.message : String(err));
+    }
+  }
+  async function saveProject() {
+    closeMenu();
+    if (!host.getBuildingId()) {
+      status("err", "Geen project geselecteerd");
+      return;
+    }
+    status("busy", "Project opslaan\u2026");
+    try {
+      await host.saveProject();
+      rememberCurrent();
+      status("ok", "Project opgeslagen");
+    } catch (err) {
+      status("err", err instanceof Error ? err.message : String(err));
+    }
+  }
+  async function renameProject() {
+    closeMenu();
+    const token = host.getToken();
+    const id = host.getBuildingId();
+    if (!token || !id) {
+      status("err", "Geen project geselecteerd");
+      return;
+    }
+    const meta = host.getProjectMeta();
+    const label = window.prompt("Projectnaam (label)", meta.label || "");
+    if (label === null) return;
+    const externalRef = window.prompt("Werknummer / externe referentie", meta.external_ref || "");
+    if (externalRef === null) return;
+    status("busy", "Hernoemen\u2026");
+    try {
+      const ret = await host.invokeString("API_RenameProject", [
+        token,
+        id,
+        label.trim(),
+        externalRef.trim()
+      ]);
+      const data = parseJsonOk(ret);
+      const next = {
+        label: data.label ?? label.trim(),
+        external_ref: data.external_ref ?? externalRef.trim()
+      };
+      host.onProjectRenamed?.(next);
+      rememberRecentProject({ building_id: id, ...next });
+      renderRecent();
+      refreshTitle();
+      status("ok", "Project hernoemd");
+    } catch (err) {
+      status("err", err instanceof Error ? err.message : String(err));
+    }
+  }
+  async function deleteProject() {
+    closeMenu();
+    const token = host.getToken();
+    const id = host.getBuildingId();
+    if (!token || !id) {
+      status("err", "Geen project geselecteerd");
+      return;
+    }
+    const title = projectTitle({ ...host.getProjectMeta(), building_id: id });
+    if (!window.confirm(
+      `Project \xAB${title}\xBB definitief verwijderen?
+Dit wist berekeningen, tekeningen en rapportmappen. Dit kan niet ongedaan worden gemaakt.`
+    )) {
+      return;
+    }
+    status("busy", "Project verwijderen\u2026");
+    try {
+      const ret = await host.invokeString("API_EngineerDeleteProject", [token, id]);
+      parseJsonOk(ret);
+      await cleanupProjectFolder(id, host.apiAuthHeaders());
+      removeRecentProject(id);
+      renderRecent();
+      await host.onProjectDeleted?.();
+      refreshTitle();
+      status("ok", "Project verwijderd");
+    } catch (err) {
+      status("err", err instanceof Error ? err.message : String(err));
+    }
+  }
+  root.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("button[data-act]");
+    if (!btn || !root.contains(btn)) return;
+    const act = btn.dataset.act;
+    if (act === "open") void showOpenDialog();
+    else if (act === "save") void saveProject();
+    else if (act === "rename") void renameProject();
+    else if (act === "delete") void deleteProject();
+  });
+  document.addEventListener("click", (ev) => {
+    if (!detailsEl.open) return;
+    if (root.contains(ev.target)) return;
+    closeMenu();
+  });
+  renderRecent();
+  refreshTitle();
+  return {
+    refreshTitle,
+    rememberCurrent,
+    setEnabled(on) {
+      root.classList.toggle("disabled", !on);
+      for (const b of root.querySelectorAll("button, summary")) {
+        if (b instanceof HTMLElement) {
+          if (on) b.removeAttribute("aria-disabled");
+          else b.setAttribute("aria-disabled", "true");
+        }
+      }
+    }
+  };
+}
+
 // src/geom.ts
 function shoelaceArea(points) {
   if (points.length < 3) return 0;
@@ -219,6 +524,7 @@ var userLabelEl = document.getElementById("engineer-user-label");
 var logoutBtn = document.getElementById("engineer-logout-btn");
 var refreshBtn = document.getElementById("engineer-refresh-btn");
 var gaLinkEl = document.getElementById("engineer-ga-link");
+var fileMenuRoot = document.getElementById("engineer-file-menu");
 var queueListEl = document.getElementById("engineer-queue-list");
 var reviewPanelEl = document.getElementById("engineer-review-panel");
 var projectTitleEl = document.getElementById("engineer-project-title");
@@ -295,6 +601,7 @@ var auth = null;
 var reqCounter = 0;
 var pending = /* @__PURE__ */ new Map();
 var activeProject = null;
+var projectMenu = null;
 var activeDocumentId = null;
 var pdfDoc = null;
 var pdfPageNum = 1;
@@ -345,6 +652,8 @@ function showLogin() {
   loginPanelEl.classList.remove("hidden");
   panelEl.classList.add("hidden");
   reviewPanelEl.classList.add("hidden");
+  if (fileMenuRoot) fileMenuRoot.hidden = true;
+  projectMenu?.setEnabled(false);
 }
 function showPanel(info) {
   auth = info;
@@ -352,6 +661,9 @@ function showPanel(info) {
   loginPanelEl.classList.add("hidden");
   panelEl.classList.remove("hidden");
   userLabelEl.textContent = `Signed in as ${info.display_name || info.username}`;
+  if (fileMenuRoot) fileMenuRoot.hidden = false;
+  projectMenu?.setEnabled(true);
+  projectMenu?.refreshTitle();
 }
 function send(type, payload, wantType) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -437,7 +749,7 @@ async function bootstrapAndLogin(username, password) {
 }
 async function loadQueue() {
   if (!auth?.token) return;
-  setStatus("Loading review queue\u2026", "busy");
+  setStatus("Projecten laden\u2026", "busy");
   const ret = await invokeString("API_EngineerListReviewQueue", [auth.token]);
   if (ret.startsWith("ERROR")) {
     setStatus(ret, "err");
@@ -448,28 +760,29 @@ async function loadQueue() {
   const projects = parsed.projects ?? [];
   queueListEl.innerHTML = "";
   if (projects.length === 0) {
-    queueListEl.innerHTML = `<p class="hint">No projects awaiting review.</p>`;
-    setStatus("Queue empty", "ok");
+    queueListEl.innerHTML = `<p class="hint">Geen actieve projecten (status: gegevens aangeleverd / in uitvoering / bijna afgerond). Zet de status in admin of laat de opdrachtgever tekeningen indienen. Of gebruik Bestand \u2192 Openen.</p>`;
+    setStatus("Geen actieve projecten", "ok");
     return;
   }
   for (const p of projects) {
     const card = document.createElement("article");
     card.className = "admin-project-card panel";
     const title = p.label || p.building_id.slice(0, 8);
+    const docs = Number(p.drawing_count) || 0;
     card.innerHTML = `
       <h3>${title}</h3>
-      <p class="hint">${p.customer_name} \xB7 ${statusLabel(p.project_status)} \xB7 ${p.drawing_count} drawing(s)</p>
+      <p class="hint">${p.customer_name} \xB7 ${statusLabel(p.project_status)} \xB7 ${docs} tekening(en)</p>
     `;
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = "Open for review";
+    btn.textContent = "Openen";
     btn.addEventListener("click", () => {
       void openProject(p.building_id);
     });
     card.appendChild(btn);
     queueListEl.appendChild(card);
   }
-  setStatus(`${projects.length} project(s) in queue`, "ok");
+  setStatus(`${projects.length} project(en)`, "ok");
 }
 async function openProject(buildingId) {
   if (!auth?.token) return;
@@ -507,6 +820,8 @@ async function openProject(buildingId) {
     docHintEl.textContent = "No drawings on this project.";
   }
   renderRegionList();
+  projectMenu?.rememberCurrent();
+  projectMenu?.refreshTitle();
   setStatus("Project loaded", "ok");
 }
 function normalizeRegion(raw) {
@@ -1996,6 +2311,15 @@ toolClearSidebarBtn?.addEventListener("click", () => {
     localStorage.setItem(key, panel.open ? "0" : "1");
   });
 })();
+(() => {
+  const panel = document.getElementById("engineer-project-id-bar");
+  if (!panel) return;
+  const key = "app-gevelwering-engineer-project-id-collapsed";
+  panel.open = localStorage.getItem(key) !== "1";
+  panel.addEventListener("toggle", () => {
+    localStorage.setItem(key, panel.open ? "0" : "1");
+  });
+})();
 window.addEventListener("keydown", (evt) => {
   if (evt.key === "Escape" && measure.tool !== "off") {
     clearMeasure(true);
@@ -2163,4 +2487,42 @@ reviewForm.addEventListener("submit", (evt) => {
 updateZoomLabel();
 initPasswordToggles();
 initEngineerLayoutSplit();
+if (fileMenuRoot) {
+  projectMenu = mountProjectMenu(fileMenuRoot, {
+    getToken: () => auth?.token ?? null,
+    getBuildingId: () => activeProject?.building_id || "",
+    getProjectMeta: () => ({
+      label: activeProject?.label || "",
+      external_ref: activeProject?.external_ref || ""
+    }),
+    invokeString: (name, args) => invokeString(name, args),
+    apiAuthHeaders: () => auth ? apiAuthHeaders(auth.token, true) : {},
+    openBuilding: (id) => openProject(id),
+    saveProject: async () => {
+      if (!activeProject) throw new Error("Geen project geselecteerd");
+      setStatus("Tekeningen en review worden per actie opgeslagen \u2014 projectcontext bewaard", "ok");
+    },
+    onProjectRenamed: (meta) => {
+      if (!activeProject) return;
+      activeProject.label = meta.label;
+      activeProject.external_ref = meta.external_ref;
+      projectTitleEl.textContent = activeProject.label || "Project";
+      projectMetaEl.textContent = `${activeProject.customer_name} \xB7 ${statusLabel(activeProject.project_status)} \xB7 ref ${activeProject.external_ref || "\u2014"}`;
+    },
+    onProjectDeleted: async () => {
+      activeProject = null;
+      activeDocumentId = null;
+      reviewPanelEl.classList.add("hidden");
+      projectTitleEl.textContent = "";
+      projectMetaEl.textContent = "";
+      if (gaLinkEl) gaLinkEl.classList.add("hidden");
+      await loadQueue();
+    },
+    onStatus: (state, text) => setStatus(text, state),
+    setTitle: (title) => {
+      document.title = title === "Geen project" ? "Geluidwering Gevels \u2014 Engineer review" : `${title} \u2014 Engineer`;
+    }
+  });
+  fileMenuRoot.hidden = true;
+}
 connect();

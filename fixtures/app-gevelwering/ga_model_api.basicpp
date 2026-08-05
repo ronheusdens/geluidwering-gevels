@@ -183,6 +183,119 @@ PROCEDURE API_DeleteVariant(session_token$, variant_id$) AS STRING
     RETURN out$
 END PROCEDURE
 
+PROCEDURE API_CloneVariant(session_token$, source_variant_id$, omschrijving$) AS STRING
+    DIM sql$, rid%, t$, src$, omschr$, out$
+    DIM new_id$, vg_n$, vr_n$, vl_n$, el_n$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF source_variant_id$ = "" THEN
+        RETURN "ERROR: source_variant_id is required"
+    END IF
+    src$ = SUBSTITUTE$(source_variant_id$, "'", "''")
+    omschr$ = SUBSTITUTE$(omschrijving$, "'", "''")
+    IF omschr$ = "" THEN
+        omschr$ = "Kopie"
+    END IF
+
+    sql$ = "WITH src AS ("
+    sql$ = sql$ + "SELECT * FROM app_gevelwering.variant WHERE id = '" + src$ + "'::uuid"
+    sql$ = sql$ + "), new_v AS ("
+    sql$ = sql$ + "INSERT INTO app_gevelwering.variant ("
+    sql$ = sql$ + "building_id, omschrijving, gebruiksfunctie, geluidsbelasting_dba, "
+    sql$ = sql$ + "spectrum_kind, spectrum_db, sort_order, analysis"
+    sql$ = sql$ + ") SELECT building_id, '" + omschr$ + "', gebruiksfunctie, geluidsbelasting_dba, "
+    sql$ = sql$ + "spectrum_kind, spectrum_db, sort_order + 1, analysis FROM src "
+    sql$ = sql$ + "RETURNING id"
+    sql$ = sql$ + "), vg_map AS ("
+    sql$ = sql$ + "SELECT g.id AS old_id, gen_random_uuid() AS new_id, g.building_id, "
+    sql$ = sql$ + "g.omschrijving, g.sort_order, g.analysis "
+    sql$ = sql$ + "FROM app_gevelwering.verblijfsgebied g WHERE g.variant_id = '" + src$ + "'::uuid"
+    sql$ = sql$ + "), vg_ins AS ("
+    sql$ = sql$ + "INSERT INTO app_gevelwering.verblijfsgebied "
+    sql$ = sql$ + "(id, variant_id, building_id, omschrijving, sort_order, analysis) "
+    sql$ = sql$ + "SELECT m.new_id, (SELECT id FROM new_v), m.building_id, m.omschrijving, m.sort_order, m.analysis "
+    sql$ = sql$ + "FROM vg_map m RETURNING id"
+    sql$ = sql$ + "), vr_map AS ("
+    sql$ = sql$ + "SELECT r.id AS old_id, gen_random_uuid() AS new_id, m.new_id AS new_vg_id, "
+    sql$ = sql$ + "r.building_id, r.subsection_id, r.omschrijving, r.vloer_m2, r.hoogte_m, "
+    sql$ = sql$ + "r.volume_m3, r.t0_s, r.sort_order, r.ga_dba, r.lbi_dba, r.gak_dba, r.analysis "
+    sql$ = sql$ + "FROM app_gevelwering.verblijfsruimte r "
+    sql$ = sql$ + "JOIN vg_map m ON m.old_id = r.verblijfsgebied_id"
+    sql$ = sql$ + "), vr_ins AS ("
+    sql$ = sql$ + "INSERT INTO app_gevelwering.verblijfsruimte ("
+    sql$ = sql$ + "id, verblijfsgebied_id, building_id, variant_id, subsection_id, "
+    sql$ = sql$ + "omschrijving, vloer_m2, hoogte_m, volume_m3, t0_s, sort_order, "
+    sql$ = sql$ + "ga_dba, lbi_dba, gak_dba, analysis"
+    sql$ = sql$ + ") SELECT m.new_id, m.new_vg_id, m.building_id, (SELECT id FROM new_v), m.subsection_id, "
+    sql$ = sql$ + "m.omschrijving, m.vloer_m2, m.hoogte_m, m.volume_m3, m.t0_s, m.sort_order, "
+    sql$ = sql$ + "m.ga_dba, m.lbi_dba, m.gak_dba, m.analysis FROM vr_map m RETURNING id"
+    sql$ = sql$ + "), vl_map AS ("
+    sql$ = sql$ + "SELECT v.id AS old_id, gen_random_uuid() AS new_id, m.new_id AS new_vr_id, "
+    sql$ = sql$ + "v.building_id, v.facade_subsection_id, v.omschrijving, v.area_m2, "
+    sql$ = sql$ + "v.cl_db, v.cg_db, v.meenemen_gak, v.sort_order, v.analysis, "
+    sql$ = sql$ + "COALESCE(v.orientatie, '') AS orientatie "
+    sql$ = sql$ + "FROM app_gevelwering.vlak v "
+    sql$ = sql$ + "JOIN vr_map m ON m.old_id = v.verblijfsruimte_id"
+    sql$ = sql$ + "), vl_ins AS ("
+    sql$ = sql$ + "INSERT INTO app_gevelwering.vlak ("
+    sql$ = sql$ + "id, verblijfsruimte_id, building_id, facade_subsection_id, "
+    sql$ = sql$ + "omschrijving, area_m2, cl_db, cg_db, meenemen_gak, sort_order, analysis, orientatie"
+    sql$ = sql$ + ") SELECT m.new_id, m.new_vr_id, m.building_id, m.facade_subsection_id, "
+    sql$ = sql$ + "m.omschrijving, m.area_m2, m.cl_db, m.cg_db, m.meenemen_gak, "
+    sql$ = sql$ + "m.sort_order, m.analysis, m.orientatie FROM vl_map m RETURNING id"
+    sql$ = sql$ + "), el_ins AS ("
+    sql$ = sql$ + "INSERT INTO app_gevelwering.vlak_element ("
+    sql$ = sql$ + "id, vlak_id, building_id, material_id, omschrijving, "
+    sql$ = sql$ + "area_m2, length_m, qvent, sort_order, analysis"
+    sql$ = sql$ + ") SELECT gen_random_uuid(), m.new_id, e.building_id, e.material_id, e.omschrijving, "
+    sql$ = sql$ + "e.area_m2, e.length_m, e.qvent, e.sort_order, e.analysis "
+    sql$ = sql$ + "FROM app_gevelwering.vlak_element e "
+    sql$ = sql$ + "JOIN vl_map m ON m.old_id = e.vlak_id RETURNING id"
+    sql$ = sql$ + ") SELECT (SELECT id::text FROM new_v) AS variant_id, "
+    sql$ = sql$ + "(SELECT COUNT(*)::text FROM vg_map) AS vg_count, "
+    sql$ = sql$ + "(SELECT COUNT(*)::text FROM vr_map) AS vr_count, "
+    sql$ = sql$ + "(SELECT COUNT(*)::text FROM vl_map) AS vlak_count, "
+    sql$ = sql$ + "(SELECT COUNT(*)::text FROM el_ins) AS element_count"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: clone variant failed (source not found?)"
+    END IF
+    new_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "variant_id")
+    IF new_id$ = "" THEN
+        RETURN "ERROR: clone variant failed (source not found?)"
+    END IF
+    vg_n$ = POSTGRES_GET_BY_NAME$(rid%, 0, "vg_count")
+    vr_n$ = POSTGRES_GET_BY_NAME$(rid%, 0, "vr_count")
+    vl_n$ = POSTGRES_GET_BY_NAME$(rid%, 0, "vlak_count")
+    el_n$ = POSTGRES_GET_BY_NAME$(rid%, 0, "element_count")
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true"
+    out$ = out$ + "," + CHR$(34) + "variant_id" + CHR$(34) + ":" + CHR$(34) + new_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "source_variant_id" + CHR$(34) + ":" + CHR$(34) + src$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "vg_count" + CHR$(34) + ":" + vg_n$
+    out$ = out$ + "," + CHR$(34) + "vr_count" + CHR$(34) + ":" + vr_n$
+    out$ = out$ + "," + CHR$(34) + "vlak_count" + CHR$(34) + ":" + vl_n$
+    out$ = out$ + "," + CHR$(34) + "element_count" + CHR$(34) + ":" + el_n$ + "}"
+    RETURN out$
+END PROCEDURE
+
 REM ---------------------------------------------------------------------------
 REM Verblijfsgebied + Verblijfsruimte (samen)
 REM ---------------------------------------------------------------------------
@@ -287,12 +400,13 @@ PROCEDURE API_CreateVerblijfsgebied(session_token$, variant_id$, omschrijving$, 
         t0$ = "0.5"
     END IF
 
-    REM Verify variant + subsection same building; subsection unused
+    REM Verify variant + subsection same building; subsection unused within this variant
     sql$ = "SELECT v.building_id::text AS building_id, "
     sql$ = sql$ + "COALESCE(s.area_m2::text,'') AS area_m2, "
     sql$ = sql$ + "CASE WHEN s.id IS NULL THEN 'missing' "
     sql$ = sql$ + "WHEN s.building_id IS DISTINCT FROM v.building_id THEN 'building_mismatch' "
-    sql$ = sql$ + "WHEN EXISTS (SELECT 1 FROM app_gevelwering.verblijfsruimte r WHERE r.subsection_id = s.id) THEN 'subsection_in_use' "
+    sql$ = sql$ + "WHEN EXISTS (SELECT 1 FROM app_gevelwering.verblijfsruimte r "
+    sql$ = sql$ + "WHERE r.subsection_id = s.id AND r.variant_id = v.id) THEN 'subsection_in_use' "
     sql$ = sql$ + "ELSE 'ok' END AS status "
     sql$ = sql$ + "FROM app_gevelwering.variant v "
     sql$ = sql$ + "LEFT JOIN app_gevelwering.drawing_subsection s ON s.id = '" + sub_id$ + "'::uuid "
@@ -327,11 +441,11 @@ PROCEDURE API_CreateVerblijfsgebied(session_token$, variant_id$, omschrijving$, 
     sql$ = "WITH vg AS ("
     sql$ = sql$ + "INSERT INTO app_gevelwering.verblijfsgebied (variant_id, building_id, omschrijving) "
     sql$ = sql$ + "VALUES ('" + v_id$ + "'::uuid, '" + b_id$ + "'::uuid, '" + omschr$ + "') "
-    sql$ = sql$ + "RETURNING id, building_id"
+    sql$ = sql$ + "RETURNING id, building_id, variant_id"
     sql$ = sql$ + "), vr AS ("
     sql$ = sql$ + "INSERT INTO app_gevelwering.verblijfsruimte "
-    sql$ = sql$ + "(verblijfsgebied_id, building_id, subsection_id, omschrijving, vloer_m2, hoogte_m, volume_m3, t0_s) "
-    sql$ = sql$ + "SELECT vg.id, vg.building_id, '" + sub_id$ + "'::uuid, '" + vr_omschr$ + "', "
+    sql$ = sql$ + "(verblijfsgebied_id, building_id, variant_id, subsection_id, omschrijving, vloer_m2, hoogte_m, volume_m3, t0_s) "
+    sql$ = sql$ + "SELECT vg.id, vg.building_id, vg.variant_id, '" + sub_id$ + "'::uuid, '" + vr_omschr$ + "', "
     sql$ = sql$ + vloer$ + "::double precision, " + hoogte$ + "::double precision, "
     sql$ = sql$ + vol$ + "::double precision, " + t0$ + "::double precision FROM vg "
     sql$ = sql$ + "RETURNING id, verblijfsgebied_id"
@@ -560,11 +674,12 @@ PROCEDURE API_AddVerblijfsruimte(session_token$, verblijfsgebied_id$, subsection
         t0$ = "0.5"
     END IF
 
-    sql$ = "SELECT g.building_id::text AS building_id, "
+    sql$ = "SELECT g.building_id::text AS building_id, g.variant_id::text AS variant_id, "
     sql$ = sql$ + "COALESCE(s.area_m2::text,'') AS area_m2, "
     sql$ = sql$ + "CASE WHEN s.id IS NULL THEN 'missing' "
     sql$ = sql$ + "WHEN s.building_id IS DISTINCT FROM g.building_id THEN 'building_mismatch' "
-    sql$ = sql$ + "WHEN EXISTS (SELECT 1 FROM app_gevelwering.verblijfsruimte r WHERE r.subsection_id = s.id) THEN 'subsection_in_use' "
+    sql$ = sql$ + "WHEN EXISTS (SELECT 1 FROM app_gevelwering.verblijfsruimte r "
+    sql$ = sql$ + "WHERE r.subsection_id = s.id AND r.variant_id = g.variant_id) THEN 'subsection_in_use' "
     sql$ = sql$ + "ELSE 'ok' END AS status "
     sql$ = sql$ + "FROM app_gevelwering.verblijfsgebied g "
     sql$ = sql$ + "LEFT JOIN app_gevelwering.drawing_subsection s ON s.id = '" + sub_id$ + "'::uuid "
@@ -591,8 +706,10 @@ PROCEDURE API_AddVerblijfsruimte(session_token$, verblijfsgebied_id$, subsection
     END IF
 
     sql$ = "INSERT INTO app_gevelwering.verblijfsruimte "
-    sql$ = sql$ + "(verblijfsgebied_id, building_id, subsection_id, omschrijving, vloer_m2, hoogte_m, volume_m3, t0_s) "
-    sql$ = sql$ + "VALUES ('" + vg_id$ + "'::uuid, '" + b_id$ + "'::uuid, '" + sub_id$ + "'::uuid, '" + omschr$ + "', "
+    sql$ = sql$ + "(verblijfsgebied_id, building_id, variant_id, subsection_id, omschrijving, vloer_m2, hoogte_m, volume_m3, t0_s) "
+    sql$ = sql$ + "VALUES ('" + vg_id$ + "'::uuid, '" + b_id$ + "'::uuid, "
+    sql$ = sql$ + "(SELECT variant_id FROM app_gevelwering.verblijfsgebied WHERE id = '" + vg_id$ + "'::uuid), "
+    sql$ = sql$ + "'" + sub_id$ + "'::uuid, '" + omschr$ + "', "
     sql$ = sql$ + vloer$ + "::double precision, " + hoogte$ + "::double precision, "
     sql$ = sql$ + vol$ + "::double precision, " + t0$ + "::double precision) "
     sql$ = sql$ + "RETURNING id::text AS id"
@@ -782,7 +899,7 @@ REM ---------------------------------------------------------------------------
 
 PROCEDURE API_ListVlakken(session_token$, verblijfsruimte_id$) AS STRING
     DIM sql$, rid%, n%, i%, out$, t$, vr_id$
-    DIM id$, omschr$, area$, cl$, cg$, gak$, sort$, fac$, qkind$, len$
+    DIM id$, omschr$, area$, cl$, cg$, gak$, sort$, fac$, qkind$, len$, ori$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -812,7 +929,8 @@ PROCEDURE API_ListVlakken(session_token$, verblijfsruimte_id$) AS STRING
     sql$ = sql$ + "cl_db::text AS cl_db, cg_db::text AS cg_db, meenemen_gak::text AS meenemen_gak, "
     sql$ = sql$ + "sort_order::text AS sort_order, COALESCE(facade_subsection_id::text,'') AS facade_subsection_id, "
     sql$ = sql$ + "COALESCE(analysis->>'quantity_kind','area') AS quantity_kind, "
-    sql$ = sql$ + "COALESCE(analysis->>'length_m','') AS length_m "
+    sql$ = sql$ + "COALESCE(analysis->>'length_m','') AS length_m, "
+    sql$ = sql$ + "COALESCE(orientatie,'') AS orientatie "
     sql$ = sql$ + "FROM app_gevelwering.vlak WHERE verblijfsruimte_id = '" + vr_id$ + "'::uuid "
     sql$ = sql$ + "ORDER BY sort_order ASC, created_at ASC"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
@@ -835,6 +953,7 @@ PROCEDURE API_ListVlakken(session_token$, verblijfsruimte_id$) AS STRING
         fac$ = POSTGRES_GET_BY_NAME$(rid%, i%, "facade_subsection_id")
         qkind$ = POSTGRES_GET_BY_NAME$(rid%, i%, "quantity_kind")
         len$ = POSTGRES_GET_BY_NAME$(rid%, i%, "length_m")
+        ori$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "orientatie"), CHR$(34), "")
         out$ = out$ + "{" + CHR$(34) + "vlak_id" + CHR$(34) + ":" + CHR$(34) + id$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "omschrijving" + CHR$(34) + ":" + CHR$(34) + omschr$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "area_m2" + CHR$(34) + ":" + area$
@@ -854,6 +973,7 @@ PROCEDURE API_ListVlakken(session_token$, verblijfsruimte_id$) AS STRING
         ELSE
             out$ = out$ + len$
         END IF
+        out$ = out$ + "," + CHR$(34) + "orientatie" + CHR$(34) + ":" + CHR$(34) + ori$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "facade_subsection_id" + CHR$(34) + ":"
         IF fac$ = "" THEN
             out$ = out$ + "null"
@@ -867,9 +987,9 @@ PROCEDURE API_ListVlakken(session_token$, verblijfsruimte_id$) AS STRING
     RETURN out$
 END PROCEDURE
 
-PROCEDURE API_SaveVlak(session_token$, verblijfsruimte_id$, vlak_id$, omschrijving$, area_m2$, cl_db$, cg_db$, meenemen_gak$, sort_order$, facade_subsection_id$, quantity_kind$, length_m$) AS STRING
+PROCEDURE API_SaveVlak(session_token$, verblijfsruimte_id$, vlak_id$, omschrijving$, area_m2$, cl_db$, cg_db$, meenemen_gak$, sort_order$, facade_subsection_id$, quantity_kind$, length_m$, orientatie$) AS STRING
     DIM sql$, rid%, t$, vr_id$, vl_id$, omschr$, area$, cl$, cg$, gak$, sort$, fac$, out$, created$, b_id$
-    DIM qkind$, len$, anal$
+    DIM qkind$, len$, anal$, ori$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -905,6 +1025,10 @@ PROCEDURE API_SaveVlak(session_token$, verblijfsruimte_id$, vlak_id$, omschrijvi
     fac$ = SUBSTITUTE$(facade_subsection_id$, "'", "''")
     qkind$ = LCASE$(SUBSTITUTE$(quantity_kind$, "'", "''"))
     len$ = SUBSTITUTE$(length_m$, "'", "''")
+    ori$ = UCASE$(SUBSTITUTE$(orientatie$, "'", "''"))
+    IF ori$ <> "" AND ori$ <> "N" AND ori$ <> "NO" AND ori$ <> "O" AND ori$ <> "ZO" AND ori$ <> "Z" AND ori$ <> "ZW" AND ori$ <> "W" AND ori$ <> "NW" THEN
+        RETURN "ERROR: orientatie must be empty or one of N,NO,O,ZO,Z,ZW,W,NW"
+    END IF
     IF qkind$ <> "length" THEN
         qkind$ = "area"
     END IF
@@ -944,7 +1068,7 @@ PROCEDURE API_SaveVlak(session_token$, verblijfsruimte_id$, vlak_id$, omschrijvi
     b_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "building_id")
 
     IF vlak_id$ = "" THEN
-        sql$ = "INSERT INTO app_gevelwering.vlak (verblijfsruimte_id, building_id, omschrijving, area_m2, cl_db, cg_db, meenemen_gak, sort_order, facade_subsection_id, analysis) "
+        sql$ = "INSERT INTO app_gevelwering.vlak (verblijfsruimte_id, building_id, omschrijving, area_m2, cl_db, cg_db, meenemen_gak, sort_order, facade_subsection_id, analysis, orientatie) "
         sql$ = sql$ + "VALUES ('" + vr_id$ + "'::uuid, '" + b_id$ + "'::uuid, '" + omschr$ + "', "
         sql$ = sql$ + area$ + "::double precision, " + cl$ + "::double precision, " + cg$ + "::double precision, "
         sql$ = sql$ + gak$ + "::boolean, " + sort$ + "::integer, "
@@ -953,7 +1077,7 @@ PROCEDURE API_SaveVlak(session_token$, verblijfsruimte_id$, vlak_id$, omschrijvi
         ELSE
             sql$ = sql$ + "'" + fac$ + "'::uuid"
         END IF
-        sql$ = sql$ + ", '" + SUBSTITUTE$(anal$, "'", "''") + "'::jsonb"
+        sql$ = sql$ + ", '" + SUBSTITUTE$(anal$, "'", "''") + "'::jsonb, '" + ori$ + "'"
         sql$ = sql$ + ") RETURNING id::text AS id"
         created$ = "true"
     ELSE
@@ -961,6 +1085,7 @@ PROCEDURE API_SaveVlak(session_token$, verblijfsruimte_id$, vlak_id$, omschrijvi
         sql$ = sql$ + "cl_db = " + cl$ + "::double precision, cg_db = " + cg$ + "::double precision, "
         sql$ = sql$ + "meenemen_gak = " + gak$ + "::boolean, sort_order = " + sort$ + "::integer, "
         sql$ = sql$ + "analysis = '" + SUBSTITUTE$(anal$, "'", "''") + "'::jsonb, "
+        sql$ = sql$ + "orientatie = '" + ori$ + "', "
         sql$ = sql$ + "facade_subsection_id = "
         IF fac$ = "" THEN
             sql$ = sql$ + "NULL"
@@ -1233,7 +1358,7 @@ REM ---------------------------------------------------------------------------
 
 PROCEDURE API_ListLinkedSubsections(session_token$, building_id$) AS STRING
     DIM sql$, rid%, n%, i%, out$, t$, b_id$
-    DIM sub$, vr$, omschr$, vg$
+    DIM sub$, vr$, omschr$, vg$, vid$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -1260,7 +1385,8 @@ PROCEDURE API_ListLinkedSubsections(session_token$, building_id$) AS STRING
     b_id$ = SUBSTITUTE$(building_id$, "'", "''")
 
     sql$ = "SELECT r.subsection_id::text AS subsection_id, r.id::text AS verblijfsruimte_id, "
-    sql$ = sql$ + "r.omschrijving, r.verblijfsgebied_id::text AS verblijfsgebied_id "
+    sql$ = sql$ + "r.omschrijving, r.verblijfsgebied_id::text AS verblijfsgebied_id, "
+    sql$ = sql$ + "r.variant_id::text AS variant_id "
     sql$ = sql$ + "FROM app_gevelwering.verblijfsruimte r WHERE r.building_id = '" + b_id$ + "'::uuid "
     sql$ = sql$ + "ORDER BY r.created_at ASC"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
@@ -1277,10 +1403,113 @@ PROCEDURE API_ListLinkedSubsections(session_token$, building_id$) AS STRING
         vr$ = POSTGRES_GET_BY_NAME$(rid%, i%, "verblijfsruimte_id")
         omschr$ = SUBSTITUTE$(SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "omschrijving"), CHR$(34), ""), CHR$(10), " ")
         vg$ = POSTGRES_GET_BY_NAME$(rid%, i%, "verblijfsgebied_id")
+        vid$ = POSTGRES_GET_BY_NAME$(rid%, i%, "variant_id")
         out$ = out$ + "{" + CHR$(34) + "subsection_id" + CHR$(34) + ":" + CHR$(34) + sub$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "verblijfsruimte_id" + CHR$(34) + ":" + CHR$(34) + vr$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "verblijfsgebied_id" + CHR$(34) + ":" + CHR$(34) + vg$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "variant_id" + CHR$(34) + ":" + CHR$(34) + vid$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "omschrijving" + CHR$(34) + ":" + CHR$(34) + omschr$ + CHR$(34) + "}"
+        i% = i% + 1
+    WEND
+    out$ = out$ + "]}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_CompareVariants(session_token$, building_id$, variant_ids_csv$) AS STRING
+    DIM sql$, rid%, n%, i%, out$, t$, b_id$, ids$
+    DIM sub$, vr$, omschr$, vid$, vname$, lb$, kind$, functie$, ga$, lbi$, gak$, vrnr$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF building_id$ = "" OR variant_ids_csv$ = "" THEN
+        RETURN "ERROR: building_id and variant_ids_csv are required"
+    END IF
+    b_id$ = SUBSTITUTE$(building_id$, "'", "''")
+    ids$ = SUBSTITUTE$(variant_ids_csv$, "'", "''")
+    ids$ = SUBSTITUTE$(ids$, " ", "")
+
+    sql$ = "SELECT r.subsection_id::text AS subsection_id, r.id::text AS verblijfsruimte_id, "
+    sql$ = sql$ + "r.omschrijving AS vr_omschrijving, r.variant_id::text AS variant_id, "
+    sql$ = sql$ + "v.omschrijving AS variant_omschrijving, "
+    sql$ = sql$ + "v.geluidsbelasting_dba::text AS geluidsbelasting_dba, "
+    sql$ = sql$ + "v.spectrum_kind, v.gebruiksfunctie, "
+    sql$ = sql$ + "COALESCE(r.ga_dba::text,'') AS ga_dba, "
+    sql$ = sql$ + "COALESCE(r.lbi_dba::text,'') AS lbi_dba, "
+    sql$ = sql$ + "COALESCE(r.gak_dba::text,'') AS gak_dba, "
+    sql$ = sql$ + "COALESCE(s.vr_nr,'') AS vr_nr "
+    sql$ = sql$ + "FROM app_gevelwering.verblijfsruimte r "
+    sql$ = sql$ + "JOIN app_gevelwering.variant v ON v.id = r.variant_id "
+    sql$ = sql$ + "LEFT JOIN app_gevelwering.drawing_subsection s ON s.id = r.subsection_id "
+    sql$ = sql$ + "WHERE r.building_id = '" + b_id$ + "'::uuid "
+    sql$ = sql$ + "AND r.variant_id = ANY (string_to_array('" + ids$ + "', ',')::uuid[]) "
+    sql$ = sql$ + "ORDER BY COALESCE(s.vr_nr,''), r.omschrijving, v.sort_order, v.created_at"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    n% = POSTGRES_NUM_ROWS(rid%)
+
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "building_id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "rows" + CHR$(34) + ":["
+    i% = 0
+    WHILE i% < n%
+        IF i% > 0 THEN
+            out$ = out$ + ","
+        END IF
+        sub$ = POSTGRES_GET_BY_NAME$(rid%, i%, "subsection_id")
+        vr$ = POSTGRES_GET_BY_NAME$(rid%, i%, "verblijfsruimte_id")
+        omschr$ = SUBSTITUTE$(SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "vr_omschrijving"), CHR$(34), ""), CHR$(10), " ")
+        vid$ = POSTGRES_GET_BY_NAME$(rid%, i%, "variant_id")
+        vname$ = SUBSTITUTE$(SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "variant_omschrijving"), CHR$(34), ""), CHR$(10), " ")
+        lb$ = POSTGRES_GET_BY_NAME$(rid%, i%, "geluidsbelasting_dba")
+        kind$ = POSTGRES_GET_BY_NAME$(rid%, i%, "spectrum_kind")
+        functie$ = SUBSTITUTE$(SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "gebruiksfunctie"), CHR$(34), ""), CHR$(10), " ")
+        ga$ = POSTGRES_GET_BY_NAME$(rid%, i%, "ga_dba")
+        lbi$ = POSTGRES_GET_BY_NAME$(rid%, i%, "lbi_dba")
+        gak$ = POSTGRES_GET_BY_NAME$(rid%, i%, "gak_dba")
+        vrnr$ = SUBSTITUTE$(SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "vr_nr"), CHR$(34), ""), CHR$(10), " ")
+        out$ = out$ + "{" + CHR$(34) + "subsection_id" + CHR$(34) + ":" + CHR$(34) + sub$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "verblijfsruimte_id" + CHR$(34) + ":" + CHR$(34) + vr$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "omschrijving" + CHR$(34) + ":" + CHR$(34) + omschr$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "vr_nr" + CHR$(34) + ":" + CHR$(34) + vrnr$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "variant_id" + CHR$(34) + ":" + CHR$(34) + vid$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "variant_omschrijving" + CHR$(34) + ":" + CHR$(34) + vname$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "geluidsbelasting_dba" + CHR$(34) + ":" + lb$
+        out$ = out$ + "," + CHR$(34) + "spectrum_kind" + CHR$(34) + ":" + CHR$(34) + kind$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "gebruiksfunctie" + CHR$(34) + ":" + CHR$(34) + functie$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "ga_dba" + CHR$(34) + ":"
+        IF ga$ = "" THEN
+            out$ = out$ + "null"
+        ELSE
+            out$ = out$ + ga$
+        END IF
+        out$ = out$ + "," + CHR$(34) + "lbi_dba" + CHR$(34) + ":"
+        IF lbi$ = "" THEN
+            out$ = out$ + "null"
+        ELSE
+            out$ = out$ + lbi$
+        END IF
+        out$ = out$ + "," + CHR$(34) + "gak_dba" + CHR$(34) + ":"
+        IF gak$ = "" THEN
+            out$ = out$ + "null"
+        ELSE
+            out$ = out$ + gak$
+        END IF
+        out$ = out$ + "}"
         i% = i% + 1
     WEND
     out$ = out$ + "]}"

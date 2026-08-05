@@ -6,3 +6,4 @@ docs/__pycache__/
 client/public/*.map
 .env
 .env.*
+data/

@@ -6,7 +6,8 @@
 import { loadAuth, storeAuth as persistAuth, syncSessionCookie, apiAuthHeaders } from "./auth-store";
 import { resolveBppWsUrl } from "./ws-url";
 import { initPasswordToggles } from "./password-toggle";
-import { computeVrGa, GRENZWAARDE_LBIK_DB, round1 } from "./ga-calc";
+import { computeVrGa, grenswaardeLbik, round1 } from "./ga-calc";
+import { mountProjectMenu, type ProjectMenuApi } from "./project-menu";
 
 type Envelope = {
   v: number;
@@ -43,12 +44,15 @@ type Vr = {
   gak_dba: number | null;
 };
 
+type OrientatieCode = "" | "N" | "NO" | "O" | "ZO" | "Z" | "ZW" | "W" | "NW";
+
 type Vlak = {
   vlak_id: string;
   omschrijving: string;
   area_m2: number;
   length_m?: number | null;
   quantity_kind?: "area" | "length" | string;
+  orientatie?: OrientatieCode | string;
   cl_db: number;
   cg_db: number;
   meenemen_gak: boolean;
@@ -92,6 +96,22 @@ type LinkedSub = {
   verblijfsruimte_id: string;
   verblijfsgebied_id: string;
   omschrijving: string;
+  variant_id?: string;
+};
+
+type CompareRow = {
+  subsection_id: string;
+  verblijfsruimte_id: string;
+  omschrijving: string;
+  vr_nr: string;
+  variant_id: string;
+  variant_omschrijving: string;
+  geluidsbelasting_dba: number;
+  spectrum_kind: string;
+  gebruiksfunctie: string;
+  ga_dba: number | null;
+  lbi_dba: number | null;
+  gak_dba: number | null;
 };
 
 type QueueProject = {
@@ -115,10 +135,13 @@ const logoutBtn = document.getElementById("ga-logout-btn") as HTMLButtonElement;
 const buildingForm = document.getElementById("ga-building-form") as HTMLFormElement;
 const buildingIdEl = document.getElementById("ga-building-id") as HTMLInputElement;
 const buildingMetaEl = document.getElementById("ga-building-meta") as HTMLElement;
+const buildingMetaSummaryEl = document.getElementById("ga-building-meta-summary") as HTMLElement | null;
+const projectIdBarEl = document.getElementById("ga-project-id-bar") as HTMLDetailsElement | null;
 const queueBtn = document.getElementById("ga-queue-btn") as HTMLButtonElement;
 const queueListEl = document.getElementById("ga-queue-list") as HTMLElement;
 const modelPanelEl = document.getElementById("ga-model-panel") as HTMLElement;
 const floormapLinkEl = document.getElementById("ga-floormap-link") as HTMLAnchorElement;
+const fileMenuRoot = document.getElementById("ga-file-menu") as HTMLElement | null;
 
 const variantForm = document.getElementById("ga-variant-form") as HTMLFormElement;
 const variantListEl = document.getElementById("ga-variant-list") as HTMLUListElement;
@@ -127,7 +150,12 @@ const variantFunctieEl = document.getElementById("ga-variant-functie") as HTMLSe
 const variantLbEl = document.getElementById("ga-variant-lb") as HTMLInputElement;
 const variantSpectrumEl = document.getElementById("ga-variant-spectrum") as HTMLSelectElement;
 const variantNewBtn = document.getElementById("ga-variant-new-btn") as HTMLButtonElement;
+const variantCloneBtn = document.getElementById("ga-variant-clone-btn") as HTMLButtonElement | null;
 const variantDelBtn = document.getElementById("ga-variant-del-btn") as HTMLButtonElement;
+const comparePickEl = document.getElementById("ga-compare-pick") as HTMLElement | null;
+const compareBtn = document.getElementById("ga-compare-btn") as HTMLButtonElement | null;
+const compareWrapEl = document.getElementById("ga-compare-table-wrap") as HTMLElement | null;
+const compareTableEl = document.getElementById("ga-compare-table") as HTMLTableElement | null;
 
 const vgNewBtn = document.getElementById("ga-vg-new-btn") as HTMLButtonElement;
 const vgRoomEl = document.getElementById("ga-vg-room") as HTMLSelectElement;
@@ -156,6 +184,7 @@ const vlakFacadeHintEl = document.getElementById("ga-vlak-facade-hint") as HTMLE
 const vlakFacadePreviewEl = document.getElementById("ga-vlak-facade-preview") as HTMLElement | null;
 const vlakAreaEl = document.getElementById("ga-vlak-area") as HTMLInputElement;
 const vlakQtyLabelEl = document.getElementById("ga-vlak-qty-label") as HTMLElement | null;
+const vlakOrientatieEl = document.getElementById("ga-vlak-orientatie") as HTMLSelectElement | null;
 const vlakClEl = document.getElementById("ga-vlak-cl") as HTMLInputElement | null;
 const vlakCgEl = document.getElementById("ga-vlak-cg") as HTMLInputElement | null;
 const vlakGakEl = document.getElementById("ga-vlak-gak") as HTMLInputElement;
@@ -163,6 +192,10 @@ const vlakSaveBtn = document.getElementById("ga-vlak-save-btn") as HTMLButtonEle
 const vlakCancelBtn = document.getElementById("ga-vlak-cancel-btn") as HTMLButtonElement | null;
 const vlakListEl = document.getElementById("ga-vlak-list") as HTMLUListElement;
 const recalcBtn = document.getElementById("ga-recalc-btn") as HTMLButtonElement | null;
+const reportBtn = document.getElementById("ga-report-btn") as HTMLButtonElement | null;
+const reportInboxBtn = document.getElementById("ga-report-inbox-btn") as HTMLButtonElement | null;
+const reportKindEl = document.getElementById("ga-report-kind") as HTMLSelectElement | null;
+const reportHintEl = document.getElementById("ga-report-hint") as HTMLElement | null;
 const vrResultsHintEl = document.getElementById("ga-vr-results-hint") as HTMLElement | null;
 const resSEl = document.getElementById("ga-res-s") as HTMLElement | null;
 const resRpEl = document.getElementById("ga-res-rp") as HTMLElement | null;
@@ -192,15 +225,23 @@ let selectedVrId: string | null = null;
 /** When set, vlak form updates this vlak instead of inserting. */
 let selectedVlakId: string | null = null;
 let vlakken: Vlak[] = [];
-/** VR ids whose GA/Lbi/GA;k were computed in this browser session (not stale DB snapshots). */
+/** VR ids whose GA/Lbi/GA;k were computed in this browser session (live, not only DB). */
 const freshResultVrIds = new Set<string>();
-/** Session toets result per VR (Lbi;k ≤ 33 dB). */
+/** Session toets result per VR (Lbi;k ≤ grens). */
 const vrVoldoet = new Map<string, boolean>();
+/** True when live preview or failed persist left results ahead of DB. */
+let resultsDirty = false;
 let freeRooms: RoomOpt[] = [];
 let floormapRoomsById = new Map<string, RoomOpt>();
 let vrFacades: VrFacadeOpt[] = [];
+let allLinks: LinkedSub[] = [];
 let linkedBySub = new Map<string, LinkedSub>();
 let linkedSubIds = new Set<string>();
+let compareSelectedIds = new Set<string>();
+/** Current project label for header / recent list. */
+let buildingLabel = "";
+let buildingExternalRef = "";
+let projectMenu: ProjectMenuApi | null = null;
 
 function nextRequestId(prefix: string): string {
   requestSeq += 1;
@@ -221,6 +262,8 @@ function storeAuth(info: AuthInfo | null): void {
 function showLogin(): void {
   loginPanelEl.classList.remove("hidden");
   panelEl.classList.add("hidden");
+  if (fileMenuRoot) fileMenuRoot.hidden = true;
+  projectMenu?.setEnabled(false);
 }
 
 function showPanel(info: AuthInfo): void {
@@ -229,6 +272,9 @@ function showPanel(info: AuthInfo): void {
   loginPanelEl.classList.add("hidden");
   panelEl.classList.remove("hidden");
   userLabelEl.textContent = `Ingelogd als ${info.display_name || info.username}`;
+  if (fileMenuRoot) fileMenuRoot.hidden = false;
+  projectMenu?.setEnabled(true);
+  projectMenu?.refreshTitle();
 }
 
 function send(type: string, payload: Record<string, unknown>, wantType: string): Promise<Envelope> {
@@ -314,13 +360,31 @@ async function refreshLinks(): Promise<void> {
   if (!buildingId || !auth) return;
   const ret = await invokeString("API_ListLinkedSubsections", [auth.token, buildingId]);
   const data = parseJsonOk<{ links: LinkedSub[] }>(ret);
+  allLinks = data.links || [];
+  rebuildLinkedForSelectedVariant();
+}
+
+/** Free rooms / link map are scoped to the active variant (same room may exist in other variants). */
+function rebuildLinkedForSelectedVariant(): void {
   linkedBySub = new Map();
   linkedSubIds = new Set();
-  for (const l of data.links || []) {
+  for (const l of allLinks) {
     if (!l?.subsection_id) continue;
+    if (selectedVariantId && l.variant_id && l.variant_id !== selectedVariantId) continue;
     linkedBySub.set(l.subsection_id, l);
     linkedSubIds.add(l.subsection_id);
   }
+}
+
+/** Floormap rooms already linked into a GA verblijfsgebied (current or any matching VG id). */
+function roomsForVg(vgId: string): RoomOpt[] {
+  const out: RoomOpt[] = [];
+  for (const l of allLinks) {
+    if (l.verblijfsgebied_id !== vgId) continue;
+    const room = floormapRoomsById.get(l.subsection_id);
+    if (room) out.push(room);
+  }
+  return out;
 }
 
 function vgLabelFromNr(vgNr: string | number, fallback = "Verblijfsgebied"): string {
@@ -364,17 +428,6 @@ function levelLabel(hint?: string | null): string {
 
 function isGroundLevel(hint?: string | null): boolean {
   return String(hint || "").toUpperCase() === "GROUND";
-}
-
-/** Floormap rooms already linked into a GA verblijfsgebied. */
-function roomsForVg(vgId: string): RoomOpt[] {
-  const out: RoomOpt[] = [];
-  for (const [subId, link] of linkedBySub) {
-    if (link.verblijfsgebied_id !== vgId) continue;
-    const room = floormapRoomsById.get(subId);
-    if (room) out.push(room);
-  }
-  return out;
 }
 
 function vgNrForVg(vgId: string, omschrijving?: string): number | null {
@@ -747,15 +800,21 @@ function fillFacadeSelect(): void {
   vlakFacadeEl.innerHTML = "";
   const ph = document.createElement("option");
   ph.value = "";
+  const allGroups = groupFacadesForPick(vrFacades, used);
+  const readyGroups = allGroups.filter((g) => g.ga_ready);
+  const incompleteN = allGroups.filter((g) => !g.ga_ready).length;
   ph.textContent = vrFacades.length
-    ? "— kies gevelcomponent voor deze VR —"
+    ? readyGroups.length
+      ? "— kies gevelcomponent voor deze VR —"
+      : incompleteN
+        ? "— geen complete componenten (eerst materiaal op gevel) —"
+        : "— geen componenten voor deze VR —"
     : selectedVrId
       ? "— geen componenten voor deze VR —"
       : "— selecteer eerst een VR —";
   vlakFacadeEl.appendChild(ph);
 
-  const groups = groupFacadesForPick(vrFacades, used);
-  const shown = groups.some((g) => !g.used) ? groups.filter((g) => !g.used) : groups;
+  const shown = readyGroups.some((g) => !g.used) ? readyGroups.filter((g) => !g.used) : readyGroups;
 
   for (const g of shown) {
     const o = document.createElement("option");
@@ -784,7 +843,7 @@ function fillFacadeSelect(): void {
   if (prev && [...vlakFacadeEl.options].some((o) => o.value === prev)) {
     pick = prev;
   } else {
-    const ready = shown.find((g) => g.ga_ready && !g.used) || shown.find((g) => !g.used) || shown[0];
+    const ready = shown.find((g) => !g.used) || shown[0];
     if (ready) pick = ready.primaryId;
   }
   if (pick) vlakFacadeEl.value = pick;
@@ -888,13 +947,14 @@ async function loadFacadesForSelectedVr(): Promise<void> {
       const used = new Set(
         vlakken.map((v) => v.facade_subsection_id).filter((id): id is string => Boolean(id)),
       );
-      const pickGroups = groupFacadesForPick(vrFacades, used);
+      const pickGroups = groupFacadesForPick(vrFacades, used).filter((g) => g.ga_ready);
       const merged = pickGroups.filter((g) => g.members.length > 1).length;
       const pickN = pickGroups.filter((g) => !g.used).length || pickGroups.length;
+      const incomplete = n - ready;
       vlakFacadeHintEl.textContent =
         n === 0
           ? `Geen gevelcomponenten voor VR ${vrNr}${excl ? ` (${excl} vervangen door zelfde-materiaal setbewerking)` : ""}.`
-          : `VR ${vrNr}: ${n} component${n === 1 ? "" : "en"} · ${ready} met materiaal · ${pickN} keuz${pickN === 1 ? "e" : "es"}${merged ? ` (${merged}× zelfde materiaal opgeteld)` : ""}${excl ? ` · ${excl} vervangen (zelfde materiaal)` : ""}.`;
+          : `VR ${vrNr}: ${ready} met materiaal · ${pickN} kiesbaar${merged ? ` (${merged}× zelfde materiaal opgeteld)` : ""}${incomplete ? ` · ${incomplete} zonder materiaal (niet selecteerbaar)` : ""}${excl ? ` · ${excl} vervangen (zelfde materiaal)` : ""}.`;
     }
   } catch (err) {
     vrFacades = [];
@@ -923,7 +983,7 @@ function updateFacadeHint(): void {
     vlakFacadePreviewEl.textContent = `Materiaal: ${matLabel} (wijzig op geveltekening)`;
   } else {
     vlakFacadePreviewEl.textContent =
-      "Geen materiaal op deze component — koppel het op de geveltekening, daarna hier als vlak toevoegen.";
+      "Geen materiaal — incomplete componenten staan niet in de keuzelijst; koppel eerst op de geveltekening.";
   }
   vlakFacadePreviewEl.classList.toggle("is-empty", !hasMat);
   vlakFacadePreviewEl.classList.toggle("is-warn", !hasMat);
@@ -972,6 +1032,12 @@ function onFacadePick(forceName = false): void {
   }
 }
 
+function refreshFreeRoomsFromLinks(): void {
+  rebuildLinkedForSelectedVariant();
+  freeRooms = [...floormapRoomsById.values()].filter((r) => !linkedSubIds.has(r.id));
+  fillRoomSelect();
+}
+
 async function loadVariants(): Promise<void> {
   if (!buildingId || !auth) return;
   const ret = await invokeString("API_ListVariants", [auth.token, buildingId]);
@@ -981,7 +1047,9 @@ async function loadVariants(): Promise<void> {
   if (selectedVariantId && !variants.some((v) => v.variant_id === selectedVariantId)) {
     selectedVariantId = variants[0]?.variant_id ?? null;
   }
+  refreshFreeRoomsFromLinks();
   renderVariants();
+  renderComparePick();
   const cur = variants.find((v) => v.variant_id === selectedVariantId);
   if (cur) fillVariantForm(cur);
   await loadVgs();
@@ -1014,12 +1082,133 @@ function renderVariants(): void {
     btn.addEventListener("click", () => {
       selectedVariantId = v.variant_id;
       fillVariantForm(v);
+      refreshFreeRoomsFromLinks();
       renderVariants();
+      renderComparePick();
       void loadVgs();
     });
     li.appendChild(btn);
     variantListEl.appendChild(li);
   }
+}
+
+function renderComparePick(): void {
+  if (!comparePickEl) return;
+  comparePickEl.innerHTML = "";
+  if (variants.length < 2) {
+    comparePickEl.innerHTML = `<p class="hint">Maak of kopieer een tweede variant om te vergelijken.</p>`;
+    return;
+  }
+  for (const v of variants) {
+    const label = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = v.variant_id;
+    cb.checked = compareSelectedIds.has(v.variant_id);
+    cb.addEventListener("change", () => {
+      if (cb.checked) compareSelectedIds.add(v.variant_id);
+      else compareSelectedIds.delete(v.variant_id);
+    });
+    label.appendChild(cb);
+    label.appendChild(
+      document.createTextNode(
+        ` ${v.omschrijving} · Lb ${v.geluidsbelasting_dba} dB · ${v.spectrum_kind}`,
+      ),
+    );
+    comparePickEl.appendChild(label);
+  }
+}
+
+function fmtCompareNum(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(Number(n))) return "—";
+  return String(round1(Number(n)));
+}
+
+async function runVariantCompare(): Promise<void> {
+  if (!auth || !buildingId || !compareTableEl || !compareWrapEl) return;
+  const ids = [...compareSelectedIds].filter((id) => variants.some((v) => v.variant_id === id));
+  if (ids.length < 2) throw new Error("Selecteer minstens twee varianten");
+  const ret = await invokeString("API_CompareVariants", [auth.token, buildingId, ids.join(",")]);
+  const data = parseJsonOk<{ rows: CompareRow[] }>(ret);
+  const rows = data.rows || [];
+
+  const bySub = new Map<string, { label: string; byVariant: Map<string, CompareRow> }>();
+  for (const r of rows) {
+    let entry = bySub.get(r.subsection_id);
+    if (!entry) {
+      const room = floormapRoomsById.get(r.subsection_id);
+      const label = r.vr_nr
+        ? `VR ${r.vr_nr}${r.omschrijving ? ` · ${r.omschrijving}` : ""}`
+        : r.omschrijving || r.subsection_id.slice(0, 8);
+      entry = { label: room ? vrLabelFromNr(room.vr_nr || r.vr_nr, room.label) : label, byVariant: new Map() };
+      bySub.set(r.subsection_id, entry);
+    }
+    entry.byVariant.set(r.variant_id, r);
+  }
+
+  const selectedVariants = ids
+    .map((id) => variants.find((v) => v.variant_id === id))
+    .filter((v): v is Variant => Boolean(v));
+
+  const thead = compareTableEl.querySelector("thead");
+  const tbody = compareTableEl.querySelector("tbody");
+  if (!thead || !tbody) return;
+  thead.innerHTML = "";
+  tbody.innerHTML = "";
+
+  const hr = document.createElement("tr");
+  hr.innerHTML = `<th>Ruimte</th>`;
+  for (const v of selectedVariants) {
+    const th = document.createElement("th");
+    th.innerHTML = `${esc(v.omschrijving)}<br><span class="hint">Lb ${esc(String(v.geluidsbelasting_dba))} · ${esc(v.spectrum_kind)} · ${esc(v.gebruiksfunctie)}</span>`;
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr);
+
+  const sortedSubs = [...bySub.entries()].sort((a, b) => a[1].label.localeCompare(b[1].label, "nl"));
+  for (const [, entry] of sortedSubs) {
+    const tr = document.createElement("tr");
+    const td0 = document.createElement("td");
+    td0.textContent = entry.label;
+    tr.appendChild(td0);
+
+    const cellVals: { lbik: number | null; toets: boolean | null; text: string }[] = [];
+    for (const v of selectedVariants) {
+      const r = entry.byVariant.get(v.variant_id);
+      const grens = grenswaardeLbik(v.gebruiksfunctie);
+      const gak = r?.gak_dba != null ? Number(r.gak_dba) : null;
+      const lb = Number(v.geluidsbelasting_dba);
+      const lbik = gak != null && Number.isFinite(lb) ? round1(lb - gak) : null;
+      const toets = lbik != null ? lbik <= grens : null;
+      const ga = r?.ga_dba != null ? Number(r.ga_dba) : null;
+      const text =
+        `GA ${fmtCompareNum(ga)} · GA;k ${fmtCompareNum(gak)} · Lbi;k ${fmtCompareNum(lbik)}` +
+        (toets == null ? " · —" : toets ? " · Voldoet" : " · Voldoet niet");
+      cellVals.push({ lbik, toets, text });
+    }
+    const lbiks = cellVals.map((c) => c.lbik).filter((x): x is number => x != null);
+    const allSame =
+      lbiks.length <= 1 || lbiks.every((x) => Math.abs(x - lbiks[0]) < 0.05);
+    const toetsDiff = new Set(cellVals.map((c) => String(c.toets))).size > 1;
+
+    for (const c of cellVals) {
+      const td = document.createElement("td");
+      td.textContent = c.text;
+      if (c.toets === true) td.classList.add("toets-ok");
+      if (c.toets === false) td.classList.add("toets-fail");
+      if (!allSame || toetsDiff) td.classList.add("ga-compare-diff");
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+
+  if (!sortedSubs.length) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td colspan="${selectedVariants.length + 1}">Geen gedeelde ruimten in de geselecteerde varianten.</td>`;
+    tbody.appendChild(tr);
+  }
+
+  compareWrapEl.classList.remove("hidden");
 }
 
 async function loadVgs(preferVgId?: string | null): Promise<void> {
@@ -1193,13 +1382,13 @@ function renderVrs(): void {
       const metrics = effectiveVrMetrics(r);
       btn.textContent = `${r.omschrijving} · ${metrics.vloer.toFixed(2)} m² · V=${metrics.volume.toFixed(1)} m³`;
     }
-    // Only show GA/Lbi/GA;k after a fresh calc this session (stored values are cleared when
-    // plattegrond geometry changes; avoid showing outdated numbers from an earlier berekening).
-    if (
-      r.verblijfsruimte_id === selectedVrId &&
-      (r.gak_dba != null || r.ga_dba != null) &&
-      freshResultVrIds.has(r.verblijfsruimte_id)
-    ) {
+    // Show stored and/or session-fresh GA/Lbi/GA;k (geometry invalidation clears DB columns).
+    if (r.gak_dba != null || r.ga_dba != null || r.lbi_dba != null) {
+      if (!vrVoldoet.has(r.verblijfsruimte_id)) {
+        const t = deriveToetsFromStored(r);
+        if (t != null) vrVoldoet.set(r.verblijfsruimte_id, t);
+      }
+      const source = freshResultVrIds.has(r.verblijfsruimte_id) ? "" : " (opgeslagen)";
       const bits = [
         r.ga_dba != null ? `GA=${round1(r.ga_dba)}` : null,
         r.lbi_dba != null ? `Lbi=${round1(r.lbi_dba)}` : null,
@@ -1210,7 +1399,9 @@ function renderVrs(): void {
             ? "Voldoet niet"
             : null,
       ].filter(Boolean);
-      btn.textContent += ` · ${bits.join(" · ")}`;
+      btn.textContent += ` · ${bits.join(" · ")}${source}`;
+    } else if (r.verblijfsruimte_id === selectedVrId) {
+      btn.textContent += " · herberekenen";
     }
     btn.addEventListener("click", () => {
       selectedVrId = r.verblijfsruimte_id;
@@ -1319,7 +1510,11 @@ async function loadVlakken(): Promise<void> {
   await loadFacadesForSelectedVr();
   renderVlakken();
   const cur = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
-  if (cur) fillVrEdit(cur);
+  if (cur) {
+    fillVrEdit(cur);
+    // Restore DB results immediately so a restart shows GA;k before live recalc finishes.
+    hydrateStoredVrResults(cur);
+  }
   await refreshVrCalc();
 }
 
@@ -1327,7 +1522,68 @@ function fmtRes(v: number | null | undefined): string {
   return v != null && Number.isFinite(v) ? String(round1(v)) : "—";
 }
 
-function clearVrResults(hint: string): void {
+function vrHasStoredResults(r: Vr): boolean {
+  return r.ga_dba != null || r.lbi_dba != null || r.gak_dba != null;
+}
+
+function deriveToetsFromStored(vr: Vr): boolean | null {
+  const variant = variants.find((v) => v.variant_id === selectedVariantId);
+  const Lb = Number(variant?.geluidsbelasting_dba ?? 0);
+  const gak = vr.gak_dba != null && Number.isFinite(Number(vr.gak_dba)) ? Number(vr.gak_dba) : null;
+  if (gak == null || !Number.isFinite(Lb)) return null;
+  const lbik = round1(Lb - gak);
+  const grens = grenswaardeLbik(variant?.gebruiksfunctie);
+  return lbik <= grens;
+}
+
+/** Show GA/Lbi/GA;k from Postgres after reload (S/R′ remain live-only). */
+function hydrateStoredVrResults(vr: Vr, hintExtra?: string): boolean {
+  if (!vrHasStoredResults(vr)) return false;
+  const variant = variants.find((v) => v.variant_id === selectedVariantId);
+  const Lb = Number(variant?.geluidsbelasting_dba ?? 0);
+  const grens = grenswaardeLbik(variant?.gebruiksfunctie);
+  const gak = vr.gak_dba != null && Number.isFinite(Number(vr.gak_dba)) ? Number(vr.gak_dba) : null;
+  const lbik = gak != null && Number.isFinite(Lb) ? round1(Lb - gak) : null;
+  const voldoet = deriveToetsFromStored(vr);
+  if (voldoet != null) vrVoldoet.set(vr.verblijfsruimte_id, voldoet);
+  else vrVoldoet.delete(vr.verblijfsruimte_id);
+
+  if (resSEl) resSEl.textContent = "—";
+  if (resRpEl) resRpEl.textContent = "—";
+  if (resDEl) resDEl.textContent = "—";
+  if (resGaEl) resGaEl.textContent = `${fmtRes(vr.ga_dba)} dB`;
+  if (resLbiEl) resLbiEl.textContent = `${fmtRes(vr.lbi_dba)} dB`;
+  if (resGakEl) resGakEl.textContent = `${fmtRes(vr.gak_dba)} dB`;
+  if (resLbikEl) resLbikEl.textContent = lbik != null ? `${fmtRes(lbik)} dB` : "—";
+  if (resToetsEl) {
+    resToetsEl.classList.remove("toets-ok", "toets-fail");
+    if (voldoet === true) {
+      resToetsEl.textContent = "Voldoet";
+      resToetsEl.classList.add("toets-ok");
+    } else if (voldoet === false) {
+      resToetsEl.textContent = "Voldoet niet";
+      resToetsEl.classList.add("toets-fail");
+    } else {
+      resToetsEl.textContent = "—";
+    }
+  }
+  const dirtyBit = resultsDirty ? " · niet opgeslagen" : " · opgeslagen";
+  const req = gak != null ? ` · GA;k ≥ ${fmtRes(Lb - grens)} dB (Lb−${grens})` : "";
+  if (vrResultsHintEl) {
+    vrResultsHintEl.textContent = `Opgeslagen resultaten${dirtyBit} · grens Lbi;k ≤ ${grens} dB${req}${
+      hintExtra ? ` · ${hintExtra}` : ""
+    }`;
+    vrResultsHintEl.classList.remove("hidden");
+  }
+  return true;
+}
+
+function clearVrResults(hint: string, opts?: { keepStored?: boolean }): void {
+  const vr = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
+  if (opts?.keepStored !== false && vr && vrHasStoredResults(vr)) {
+    hydrateStoredVrResults(vr, hint);
+    return;
+  }
   if (vrResultsHintEl) {
     vrResultsHintEl.textContent = hint;
     vrResultsHintEl.classList.remove("hidden");
@@ -1349,11 +1605,11 @@ async function refreshVrCalc(opts?: { useFormCorrections?: boolean; persist?: bo
   const vr = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
   const variant = variants.find((v) => v.variant_id === selectedVariantId);
   if (!auth || !vr) {
-    clearVrResults("Selecteer een VR en voeg vlakken met materiaal toe.");
+    clearVrResults("Selecteer een VR en voeg vlakken met materiaal toe.", { keepStored: false });
     return;
   }
   if (!vlakken.length) {
-    clearVrResults("Nog geen vlakken — voeg gevelcomponenten toe.");
+    clearVrResults("Nog geen vlakken — voeg gevelcomponenten toe. Herbereken na toekenning.");
     return;
   }
 
@@ -1385,7 +1641,7 @@ async function refreshVrCalc(opts?: { useFormCorrections?: boolean; persist?: bo
   const missingRa = calcVlakken.filter((v) => !Number.isFinite(v.ra_dba));
   if (missingRa.length) {
     clearVrResults(
-      `Geen RA voor: ${missingRa.map((v) => v.label).join(", ")} — koppel materiaal op de plattegrond.`,
+      `Geen RA voor: ${missingRa.map((v) => v.label).join(", ")} — materiaal ontbreekt of catalogus-id is verouderd. Koppel materiaal opnieuw op de geveltekening, daarna Herberekenen GA / GA;k.`,
     );
     return;
   }
@@ -1402,6 +1658,7 @@ async function refreshVrCalc(opts?: { useFormCorrections?: boolean; persist?: bo
     vlakken: calcVlakken,
     cl_db: useForm && Number.isFinite(formCl) ? formCl : undefined,
     cg_db: useForm && Number.isFinite(formCg) ? formCg : undefined,
+    gebruiksfunctie: variant?.gebruiksfunctie,
   });
 
   if (!result.ok) {
@@ -1409,11 +1666,20 @@ async function refreshVrCalc(opts?: { useFormCorrections?: boolean; persist?: bo
     return;
   }
 
+  const grens = result.grenswaarde_lbik_db;
+  const shouldPersist = opts?.persist !== false && !useForm;
+  if (useForm) resultsDirty = true;
+  const statusBit = useForm
+    ? " · (live CL/Cg — niet opgeslagen)"
+    : resultsDirty
+      ? " · niet opgeslagen"
+      : shouldPersist
+        ? " · opslaan…"
+        : " · berekend";
   if (vrResultsHintEl) {
     const req =
-      result.gak_required_dba != null ? ` · GA;k ≥ ${fmtRes(result.gak_required_dba)} dB (Lb−${GRENZWAARDE_LBIK_DB})` : "";
-    const preview = useForm ? " · (live CL/Cg)" : "";
-    vrResultsHintEl.textContent = `Cr=${result.cr_db} dB · CL=${round1(result.cl_db)} · Cg=${round1(result.cg_db)} · Ruimte=${fmtRes(result.ruimte_db)} dB · grens Lbi;k ≤ ${GRENZWAARDE_LBIK_DB} dB${req}${preview}`;
+      result.gak_required_dba != null ? ` · GA;k ≥ ${fmtRes(result.gak_required_dba)} dB (Lb−${grens})` : "";
+    vrResultsHintEl.textContent = `Cr=${result.cr_db} dB · CL=${round1(result.cl_db)} · Cg=${round1(result.cg_db)} · Ruimte=${fmtRes(result.ruimte_db)} dB · grens Lbi;k ≤ ${grens} dB${req}${statusBit}`;
     vrResultsHintEl.classList.remove("hidden");
   }
   if (resSEl) {
@@ -1446,7 +1712,6 @@ async function refreshVrCalc(opts?: { useFormCorrections?: boolean; persist?: bo
   freshResultVrIds.add(vr.verblijfsruimte_id);
   renderVrs();
 
-  const shouldPersist = opts?.persist !== false && !useForm;
   if (!shouldPersist) return;
 
   try {
@@ -1457,15 +1722,59 @@ async function refreshVrCalc(opts?: { useFormCorrections?: boolean; persist?: bo
       result.lbi_dba != null ? String(round1(result.lbi_dba)) : "",
       result.gak_dba != null ? String(round1(result.gak_dba)) : "",
     ]);
-    void ret;
-  } catch {
-    /* display still ok */
+    if (typeof ret === "string" && ret.startsWith("ERROR")) {
+      resultsDirty = true;
+      setConn("err", `Resultaten niet opgeslagen: ${ret}`);
+      if (vrResultsHintEl) {
+        vrResultsHintEl.textContent = `${vrResultsHintEl.textContent?.replace(/ · opslaan…$/, "") || ""} · niet opgeslagen`;
+      }
+      return;
+    }
+    resultsDirty = false;
+    if (vrResultsHintEl) {
+      vrResultsHintEl.textContent = (vrResultsHintEl.textContent || "").replace(/ · opslaan…$/, " · opgeslagen");
+    }
+  } catch (err) {
+    resultsDirty = true;
+    setConn("err", `Resultaten niet opgeslagen: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** After Lb/functie change: refresh stored Lbi from existing GA for all VRs in the variant. */
+async function resyncStoredLbiForVariant(variantId: string): Promise<void> {
+  if (!auth || !variantId) return;
+  const variant = variants.find((v) => v.variant_id === variantId);
+  const Lb = Number(variant?.geluidsbelasting_dba ?? 0);
+  if (!Number.isFinite(Lb)) return;
+  const vgRet = await invokeString("API_ListVerblijfsgebieden", [auth.token, variantId]);
+  const vgData = parseJsonOk<{ verblijfsgebieden: Vg[] }>(vgRet);
+  for (const g of vgData.verblijfsgebieden || []) {
+    const vrRet = await invokeString("API_ListVerblijfsruimten", [auth.token, g.verblijfsgebied_id]);
+    const vrData = parseJsonOk<{ verblijfsruimten: Vr[] }>(vrRet);
+    for (const vr of vrData.verblijfsruimten || []) {
+      if (vr.ga_dba == null || !Number.isFinite(Number(vr.ga_dba))) continue;
+      const ga = Number(vr.ga_dba);
+      const gak = vr.gak_dba != null && Number.isFinite(Number(vr.gak_dba)) ? Number(vr.gak_dba) : null;
+      const lbi = round1(Lb - ga);
+      try {
+        await invokeString("API_SaveVerblijfsruimteResults", [
+          auth.token,
+          vr.verblijfsruimte_id,
+          String(round1(ga)),
+          String(lbi),
+          gak != null ? String(round1(gak)) : "",
+        ]);
+      } catch {
+        /* continue */
+      }
+    }
   }
 }
 
 function clearVlakEdit(): void {
   selectedVlakId = null;
   vlakNameEl.value = "";
+  if (vlakOrientatieEl) vlakOrientatieEl.value = "";
   if (vlakClEl) vlakClEl.value = "0";
   if (vlakCgEl) vlakCgEl.value = "0";
   vlakGakEl.checked = true;
@@ -1477,6 +1786,7 @@ function clearVlakEdit(): void {
 function fillVlakEdit(v: Vlak): void {
   selectedVlakId = v.vlak_id;
   vlakNameEl.value = v.omschrijving || "";
+  if (vlakOrientatieEl) vlakOrientatieEl.value = String(v.orientatie || "");
   const live = liveVlakQty(v);
   if (v.facade_subsection_id) {
     const facId = v.facade_subsection_id;
@@ -1532,10 +1842,12 @@ function renderVlakken(): void {
       live.kind === "length"
         ? `l=${live.qty.toFixed(2)} m`
         : `S=${live.qty.toFixed(2)} m²`;
+    const ori = String(v.orientatie || "").trim();
+    const oriTxt = ori ? ` · ${ori}` : "";
     const corrTxt = `CL=${round1(Number(v.cl_db) || 0)} · Cg=${round1(Number(v.cg_db) || 0)}`;
     const domBit = v.vlak_id === dominantId ? " · CL/Cg actief" : "";
-    info.textContent = `${v.omschrijving} · ${qtyTxt} · ${corrTxt} · GA;k=${v.meenemen_gak ? "ja" : "nee"}${domBit}`;
-    info.title = "Klik om CL/Cg te wijzigen en opnieuw te berekenen";
+    info.textContent = `${v.omschrijving}${oriTxt} · ${qtyTxt} · ${corrTxt} · GA;k=${v.meenemen_gak ? "ja" : "nee"}${domBit}`;
+    info.title = "Klik om orientatie / CL / Cg te wijzigen en opnieuw te berekenen";
     info.addEventListener("click", () => fillVlakEdit(v));
     li.appendChild(info);
     const actions = document.createElement("span");
@@ -1574,26 +1886,116 @@ function dominantAreaVlakId(list: Vlak[]): string | null {
   return bestId;
 }
 
+async function refreshBuildingMeta(): Promise<void> {
+  if (!auth || !buildingId) {
+    buildingLabel = "";
+    buildingExternalRef = "";
+    return;
+  }
+  try {
+    const ret = await invokeString("API_EngineerGetProject", [auth.token, buildingId]);
+    if (ret.startsWith("ERROR")) return;
+    const data = parseJsonOk<{
+      label?: string;
+      external_ref?: string;
+      building?: { label?: string; external_ref?: string };
+    }>(ret);
+    buildingLabel = data.label || data.building?.label || "";
+    buildingExternalRef = data.external_ref || data.building?.external_ref || "";
+  } catch {
+    /* keep previous */
+  }
+}
+
+function setBuildingMetaText(text: string): void {
+  buildingMetaEl.textContent = text;
+  if (buildingMetaSummaryEl) {
+    const compact = text === "—" ? "" : text;
+    buildingMetaSummaryEl.textContent = compact ? `· ${compact}` : "";
+  }
+}
+
 async function openBuilding(id: string): Promise<void> {
   buildingId = id.trim();
   buildingIdEl.value = buildingId;
   syncFloormapLink();
   if (!buildingId) {
     modelPanelEl.classList.add("hidden");
-    buildingMetaEl.textContent = "—";
+    setBuildingMetaText("—");
+    buildingLabel = "";
+    buildingExternalRef = "";
     return;
   }
   setConn("busy", "Laden…");
+  await refreshBuildingMeta();
   await refreshLinks();
   await loadGeometryOptions();
   await loadVariants();
   modelPanelEl.classList.remove("hidden");
-  buildingMetaEl.textContent = `Project ${buildingId.slice(0, 8)}… · ${freeRooms.length} vrije rooms`;
+  const title = buildingLabel || buildingExternalRef || `${buildingId.slice(0, 8)}…`;
+  setBuildingMetaText(`${title} · ${freeRooms.length} vrije rooms`);
+  if (projectIdBarEl) {
+    projectIdBarEl.open = false;
+    localStorage.setItem("app-gevelwering-ga-project-id-collapsed", "1");
+  }
+  projectMenu?.rememberCurrent();
+  projectMenu?.refreshTitle();
   setConn("ok", "Connected");
   const url = new URL(location.href);
   url.searchParams.set("building_id", buildingId);
   history.replaceState(null, "", url.toString());
   await applyFloormapImport();
+}
+
+/** Checkpoint: recompute + persist GA/Lbi/GA;k for every VR in the active variant. */
+async function saveProjectCheckpoint(): Promise<void> {
+  if (!auth || !buildingId) throw new Error("Log in en selecteer een project");
+  if (!selectedVariantId) throw new Error("Geen actieve variant");
+  const keepVg = selectedVgId;
+  const keepVr = selectedVrId;
+  setConn("busy", "Project opslaan…");
+  let saved = 0;
+  let skipped = 0;
+  let failed = 0;
+  try {
+    const vgRet = await invokeString("API_ListVerblijfsgebieden", [auth.token, selectedVariantId]);
+    const vgData = parseJsonOk<{ verblijfsgebieden: Vg[] }>(vgRet);
+    const allVgs = vgData.verblijfsgebieden || [];
+    for (const g of allVgs) {
+      selectedVgId = g.verblijfsgebied_id;
+      const vrRet = await invokeString("API_ListVerblijfsruimten", [auth.token, g.verblijfsgebied_id]);
+      const vrData = parseJsonOk<{ verblijfsruimten: Vr[] }>(vrRet);
+      const list = vrData.verblijfsruimten || [];
+      for (const vr of list) {
+        selectedVrId = vr.verblijfsruimte_id;
+        vrs = list;
+        try {
+          await loadVlakken();
+          const cur = vrs.find((r) => r.verblijfsruimte_id === vr.verblijfsruimte_id);
+          if (cur && vrHasStoredResults(cur) && !resultsDirty) saved += 1;
+          else if (cur && vrHasStoredResults(cur)) saved += 1;
+          else skipped += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+    }
+    resultsDirty = false;
+    if (keepVg) {
+      selectedVgId = keepVg;
+      await loadVgs(keepVg);
+      if (keepVr) await loadVrs(keepVr);
+    } else {
+      await loadVgs();
+    }
+    const msg = `Project opgeslagen · ${saved} VR-resultaten${skipped ? ` · ${skipped} zonder berekening` : ""}${
+      failed ? ` · ${failed} mislukt` : ""
+    }`;
+    setConn(failed ? "err" : "ok", msg);
+  } catch (err) {
+    setConn("err", err instanceof Error ? err.message : String(err));
+    throw err;
+  }
 }
 
 async function ensureDefaultVariant(): Promise<string> {
@@ -1800,8 +2202,19 @@ buildingForm.addEventListener("submit", (ev) => {
 });
 
 queueBtn.addEventListener("click", () => {
+  if (projectIdBarEl) projectIdBarEl.open = true;
   void loadQueue().catch((e) => setConn("err", String(e)));
 });
+
+(() => {
+  if (!projectIdBarEl) return;
+  const key = "app-gevelwering-ga-project-id-collapsed";
+  // Prefer remembered preference; openBuilding will collapse after a successful open.
+  if (localStorage.getItem(key) === "1") projectIdBarEl.open = false;
+  projectIdBarEl.addEventListener("toggle", () => {
+    localStorage.setItem(key, projectIdBarEl.open ? "0" : "1");
+  });
+})();
 
 vgRoomEl.addEventListener("change", () => {
   updateRoomPreview();
@@ -1814,6 +2227,36 @@ variantNewBtn.addEventListener("click", () => {
   variantNameEl.value = "Nieuwe variant";
   variantSpectrumEl.value = "SPECTRUM_2";
   renderVariants();
+});
+
+variantCloneBtn?.addEventListener("click", () => {
+  void (async () => {
+    if (!auth || !selectedVariantId) throw new Error("Selecteer eerst een variant om te kopiëren");
+    const src = variants.find((v) => v.variant_id === selectedVariantId);
+    const name = `${src?.omschrijving || "Variant"} (kopie)`;
+    const ret = await invokeString("API_CloneVariant", [auth.token, selectedVariantId, name]);
+    const data = parseJsonOk<{
+      variant_id: string;
+      vg_count: number;
+      vr_count: number;
+      vlak_count: number;
+    }>(ret);
+    selectedVariantId = data.variant_id;
+    compareSelectedIds.add(data.variant_id);
+    if (src) compareSelectedIds.add(src.variant_id);
+    await refreshLinks();
+    await loadVariants();
+    setConn(
+      "ok",
+      `Variant gekopieerd · ${data.vg_count} VG · ${data.vr_count} VR · ${data.vlak_count} vlakken`,
+    );
+  })().catch((e) => setConn("err", String(e)));
+});
+
+compareBtn?.addEventListener("click", () => {
+  void runVariantCompare()
+    .then(() => setConn("ok", "Variantvergelijking bijgewerkt"))
+    .catch((e) => setConn("err", String(e)));
 });
 
 variantForm.addEventListener("submit", (ev) => {
@@ -1833,7 +2276,8 @@ variantForm.addEventListener("submit", (ev) => {
     const data = parseJsonOk<{ variant_id: string }>(ret);
     selectedVariantId = data.variant_id;
     await loadVariants();
-    await refreshVrCalc();
+    await resyncStoredLbiForVariant(data.variant_id);
+    await refreshVrCalc({ persist: true });
     setConn("ok", "Variant opgeslagen");
   })().catch((e) => setConn("err", String(e)));
 });
@@ -1987,6 +2431,7 @@ vlakForm.addEventListener("submit", (ev) => {
     const facadeId = fac || "";
     const clVal = vlakClEl?.value || "0";
     const cgVal = vlakCgEl?.value || "0";
+    const oriVal = vlakOrientatieEl?.value || "";
     const ret = await invokeString("API_SaveVlak", [
       auth.token,
       selectedVrId,
@@ -2000,10 +2445,12 @@ vlakForm.addEventListener("submit", (ev) => {
       facadeId,
       isLen ? "length" : "area",
       isLen ? qty : "",
+      oriVal,
     ]);
     if (ret.startsWith("ERROR")) throw new Error(ret);
 
     // CL/Cg are façade-level: write the same corrections onto every area vlak.
+    // Orientatie blijft per vlak (niet meesynct).
     await loadVlakken();
     for (const v of vlakken) {
       if (v.quantity_kind === "length") continue;
@@ -2025,6 +2472,7 @@ vlakForm.addEventListener("submit", (ev) => {
         v.facade_subsection_id || "",
         "area",
         "",
+        String(v.orientatie || ""),
       ]);
       if (syncRet.startsWith("ERROR")) throw new Error(syncRet);
     }
@@ -2082,6 +2530,7 @@ recalcBtn?.addEventListener("click", () => {
         v.facade_subsection_id || "",
         "area",
         "",
+        String(v.orientatie || ""),
       ]);
       if (syncRet.startsWith("ERROR")) throw new Error(syncRet);
     }
@@ -2094,7 +2543,167 @@ recalcBtn?.addEventListener("click", () => {
   })().catch((e) => setConn("err", String(e)));
 });
 
+async function saveProjectReport(force = false): Promise<string | null> {
+  if (!auth || !buildingId) throw new Error("Log in en selecteer een gebouw");
+  if (!selectedVariantId) throw new Error("Selecteer eerst een variant");
+  const status = reportKindEl?.value === "definitief" ? "definitief" : "concept";
+  if (reportHintEl) reportHintEl.textContent = "Rapport wordt gegenereerd…";
+  const res = await fetch("/api/reports/generate", {
+    method: "POST",
+    credentials: "include",
+    headers: apiAuthHeaders(auth.token, true),
+    body: JSON.stringify({
+      building_id: buildingId,
+      variant_id: selectedVariantId,
+      status,
+      force,
+    }),
+  });
+  let parsed: {
+    ok?: boolean;
+    error?: string;
+    identical?: boolean;
+    skipped?: boolean;
+    warning?: string;
+    filename?: string;
+    pdf_filename?: string;
+    filename_pdf?: string;
+    existing_filename?: string;
+    relative_path?: string;
+    project_folder?: string;
+  };
+  try {
+    parsed = (await res.json()) as typeof parsed;
+  } catch {
+    throw new Error(`Rapport opslaan mislukt (HTTP ${res.status})`);
+  }
+  if (!res.ok || !parsed.ok) {
+    throw new Error(parsed.error || `Rapport opslaan mislukt (HTTP ${res.status})`);
+  }
+  const pdfName = parsed.pdf_filename || parsed.filename_pdf || null;
+  if (parsed.identical && parsed.skipped) {
+    const existing = parsed.existing_filename || "bestaand bestand";
+    const msg =
+      parsed.warning ||
+      `Identiek rapport bestaat al (${existing}) — er is niets weggeschreven.`;
+    if (reportHintEl) reportHintEl.textContent = msg;
+    setConn("err", msg);
+    const forceAnyway = window.confirm(
+      `${msg}\n\nToch een nieuw bestand schrijven?`,
+    );
+    if (forceAnyway) return saveProjectReport(true);
+    // Prefer PDF for inbox publish; fall back to HTML (server maps to PDF).
+    return pdfName || (existing.endsWith(".html") || existing.endsWith(".pdf") ? existing : null);
+  }
+  const pathHint = parsed.relative_path || pdfName || parsed.filename || "";
+  const folder = parsed.project_folder ? ` · map ${parsed.project_folder}` : "";
+  const okMsg = `Rapport opgeslagen (PDF): ${pathHint}${folder}`;
+  if (reportHintEl) reportHintEl.textContent = okMsg;
+  setConn("ok", okMsg);
+  return pdfName || parsed.filename || null;
+}
+
+async function publishReportToInbox(filename: string): Promise<void> {
+  if (!auth || !buildingId) throw new Error("Log in en selecteer een gebouw");
+  const reportKind = reportKindEl?.value === "definitief" ? "definitief" : "concept";
+  if (reportHintEl) reportHintEl.textContent = "Publiceren naar inbox…";
+  const res = await fetch("/api/reports/publish", {
+    method: "POST",
+    credentials: "include",
+    headers: apiAuthHeaders(auth.token, true),
+    body: JSON.stringify({
+      building_id: buildingId,
+      filename,
+      report_kind: reportKind,
+      version_label: "1.0",
+    }),
+  });
+  let parsed: {
+    ok?: boolean;
+    error?: string;
+    inbox?: { message?: string; report_kind?: string };
+    project_status?: string;
+  };
+  try {
+    parsed = (await res.json()) as typeof parsed;
+  } catch {
+    throw new Error(`Publiceren mislukt (HTTP ${res.status})`);
+  }
+  if (!res.ok || !parsed.ok) {
+    throw new Error(parsed.error || `Publiceren mislukt (HTTP ${res.status})`);
+  }
+  const kindLabel = reportKind === "definitief" ? "definitieve" : "concept";
+  const okMsg = `${kindLabel.charAt(0).toUpperCase()}${kindLabel.slice(1)} rapport in inbox opdrachtgever gezet${
+    parsed.project_status ? ` · status ${parsed.project_status}` : ""
+  }.`;
+  if (reportHintEl) reportHintEl.textContent = okMsg;
+  setConn("ok", okMsg);
+}
+
+reportBtn?.addEventListener("click", () => {
+  void saveProjectReport(false).catch((e) => {
+    const msg = String(e);
+    if (reportHintEl) reportHintEl.textContent = msg;
+    setConn("err", msg);
+  });
+});
+
+reportInboxBtn?.addEventListener("click", () => {
+  void (async () => {
+    const filename = await saveProjectReport(false);
+    if (!filename) throw new Error("Geen rapportbestand om te publiceren");
+    await publishReportToInbox(filename);
+  })().catch((e) => {
+    const msg = String(e);
+    if (reportHintEl) reportHintEl.textContent = msg;
+    setConn("err", msg);
+  });
+});
+
 if (buildingId) buildingIdEl.value = buildingId;
 syncFloormapLink();
 initPasswordToggles();
+
+if (fileMenuRoot) {
+  projectMenu = mountProjectMenu(fileMenuRoot, {
+    getToken: () => auth?.token ?? null,
+    getBuildingId: () => buildingId,
+    getProjectMeta: () => ({ label: buildingLabel, external_ref: buildingExternalRef }),
+    invokeString: (name, args) => invokeString(name, args),
+    apiAuthHeaders: () => (auth ? apiAuthHeaders(auth.token, true) : {}),
+    openBuilding: (id) => openBuilding(id),
+    saveProject: () => saveProjectCheckpoint(),
+    onProjectRenamed: (meta) => {
+      buildingLabel = meta.label;
+      buildingExternalRef = meta.external_ref;
+      const title = buildingLabel || buildingExternalRef || `${buildingId.slice(0, 8)}…`;
+      setBuildingMetaText(`${title} · ${freeRooms.length} vrije rooms`);
+    },
+    onProjectDeleted: async () => {
+      buildingId = "";
+      buildingLabel = "";
+      buildingExternalRef = "";
+      buildingIdEl.value = "";
+      modelPanelEl.classList.add("hidden");
+      setBuildingMetaText("—");
+      if (projectIdBarEl) projectIdBarEl.open = true;
+      variants = [];
+      vgs = [];
+      vrs = [];
+      selectedVariantId = null;
+      selectedVgId = null;
+      selectedVrId = null;
+      const url = new URL(location.href);
+      url.searchParams.delete("building_id");
+      history.replaceState(null, "", url.toString());
+      syncFloormapLink();
+    },
+    onStatus: (state, text) => setConn(state, text),
+    setTitle: (title) => {
+      document.title = title === "Geen project" ? "Geluidwering Gevels — Berekening gevelwering" : `${title} — GA`;
+    },
+  });
+  fileMenuRoot.hidden = true;
+}
+
 connect();

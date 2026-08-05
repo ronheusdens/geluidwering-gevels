@@ -34,6 +34,17 @@ import {
   handleSessionSave,
   handleSessionStatus,
 } from "./lib/session-api.mjs";
+import {
+  handleProjectFolderCleanup,
+  handleReportApiOptions,
+  handleReportDownload,
+  handleReportGenerate,
+  handleReportInboxEmailRequest,
+  handleReportInboxList,
+  handleReportInboxRead,
+  handleReportList,
+  handleReportPublish,
+} from "./lib/report-api.mjs";
 import { closePool } from "./lib/pg-config.mjs";
 import { securityHeaders } from "./lib/http-security.mjs";
 
@@ -74,6 +85,66 @@ const server = http.createServer(async (req, res) => {
       }
     } catch (err) {
       console.error("session API error:", err);
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false, error: "internal server error" }));
+      }
+      return;
+    }
+    res.writeHead(405, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, error: "method not allowed" }));
+    return;
+  }
+
+  if (
+    urlPath === "/api/reports/generate" ||
+    urlPath === "/api/reports/list" ||
+    urlPath === "/api/reports/download" ||
+    urlPath === "/api/reports/publish" ||
+    urlPath === "/api/reports/inbox" ||
+    urlPath === "/api/reports/inbox/read" ||
+    urlPath === "/api/reports/inbox/email-request" ||
+    urlPath === "/api/reports/cleanup-project-folder"
+  ) {
+    if (req.method === "OPTIONS") {
+      handleReportApiOptions(req, res);
+      return;
+    }
+    try {
+      if (urlPath === "/api/reports/generate" && req.method === "POST") {
+        await handleReportGenerate(req, res);
+        return;
+      }
+      if (urlPath === "/api/reports/publish" && req.method === "POST") {
+        await handleReportPublish(req, res);
+        return;
+      }
+      if (urlPath === "/api/reports/list" && req.method === "GET") {
+        await handleReportList(req, res, url);
+        return;
+      }
+      if (urlPath === "/api/reports/download" && req.method === "GET") {
+        await handleReportDownload(req, res, url);
+        return;
+      }
+      if (urlPath === "/api/reports/inbox" && req.method === "GET") {
+        await handleReportInboxList(req, res, url);
+        return;
+      }
+      if (urlPath === "/api/reports/inbox/read" && req.method === "POST") {
+        await handleReportInboxRead(req, res);
+        return;
+      }
+      if (urlPath === "/api/reports/inbox/email-request" && req.method === "POST") {
+        await handleReportInboxEmailRequest(req, res);
+        return;
+      }
+      if (urlPath === "/api/reports/cleanup-project-folder" && req.method === "POST") {
+        await handleProjectFolderCleanup(req, res);
+        return;
+      }
+    } catch (err) {
+      console.error("report API error:", err);
       if (!res.headersSent) {
         res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
         res.end(JSON.stringify({ ok: false, error: "internal server error" }));

@@ -139,7 +139,16 @@ var projectProgressEl = document.getElementById("project-progress");
 var projectProgressStepsEl = document.getElementById("project-progress-steps");
 var projectProgressCaptionEl = document.getElementById("project-progress-caption");
 var projectReportSlotEl = document.getElementById("project-report-slot");
+var projectReportHintEl = document.getElementById("project-report-hint");
 var downloadReportBtn = document.getElementById("download-report-btn");
+var emailReportBtn = document.getElementById("email-report-btn");
+var inboxPanelEl = document.getElementById("inbox-panel");
+var inboxListEl = document.getElementById("inbox-list");
+var inboxEmptyEl = document.getElementById("inbox-empty");
+var inboxBadgeEl = document.getElementById("inbox-badge");
+var cachedReports = [];
+var cachedInbox = [];
+var activeInboxItem = null;
 var ws = null;
 var sessionId = null;
 var reqCounter = 0;
@@ -223,12 +232,246 @@ function renderProjectProgress(status) {
     PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED: "Een ingenieur controleert of uw tekeningen als basis voor de berekening kunnen dienen.",
     PROJECT_UNDERWAY: "Uw tekeningen zijn geaccepteerd. De berekening is gestart.",
     PROJECT_NEAR_FINAL: "De berekening is bijna afgerond. Het conceptrapport volgt binnenkort.",
-    PROJECT_FINISHED: "Afgerond \u2014 uw conceptrapport (v1.0) is klaar om te downloaden."
+    PROJECT_FINISHED: "Afgerond \u2014 uw rapportage is vrijgegeven."
   };
   projectProgressCaptionEl.textContent = captions[status] || statusLabel(status);
-  const finished = status === "PROJECT_FINISHED";
-  projectReportSlotEl.hidden = !finished;
-  downloadReportBtn.disabled = !finished;
+  void refreshProjectInbox();
+}
+function kindLabel(kind) {
+  return kind === "definitief" ? "definitieve" : "concept";
+}
+function renderInboxMessage(item) {
+  const label = kindLabel(item.report_kind);
+  return `De ${label} rapportage (PDF) is beschikbaar. <a href="#" id="inbox-fetch-link">PDF ophalen</a> (of <a href="#" id="inbox-email-link">laten e-mailen</a>).`;
+}
+function bindInboxMessageLinks() {
+  const fetchLink = document.getElementById("inbox-fetch-link");
+  const emailLink = document.getElementById("inbox-email-link");
+  fetchLink?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    downloadReportBtn.click();
+  });
+  emailLink?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    emailReportBtn?.click();
+  });
+}
+async function refreshGlobalInbox() {
+  if (!auth?.token || !inboxPanelEl || !inboxListEl) return;
+  const res = await fetch("/api/reports/inbox", {
+    credentials: "include",
+    headers: apiAuthHeaders(auth.token)
+  });
+  let parsed;
+  try {
+    parsed = await res.json();
+  } catch {
+    return;
+  }
+  if (!res.ok || !parsed.ok) return;
+  cachedInbox = parsed.items ?? [];
+  inboxPanelEl.hidden = false;
+  inboxListEl.innerHTML = "";
+  const unread = parsed.unread_count ?? cachedInbox.filter((i) => i.unread).length;
+  if (inboxBadgeEl) {
+    if (unread > 0) {
+      inboxBadgeEl.hidden = false;
+      inboxBadgeEl.textContent = String(unread);
+    } else {
+      inboxBadgeEl.hidden = true;
+    }
+  }
+  if (inboxEmptyEl) inboxEmptyEl.classList.toggle("hidden", cachedInbox.length > 0);
+  for (const item of cachedInbox) {
+    const li = document.createElement("li");
+    li.className = `inbox-list-item${item.unread ? " unread" : ""}`;
+    const title = item.building_label || item.building_id.slice(0, 8);
+    const when = item.published_at ? new Date(item.published_at).toLocaleString("nl-NL") : "";
+    li.innerHTML = `
+      <strong>${escapeHtml(title)}</strong> \u2014 ${escapeHtml(kindLabel(item.report_kind))} v${escapeHtml(item.version_label)}
+      <div class="inbox-item-meta">${escapeHtml(when)}</div>
+      <p class="hint" style="margin:0.4rem 0 0">${escapeHtml(item.message)}</p>
+    `;
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const dlBtn = document.createElement("button");
+    dlBtn.type = "button";
+    dlBtn.textContent = "PDF ophalen";
+    dlBtn.title = item.filename.endsWith(".pdf") ? item.filename : item.filename.replace(/\.html$/i, ".pdf");
+    dlBtn.addEventListener("click", () => {
+      void downloadInboxItem(item).catch((err) => {
+        setStatus(err instanceof Error ? err.message : String(err), "err");
+      });
+    });
+    const emailBtn = document.createElement("button");
+    emailBtn.type = "button";
+    emailBtn.className = "secondary";
+    emailBtn.textContent = "E-mailen";
+    emailBtn.addEventListener("click", () => {
+      void requestInboxEmail(item).catch((err) => {
+        setStatus(err instanceof Error ? err.message : String(err), "err");
+      });
+    });
+    actions.appendChild(dlBtn);
+    actions.appendChild(emailBtn);
+    li.appendChild(actions);
+    inboxListEl.appendChild(li);
+  }
+}
+function escapeHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+async function refreshProjectInbox() {
+  cachedReports = [];
+  activeInboxItem = null;
+  downloadReportBtn.disabled = true;
+  if (emailReportBtn) emailReportBtn.disabled = true;
+  const projectId = activeProjectId();
+  if (!auth?.token || !projectId) {
+    projectReportSlotEl.hidden = true;
+    return;
+  }
+  const res = await fetch(`/api/reports/inbox?building_id=${encodeURIComponent(projectId)}`, {
+    credentials: "include",
+    headers: apiAuthHeaders(auth.token)
+  });
+  let parsed;
+  try {
+    parsed = await res.json();
+  } catch {
+    if (projectReportHintEl) {
+      projectReportHintEl.textContent = `Inbox laden mislukt (HTTP ${res.status})`;
+    }
+    projectReportSlotEl.hidden = false;
+    return;
+  }
+  if (!res.ok || !parsed.ok) {
+    if (projectReportHintEl) {
+      projectReportHintEl.textContent = parsed.error || `Inbox laden mislukt (HTTP ${res.status})`;
+    }
+    projectReportSlotEl.hidden = false;
+    return;
+  }
+  const items = parsed.items ?? [];
+  activeInboxItem = items[0] ?? null;
+  if (!activeInboxItem) {
+    if (currentProjectStatus === "PROJECT_FINISHED") {
+      await refreshProjectReportsLegacy();
+      return;
+    }
+    projectReportSlotEl.hidden = true;
+    return;
+  }
+  projectReportSlotEl.hidden = false;
+  downloadReportBtn.disabled = false;
+  if (emailReportBtn) emailReportBtn.disabled = false;
+  if (projectReportHintEl) {
+    projectReportHintEl.innerHTML = renderInboxMessage(activeInboxItem);
+    bindInboxMessageLinks();
+  }
+  if (activeInboxItem.unread) {
+    void markInboxRead(activeInboxItem.inbox_id);
+  }
+}
+async function refreshProjectReportsLegacy() {
+  const projectId = activeProjectId();
+  if (!auth?.token || !projectId) {
+    projectReportSlotEl.hidden = true;
+    return;
+  }
+  const res = await fetch(`/api/reports/list?building_id=${encodeURIComponent(projectId)}`, {
+    credentials: "include",
+    headers: apiAuthHeaders(auth.token)
+  });
+  let parsed;
+  try {
+    parsed = await res.json();
+  } catch {
+    projectReportSlotEl.hidden = true;
+    return;
+  }
+  if (!res.ok || !parsed.ok) {
+    projectReportSlotEl.hidden = true;
+    return;
+  }
+  cachedReports = parsed.reports ?? [];
+  const latest = cachedReports.find((r) => r.filename.endsWith(".pdf")) || cachedReports.find((r) => r.filename.endsWith(".html")) || cachedReports[0];
+  if (!latest) {
+    projectReportSlotEl.hidden = true;
+    return;
+  }
+  projectReportSlotEl.hidden = false;
+  downloadReportBtn.disabled = false;
+  if (emailReportBtn) emailReportBtn.disabled = true;
+  if (projectReportHintEl) {
+    const label = latest.filename.endsWith(".pdf") ? latest.filename : latest.filename.replace(/\.html$/i, ".pdf");
+    projectReportHintEl.textContent = `PDF-rapport gereed: ${label}`;
+  }
+}
+async function markInboxRead(inboxId) {
+  if (!auth?.token) return;
+  try {
+    await fetch("/api/reports/inbox/read", {
+      method: "POST",
+      credentials: "include",
+      headers: apiAuthHeaders(auth.token, true),
+      body: JSON.stringify({ inbox_id: inboxId })
+    });
+    await refreshGlobalInbox();
+  } catch {
+  }
+}
+function downloadNameFromResponse(res, fallback) {
+  const cd = res.headers.get("Content-Disposition") || "";
+  const m = /filename="([^"]+)"/i.exec(cd);
+  if (m?.[1]) return m[1];
+  if (fallback.endsWith(".html")) return fallback.replace(/\.html$/i, ".pdf");
+  return fallback;
+}
+async function downloadInboxItem(item) {
+  if (!auth?.token) return;
+  const res = await fetch(
+    `/api/reports/download?building_id=${encodeURIComponent(item.building_id)}&file=${encodeURIComponent(item.filename)}&inbox_id=${encodeURIComponent(item.inbox_id)}`,
+    { credentials: "include", headers: apiAuthHeaders(auth.token) }
+  );
+  if (!res.ok) {
+    let err = `Download mislukt (HTTP ${res.status})`;
+    try {
+      const j = await res.json();
+      if (j.error) err = j.error;
+    } catch {
+    }
+    throw new Error(err);
+  }
+  const blob = await res.blob();
+  const downloadName = downloadNameFromResponse(res, item.filename);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = downloadName;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  setStatus(`PDF gedownload: ${downloadName}`, "ok");
+  await refreshGlobalInbox();
+  if (activeProjectId() === item.building_id) await refreshProjectInbox();
+}
+async function requestInboxEmail(item) {
+  if (!auth?.token) return;
+  const res = await fetch("/api/reports/inbox/email-request", {
+    method: "POST",
+    credentials: "include",
+    headers: apiAuthHeaders(auth.token, true),
+    body: JSON.stringify({ inbox_id: item.inbox_id })
+  });
+  const parsed = await res.json();
+  if (!res.ok || !parsed.ok) {
+    throw new Error(parsed.error || `E-mailaanvraag mislukt (HTTP ${res.status})`);
+  }
+  setStatus(parsed.note || "E-mailaanvraag geregistreerd", "ok");
+  await refreshGlobalInbox();
 }
 function miniProgressBar(status) {
   const current = progressIndex(status);
@@ -271,9 +514,9 @@ function showLogin() {
   projectDetailPanel.classList.add("hidden");
   profilePwWarningEl.classList.add("hidden");
   setAuthTab("signin");
-  pageTitle.textContent = "Inloggen";
+  pageTitle.textContent = "Opdrachtgever";
   pageLede.textContent = "Log in om uw akoestische projecten te beheren.";
-  document.title = "Geluidwering Gevels \u2014 Inloggen";
+  document.title = "Geluidwering Gevels \u2014 Opdrachtgever";
 }
 async function showApp(info) {
   auth = info;
@@ -293,6 +536,7 @@ async function showApp(info) {
   document.title = "Geluidwering Gevels \u2014 Projecten";
   await loadCustomerProfile();
   await refreshProjectList();
+  await refreshGlobalInbox();
 }
 function send(type, payload, wantType) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -679,6 +923,7 @@ async function refreshProjectList() {
   }
   const parsed = JSON.parse(ret);
   renderProjectList(parsed.projects ?? []);
+  void refreshGlobalInbox();
 }
 async function openProject(id) {
   if (!auth?.token) return;
@@ -1006,11 +1251,62 @@ submitDrawingsBtn.addEventListener("click", () => {
   void submitDrawingsForReview();
 });
 downloadReportBtn.addEventListener("click", () => {
-  if (currentProjectStatus !== "PROJECT_FINISHED") return;
-  setStatus(
-    "Download van het rapport volgt zodra concept v1.0-opslag is aangesloten. De status toont al dat het rapport gereed is.",
-    "ok"
-  );
+  void (async () => {
+    if (!auth?.token) return;
+    try {
+      if (activeInboxItem) {
+        await downloadInboxItem(activeInboxItem);
+        return;
+      }
+      const projectId = activeProjectId();
+      const latest = cachedReports.find((r) => r.filename.endsWith(".pdf")) || cachedReports.find((r) => r.filename.endsWith(".html")) || cachedReports[0];
+      if (!projectId || !latest) {
+        setStatus("Geen rapport beschikbaar om te downloaden", "err");
+        return;
+      }
+      const res = await fetch(
+        `/api/reports/download?building_id=${encodeURIComponent(projectId)}&file=${encodeURIComponent(latest.filename)}`,
+        { credentials: "include", headers: apiAuthHeaders(auth.token) }
+      );
+      if (!res.ok) {
+        let err = `Download mislukt (HTTP ${res.status})`;
+        try {
+          const j = await res.json();
+          if (j.error) err = j.error;
+        } catch {
+        }
+        setStatus(err, "err");
+        return;
+      }
+      const blob = await res.blob();
+      const downloadName = downloadNameFromResponse(res, latest.filename);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = downloadName;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setStatus(`PDF gedownload: ${downloadName}`, "ok");
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err), "err");
+    }
+  })();
+});
+emailReportBtn?.addEventListener("click", () => {
+  void (async () => {
+    if (!activeInboxItem) {
+      setStatus("Geen inbox-rapport om te e-mailen", "err");
+      return;
+    }
+    try {
+      await requestInboxEmail(activeInboxItem);
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err), "err");
+    }
+  })();
 });
 bootstrapSession().catch((err) => {
   setStatus(err instanceof Error ? err.message : String(err), "err");

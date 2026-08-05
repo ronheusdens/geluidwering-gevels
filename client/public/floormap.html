@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Geluidwering Gevels — Drawing analysis</title>
-  <link rel="stylesheet" href="/styles.css?v=compose-feedback" />
+  <link rel="stylesheet" href="/styles.css?v=file-menu-light" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body class="engineer-body">
@@ -21,7 +21,10 @@
         <a href="/engineer.html">← Back to drawing review</a>
         ·
         <a id="fm-ga-link" href="/ga.html">Berekening gevelwering</a>
+        ·
+        <a href="/handleiding.html">Handleiding</a>
       </p>
+      <nav class="file-menu" id="fm-file-menu" aria-label="Bestand" hidden></nav>
     </header>
 
     <section class="panel conn-bar" id="fm-conn-bar" aria-live="polite">
@@ -78,6 +81,15 @@
               <span class="toolbar-sep" aria-hidden="true"></span>
               <button type="button" id="fm-discover-btn" class="secondary">Discover rooms</button>
               <button type="button" id="fm-calibrate-btn" class="secondary">Calibrate scale</button>
+              <span
+                class="scale-calibrated-led"
+                id="fm-calibrate-led"
+                title="Schaal niet gezet"
+                aria-label="Kalibratiestatus"
+                role="status"
+              ></span>
+              <span class="toolbar-sep" aria-hidden="true"></span>
+              <button type="button" id="fm-detail-btn" class="secondary" title="Markeer een gebied en vergroot (2×–4×) — rechterlijst blijft zichtbaar">Detailgebied</button>
             </div>
 
             <section class="scale-bar panel-inset" id="fm-scale-bar">
@@ -122,6 +134,41 @@
                 <p class="hint" id="fm-tool-hint">Set scale, then measure a length or draw a room — circ/area update from the room polygon.</p>
               </div>
             </details>
+
+            <section class="discovery-dock hidden" id="fm-detail-dock">
+              <div class="discovery-dock-top">
+                <strong>Detailgebied</strong>
+                <p class="hint" id="fm-detail-hint">Start op 1× (overzicht). Sleep een rechthoek; daarna 2×/3×/4×. Rechterlijst blijft zichtbaar.</p>
+              </div>
+              <div class="discovery-dock-body detail-dock-body">
+                <div class="detail-factor-btns" role="group" aria-label="Vergroting">
+                  <button type="button" class="secondary detail-factor-btn" data-factor="1" title="Terug naar zoom bij markeren">1×</button>
+                  <button type="button" class="secondary detail-factor-btn" data-factor="2" title="2× t.o.v. zoom bij markeren">2×</button>
+                  <button type="button" class="secondary detail-factor-btn" data-factor="3" title="3× t.o.v. zoom bij markeren">3×</button>
+                  <button type="button" class="secondary detail-factor-btn" data-factor="4" title="4× t.o.v. zoom bij markeren">4×</button>
+                </div>
+                <div class="actions">
+                  <button type="button" id="fm-detail-repick-btn" class="secondary">Opnieuw markeren</button>
+                  <button type="button" id="fm-detail-close-btn" class="secondary">Sluiten</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="discovery-dock hidden" id="fm-edit-dock">
+              <div class="discovery-dock-top">
+                <strong>Component verplaatsen</strong>
+                <p class="hint" id="fm-edit-dock-hint">Sleep het vlak (binnen de omtrek) of een wit anker. Pijltjes hieronder of op het toetsenbord. Daarna opslaan.</p>
+              </div>
+              <div class="discovery-dock-body">
+                <div class="discovery-adjust compact" aria-label="Verplaats component">
+                  <span class="discovery-adjust-label">Move</span>
+                  <button type="button" id="fm-edit-nudge-left" class="secondary" title="Links">←</button>
+                  <button type="button" id="fm-edit-nudge-right" class="secondary" title="Rechts">→</button>
+                  <button type="button" id="fm-edit-nudge-up" class="secondary" title="Omhoog">↑</button>
+                  <button type="button" id="fm-edit-nudge-down" class="secondary" title="Omlaag">↓</button>
+                </div>
+              </div>
+            </section>
 
             <section class="discovery-dock hidden" id="fm-discovery-dock">
               <div class="discovery-dock-top">
@@ -253,7 +300,7 @@
                     <span class="fm-spectrum-val fm-spectrum-val--total" id="fm-ra">—</span>
                   </div>
                 </div>
-                <p class="hint">Kies rubriek + subrubriek en een catalogusmateriaal, of maak een eigen materiaal. Nodig voor de berekening gevelwering per VR.</p>
+                <p class="hint">Materiaal is optioneel bij opslaan (oranje led). Koppel later voor de berekening; alleen complete componenten (groen) zijn kiesbaar bij vlakdelen.</p>
               </div>
               <label class="block-label">Verdieping
                 <select id="fm-room-level">
@@ -266,13 +313,25 @@
                 </select>
               </label>
               <p class="hint" id="fm-room-pending-hint">Gebruik Teken ruimte in Tools, klik hoekpunten, sluit daarna af en sla op.</p>
-              <div class="actions actions-stack">
-                <button type="button" id="fm-room-draw-btn">Teken ruimte</button>
-                <button type="button" id="fm-room-close-btn" class="secondary" disabled>Sluit polygoon</button>
-                <button type="button" id="fm-room-simplify-btn" class="secondary" disabled>Vereenvoudig omtrek</button>
-                <button type="button" id="fm-room-save-btn" disabled>Ruimte opslaan</button>
-                <button type="button" id="fm-room-clear-btn" class="secondary" disabled>Markering wissen</button>
-                <button type="button" id="fm-discover-btn-side" class="secondary">Ontdek ruimten</button>
+              <div class="fm-component-actions">
+                <div class="fm-action-group" role="group" aria-label="Tekenen">
+                  <span class="fm-action-group-label">Tekenen</span>
+                  <div class="fm-action-group-btns">
+                    <button type="button" id="fm-room-draw-btn">Teken</button>
+                    <button type="button" id="fm-room-close-btn" class="secondary" disabled>Sluit</button>
+                    <button type="button" id="fm-room-simplify-btn" class="secondary" disabled title="Dunt de omtrek (minder ankers)">Vereenvoudig</button>
+                    <button type="button" id="fm-discover-btn-side" class="secondary">Ontdek</button>
+                  </div>
+                </div>
+                <div class="fm-action-group" role="group" aria-label="Bewerkingen">
+                  <span class="fm-action-group-label">Bewerkingen</span>
+                  <div class="fm-action-group-btns">
+                    <button type="button" id="fm-room-duplicate-btn" class="secondary" disabled title="Kopieën rond het origineel (zelfde materiaal)">Dupliceer…</button>
+                    <button type="button" id="fm-room-clear-btn" class="secondary" disabled title="Huidige markering / bewerking annuleren">Wissen</button>
+                    <button type="button" id="fm-room-delete-btn" class="secondary fm-btn-danger" disabled title="Opgeslagen component permanent verwijderen">Verwijderen</button>
+                  </div>
+                </div>
+                <button type="button" id="fm-room-save-btn" class="fm-room-save-btn" disabled>Opslaan</button>
               </div>
             </fieldset>
 
@@ -297,6 +356,6 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/floormap.js?v=compose-feedback"></script>
+  <script type="module" src="/floormap.js?v=list-save"></script>
 </body>
 </html>

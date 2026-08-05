@@ -77,6 +77,7 @@ Same building record as app-berekening-wegverkeer — see [app-gevelwering-overv
 | Floor plan rooms | `/floormap.html` (`FLOORMAP`) | `drawing_subsection` + VG/VR on room |
 | Façade components | `/floormap.html` (elevation region) | `drawing_subsection` + `analysis` JSON (material, compose, holes) |
 | GA rooms / vlakken | `/ga.html` | `verblijfsruimte`, `vlak`, link `facade_subsection_id` |
+| Multi-variant | `/ga.html` | `API_CloneVariant` / `API_CompareVariants`; see [overview §5.4](app-gevelwering-overview.md#54-varianten-multi-scenario) |
 
 **Compose (+/−)** replaces early ∩/∪/− set-ops for net façade area: largest closed ring = outer; others must be fully contained; per-part +/−; apply with **Toepassen & opslaan**. See [overview §5.2](app-gevelwering-overview.md#52-compositie--op-de-gevel).
 

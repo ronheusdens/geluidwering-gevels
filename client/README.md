@@ -4,7 +4,9 @@ Web UI for the Acoustics app. Orchestration lives one level up: [`../start.sh`](
 
 ## URL
 
-With `../start.sh` running: **http://127.0.0.1:4173/**  
+With `../start.sh` running:
+- Landing (logo): **http://127.0.0.1:4173/**
+- Opdrachtgever (login/projecten): **http://127.0.0.1:4173/opdrachtgever.html**  
 WebSocket (dev): `ws://127.0.0.1:18080/ws`. On HTTPS: `wss://<host>/ws`.
 
 **Production / TLS:** [docs/secure-deployment.md](docs/secure-deployment.md).

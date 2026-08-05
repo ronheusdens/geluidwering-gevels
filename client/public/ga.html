@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Geluidwering Gevels — Berekening gevelwering</title>
-  <link rel="stylesheet" href="/styles.css?v=pw-eye" />
+  <link rel="stylesheet" href="/styles.css?v=file-menu-light" />
 </head>
 <body>
   <main class="page page-wide">
@@ -21,7 +21,10 @@
         <a href="/engineer.html">← Engineer</a>
         ·
         <a id="ga-floormap-link" href="/floormap.html">Plattegrond</a>
+        ·
+        <a href="/handleiding.html">Handleiding</a>
       </p>
+      <nav class="file-menu" id="ga-file-menu" aria-label="Bestand" hidden></nav>
     </header>
 
     <section class="panel conn-bar" id="ga-conn-bar" aria-live="polite">
@@ -48,19 +51,26 @@
         <button type="button" id="ga-logout-btn" class="secondary">Sign out</button>
       </div>
 
-      <section class="panel">
-        <form id="ga-building-form" class="form mat-filter-row">
-          <label>Building id
-            <input id="ga-building-id" name="building_id" required placeholder="uuid" />
-          </label>
-          <div class="actions mat-filter-actions">
-            <button type="submit">Open project</button>
-            <button type="button" id="ga-queue-btn" class="secondary">Kies uit queue</button>
-          </div>
-        </form>
-        <div id="ga-queue-list" class="admin-projects-list hidden"></div>
-        <p class="hint" id="ga-building-meta">—</p>
-      </section>
+      <details class="panel tools-panel ga-project-id-bar" id="ga-project-id-bar" open>
+        <summary class="tools-panel-toggle">
+          <strong>Project</strong>
+          <span class="hint ga-project-id-summary" id="ga-building-meta-summary"></span>
+          <span class="tools-panel-chevron" aria-hidden="true"></span>
+        </summary>
+        <div class="tools-panel-main">
+          <form id="ga-building-form" class="form mat-filter-row">
+            <label>Building id
+              <input id="ga-building-id" name="building_id" required placeholder="uuid" />
+            </label>
+            <div class="actions mat-filter-actions">
+              <button type="submit">Open project</button>
+              <button type="button" id="ga-queue-btn" class="secondary">Kies uit queue</button>
+            </div>
+          </form>
+          <div id="ga-queue-list" class="admin-projects-list hidden"></div>
+          <p class="hint" id="ga-building-meta">—</p>
+        </div>
+      </details>
 
       <section class="panel hidden" id="ga-model-panel">
         <div class="ga-grid">
@@ -88,11 +98,25 @@
               </label>
               <div class="actions">
                 <button type="submit">Opslaan variant</button>
+                <button type="button" id="ga-variant-clone-btn" class="secondary">Kopieer variant</button>
                 <button type="button" id="ga-variant-new-btn" class="secondary">Nieuwe variant</button>
                 <button type="button" id="ga-variant-del-btn" class="secondary">Verwijder</button>
               </div>
             </form>
             <ul id="ga-variant-list" class="drawing-list"></ul>
+
+            <h3 class="ga-subhead">Varianten vergelijken</h3>
+            <p class="hint">Selecteer minstens twee varianten. Ruimten worden gematcht op dezelfde plattegrondruimte. Spectrum is alleen ter info (geen spectraal rekenmodel).</p>
+            <div id="ga-compare-pick" class="ga-compare-pick"></div>
+            <div class="actions">
+              <button type="button" id="ga-compare-btn" class="secondary">Vergelijk</button>
+            </div>
+            <div id="ga-compare-table-wrap" class="ga-compare-wrap hidden">
+              <table id="ga-compare-table" class="ga-compare-table">
+                <thead></thead>
+                <tbody></tbody>
+              </table>
+            </div>
           </div>
 
           <div class="ga-col" id="ga-vg-col">
@@ -159,6 +183,19 @@
               </label>
               <p class="ga-room-preview is-empty" id="ga-vlak-facade-preview">—</p>
               <label>Omschrijving vlak <input id="ga-vlak-name" maxlength="80" placeholder="bijv. voorzijde" /></label>
+              <label>Orientatie
+                <select id="ga-vlak-orientatie" title="Windrichting van het gevelvlak — basis voor Lb per gevel → CL">
+                  <option value="">—</option>
+                  <option value="N">N · noord</option>
+                  <option value="NO">NO · noordoost</option>
+                  <option value="O">O · oost</option>
+                  <option value="ZO">ZO · zuidoost</option>
+                  <option value="Z">Z · zuid</option>
+                  <option value="ZW">ZW · zuidwest</option>
+                  <option value="W">W · west</option>
+                  <option value="NW">NW · noordwest</option>
+                </select>
+              </label>
               <label><span id="ga-vlak-qty-label">S [m²]</span> <input id="ga-vlak-area" type="number" min="0" step="0.01" value="0" /></label>
               <label>CL [dB] <input id="ga-vlak-cl" type="number" step="0.1" min="0" max="100" value="0" title="Geluidsniveaucorrectie (telt mee via het grootste geveloppervlak)" /></label>
               <label>Cg [dB] <input id="ga-vlak-cg" type="number" step="0.1" value="0" title="Gevelstructuurcorrectie (telt mee via het grootste geveloppervlak)" /></label>
@@ -186,12 +223,23 @@
               <div class="actions">
                 <button type="button" id="ga-recalc-btn" class="secondary">Herberekenen GA / GA;k</button>
               </div>
+              <div class="actions ga-report-actions">
+                <label class="inline-label">Versie
+                  <select id="ga-report-kind" title="Concept of definitief">
+                    <option value="concept">Concept</option>
+                    <option value="definitief">Definitief</option>
+                  </select>
+                </label>
+                <button type="button" id="ga-report-btn" class="secondary">Rapport opslaan</button>
+                <button type="button" id="ga-report-inbox-btn">Naar inbox opdrachtgever</button>
+              </div>
+              <p class="hint" id="ga-report-hint"></p>
             </div>
           </div>
         </div>
       </section>
     </section>
   </main>
-  <script type="module" src="/ga.js?v=cl-live"></script>
+  <script type="module" src="/ga.js?v=mat-ready"></script>
 </body>
 </html>

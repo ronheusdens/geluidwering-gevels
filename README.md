@@ -34,6 +34,7 @@ UI `:4173`, WebSocket `:18080` (defaults).
 
 ## Docs
 
-- Architecture (suite / schema / App1–App2): [`docs/architecture/`](docs/architecture/)
+- Architecture (overview, schema, multi-variant GA): [`docs/architecture/`](docs/architecture/)
+- Engineer-handleiding (online): [`/handleiding.html`](client/public/handleiding.html) na `./start.sh`
 - Secure deploy: [`client/docs/secure-deployment.md`](client/docs/secure-deployment.md)
 - Apache template: [`scripts/apache2/app-gevelwering-https.conf`](scripts/apache2/app-gevelwering-https.conf)

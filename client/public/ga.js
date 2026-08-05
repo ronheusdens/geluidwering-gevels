@@ -88,6 +88,22 @@ function initPasswordToggles(root = document) {
 // src/ga-calc.ts
 var CR_DB = 3;
 var GRENZWAARDE_LBIK_DB = 33;
+var GRENZWAARDE_LBIK_BY_FUNCTIE = {
+  Woonfunctie: 33,
+  "Bijeenkomst voor kinderopvang": 28,
+  Gezondheidszorgfunctie: 33,
+  Onderwijsfunctie: 28,
+  "Wgh, gezondheidszorg geluidgevoelig": 33,
+  "Wgh, onderwijsfunctie geluidgevoelig": 28,
+  Overig: 33
+};
+function grenswaardeLbik(gebruiksfunctie) {
+  const key = String(gebruiksfunctie || "").trim();
+  if (key && key in GRENZWAARDE_LBIK_BY_FUNCTIE) {
+    return GRENZWAARDE_LBIK_BY_FUNCTIE[key];
+  }
+  return GRENZWAARDE_LBIK_DB;
+}
 function round1(x) {
   return Math.round(Number(x) * 10) / 10;
 }
@@ -125,10 +141,12 @@ function computeVrGa(input) {
   const T = Number(input.t0_s) > 0 ? Number(input.t0_s) : 0.5;
   const Lb = Number(input.geluidsbelasting_dba);
   const Cr = input.cr_db != null ? Number(input.cr_db) : CR_DB;
+  const grens = input.grenswaarde_lbik_db != null && Number.isFinite(Number(input.grenswaarde_lbik_db)) ? Number(input.grenswaarde_lbik_db) : grenswaardeLbik(input.gebruiksfunctie);
   const vlakken2 = Array.isArray(input.vlakken) ? input.vlakken : [];
   const emptyToets = {
     lbik_dba: null,
     gak_required_dba: null,
+    grenswaarde_lbik_db: grens,
     voldoet: null
   };
   const elements = [];
@@ -216,9 +234,9 @@ function computeVrGa(input) {
   const lbi = Number.isFinite(Lb) ? Lb - ga : null;
   const gakCorr = stot > 0 ? gakCorrectionDb(V, T, stot) : null;
   const gak = gakCorr != null ? ga - gakCorr : null;
-  const gakRequired = Number.isFinite(Lb) ? Lb - GRENZWAARDE_LBIK_DB : null;
+  const gakRequired = Number.isFinite(Lb) ? Lb - grens : null;
   const lbik = gak != null && Number.isFinite(Lb) ? Lb - gak : null;
-  const voldoet = lbik != null ? lbik <= GRENZWAARDE_LBIK_DB : null;
+  const voldoet = lbik != null ? lbik <= grens : null;
   return {
     ok: true,
     reason: null,
@@ -237,7 +255,313 @@ function computeVrGa(input) {
     gak_corr_db: gakCorr,
     lbik_dba: lbik,
     gak_required_dba: gakRequired,
+    grenswaarde_lbik_db: grens,
     voldoet
+  };
+}
+
+// src/project-menu.ts
+var RECENT_KEY = "app-gevelwering-recent-projects";
+var RECENT_MAX = 8;
+function parseJsonOk(raw) {
+  if (raw.startsWith("ERROR")) throw new Error(raw);
+  return JSON.parse(raw);
+}
+function projectTitle(meta) {
+  const label = (meta.label || "").trim();
+  const ref = (meta.external_ref || "").trim();
+  if (label && ref) return `${label} (${ref})`;
+  if (label) return label;
+  if (ref) return ref;
+  const id = meta.building_id || "";
+  return id ? `${id.slice(0, 8)}\u2026` : "Geen project";
+}
+function loadRecentProjects() {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((p) => p?.building_id) : [];
+  } catch {
+    return [];
+  }
+}
+function rememberRecentProject(entry) {
+  const id = entry.building_id.trim();
+  if (!id) return;
+  const next = {
+    building_id: id,
+    label: (entry.label || "").trim(),
+    external_ref: (entry.external_ref || "").trim() || void 0,
+    at: Date.now()
+  };
+  const rest = loadRecentProjects().filter((p) => p.building_id !== id);
+  localStorage.setItem(RECENT_KEY, JSON.stringify([next, ...rest].slice(0, RECENT_MAX)));
+}
+function removeRecentProject(buildingId2) {
+  const id = buildingId2.trim();
+  if (!id) return;
+  localStorage.setItem(
+    RECENT_KEY,
+    JSON.stringify(loadRecentProjects().filter((p) => p.building_id !== id))
+  );
+}
+async function cleanupProjectFolder(buildingId2, headers) {
+  try {
+    await fetch("/api/reports/cleanup-project-folder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({ building_id: buildingId2 })
+    });
+  } catch {
+  }
+}
+function mountProjectMenu(root, host) {
+  root.classList.add("file-menu");
+  root.innerHTML = `
+    <div class="file-menu-bar">
+      <details class="file-menu-details" id="pm-root">
+        <summary class="file-menu-summary">Bestand</summary>
+        <ul class="file-menu-list" role="menu">
+          <li><button type="button" role="menuitem" data-act="open">Openen\u2026</button></li>
+          <li class="file-menu-recent-wrap">
+            <details class="file-menu-recent">
+              <summary>Recent</summary>
+              <ul class="file-menu-recent-list" id="pm-recent"></ul>
+            </details>
+          </li>
+          <li><button type="button" role="menuitem" data-act="save">Project opslaan</button></li>
+          <li><button type="button" role="menuitem" data-act="rename">Hernoemen\u2026</button></li>
+          <li><button type="button" role="menuitem" data-act="delete" class="danger">Verwijderen\u2026</button></li>
+        </ul>
+      </details>
+      <span class="file-menu-project-title" id="pm-title" aria-live="polite">Geen project</span>
+    </div>
+    <dialog class="file-menu-dialog" id="pm-open-dialog">
+      <form method="dialog" class="file-menu-dialog-form">
+        <h2>Project openen</h2>
+        <p class="hint">Kies een lopend project om verder te werken.</p>
+        <ul class="file-menu-project-list" id="pm-open-list"></ul>
+        <p class="hint hidden" id="pm-open-empty">Geen openstaande projecten.</p>
+        <div class="actions">
+          <button type="submit" value="cancel" class="secondary">Annuleren</button>
+        </div>
+      </form>
+    </dialog>
+  `;
+  const detailsEl = root.querySelector("#pm-root");
+  const titleEl = root.querySelector("#pm-title");
+  const recentEl = root.querySelector("#pm-recent");
+  const dialogEl = root.querySelector("#pm-open-dialog");
+  const openListEl = root.querySelector("#pm-open-list");
+  const openEmptyEl = root.querySelector("#pm-open-empty");
+  function status(state, text) {
+    host.onStatus?.(state, text);
+  }
+  function refreshTitle() {
+    const id = host.getBuildingId();
+    const meta = host.getProjectMeta();
+    const title = projectTitle({ ...meta, building_id: id });
+    titleEl.textContent = id ? title : "Geen project";
+    host.setTitle?.(id ? title : "Geen project");
+  }
+  function rememberCurrent() {
+    const id = host.getBuildingId();
+    if (!id) return;
+    const meta = host.getProjectMeta();
+    rememberRecentProject({
+      building_id: id,
+      label: meta.label,
+      external_ref: meta.external_ref
+    });
+    renderRecent();
+    refreshTitle();
+  }
+  function closeMenu() {
+    detailsEl.open = false;
+    const recent = root.querySelector(".file-menu-recent");
+    if (recent) recent.open = false;
+  }
+  function renderRecent() {
+    recentEl.innerHTML = "";
+    const items = loadRecentProjects();
+    if (!items.length) {
+      const li = document.createElement("li");
+      li.className = "hint";
+      li.textContent = "Nog geen recente projecten";
+      recentEl.appendChild(li);
+      return;
+    }
+    for (const p of items) {
+      const li = document.createElement("li");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = projectTitle(p);
+      btn.addEventListener("click", () => {
+        closeMenu();
+        void openProject(p.building_id);
+      });
+      li.appendChild(btn);
+      recentEl.appendChild(li);
+    }
+  }
+  async function openProject(buildingId2) {
+    status("busy", "Project openen\u2026");
+    try {
+      await host.openBuilding(buildingId2);
+      rememberCurrent();
+      status("ok", "Project geopend");
+    } catch (err) {
+      status("err", err instanceof Error ? err.message : String(err));
+    }
+  }
+  async function showOpenDialog() {
+    const token = host.getToken();
+    if (!token) {
+      status("err", "Log eerst in");
+      return;
+    }
+    closeMenu();
+    openListEl.innerHTML = "";
+    openEmptyEl.classList.add("hidden");
+    status("busy", "Projecten laden\u2026");
+    try {
+      const ret = await host.invokeString("API_EngineerListProjects", [token]);
+      const data = parseJsonOk(ret);
+      const projects = data.projects || [];
+      if (!projects.length) {
+        openEmptyEl.classList.remove("hidden");
+      }
+      for (const p of projects) {
+        const li = document.createElement("li");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        const title = projectTitle(p);
+        btn.textContent = p.customer_name ? `${title} \u2014 ${p.customer_name}` : title;
+        if (p.project_status) {
+          btn.title = p.project_status;
+        }
+        btn.addEventListener("click", () => {
+          dialogEl.close();
+          void openProject(p.building_id);
+        });
+        li.appendChild(btn);
+        openListEl.appendChild(li);
+      }
+      status("ok", `${projects.length} project(en)`);
+      if (typeof dialogEl.showModal === "function") dialogEl.showModal();
+      else dialogEl.setAttribute("open", "");
+    } catch (err) {
+      status("err", err instanceof Error ? err.message : String(err));
+    }
+  }
+  async function saveProject() {
+    closeMenu();
+    if (!host.getBuildingId()) {
+      status("err", "Geen project geselecteerd");
+      return;
+    }
+    status("busy", "Project opslaan\u2026");
+    try {
+      await host.saveProject();
+      rememberCurrent();
+      status("ok", "Project opgeslagen");
+    } catch (err) {
+      status("err", err instanceof Error ? err.message : String(err));
+    }
+  }
+  async function renameProject() {
+    closeMenu();
+    const token = host.getToken();
+    const id = host.getBuildingId();
+    if (!token || !id) {
+      status("err", "Geen project geselecteerd");
+      return;
+    }
+    const meta = host.getProjectMeta();
+    const label = window.prompt("Projectnaam (label)", meta.label || "");
+    if (label === null) return;
+    const externalRef = window.prompt("Werknummer / externe referentie", meta.external_ref || "");
+    if (externalRef === null) return;
+    status("busy", "Hernoemen\u2026");
+    try {
+      const ret = await host.invokeString("API_RenameProject", [
+        token,
+        id,
+        label.trim(),
+        externalRef.trim()
+      ]);
+      const data = parseJsonOk(ret);
+      const next = {
+        label: data.label ?? label.trim(),
+        external_ref: data.external_ref ?? externalRef.trim()
+      };
+      host.onProjectRenamed?.(next);
+      rememberRecentProject({ building_id: id, ...next });
+      renderRecent();
+      refreshTitle();
+      status("ok", "Project hernoemd");
+    } catch (err) {
+      status("err", err instanceof Error ? err.message : String(err));
+    }
+  }
+  async function deleteProject() {
+    closeMenu();
+    const token = host.getToken();
+    const id = host.getBuildingId();
+    if (!token || !id) {
+      status("err", "Geen project geselecteerd");
+      return;
+    }
+    const title = projectTitle({ ...host.getProjectMeta(), building_id: id });
+    if (!window.confirm(
+      `Project \xAB${title}\xBB definitief verwijderen?
+Dit wist berekeningen, tekeningen en rapportmappen. Dit kan niet ongedaan worden gemaakt.`
+    )) {
+      return;
+    }
+    status("busy", "Project verwijderen\u2026");
+    try {
+      const ret = await host.invokeString("API_EngineerDeleteProject", [token, id]);
+      parseJsonOk(ret);
+      await cleanupProjectFolder(id, host.apiAuthHeaders());
+      removeRecentProject(id);
+      renderRecent();
+      await host.onProjectDeleted?.();
+      refreshTitle();
+      status("ok", "Project verwijderd");
+    } catch (err) {
+      status("err", err instanceof Error ? err.message : String(err));
+    }
+  }
+  root.addEventListener("click", (ev) => {
+    const btn = ev.target.closest("button[data-act]");
+    if (!btn || !root.contains(btn)) return;
+    const act = btn.dataset.act;
+    if (act === "open") void showOpenDialog();
+    else if (act === "save") void saveProject();
+    else if (act === "rename") void renameProject();
+    else if (act === "delete") void deleteProject();
+  });
+  document.addEventListener("click", (ev) => {
+    if (!detailsEl.open) return;
+    if (root.contains(ev.target)) return;
+    closeMenu();
+  });
+  renderRecent();
+  refreshTitle();
+  return {
+    refreshTitle,
+    rememberCurrent,
+    setEnabled(on) {
+      root.classList.toggle("disabled", !on);
+      for (const b of root.querySelectorAll("button, summary")) {
+        if (b instanceof HTMLElement) {
+          if (on) b.removeAttribute("aria-disabled");
+          else b.setAttribute("aria-disabled", "true");
+        }
+      }
+    }
   };
 }
 
@@ -255,10 +579,13 @@ var logoutBtn = document.getElementById("ga-logout-btn");
 var buildingForm = document.getElementById("ga-building-form");
 var buildingIdEl = document.getElementById("ga-building-id");
 var buildingMetaEl = document.getElementById("ga-building-meta");
+var buildingMetaSummaryEl = document.getElementById("ga-building-meta-summary");
+var projectIdBarEl = document.getElementById("ga-project-id-bar");
 var queueBtn = document.getElementById("ga-queue-btn");
 var queueListEl = document.getElementById("ga-queue-list");
 var modelPanelEl = document.getElementById("ga-model-panel");
 var floormapLinkEl = document.getElementById("ga-floormap-link");
+var fileMenuRoot = document.getElementById("ga-file-menu");
 var variantForm = document.getElementById("ga-variant-form");
 var variantListEl = document.getElementById("ga-variant-list");
 var variantNameEl = document.getElementById("ga-variant-name");
@@ -266,7 +593,12 @@ var variantFunctieEl = document.getElementById("ga-variant-functie");
 var variantLbEl = document.getElementById("ga-variant-lb");
 var variantSpectrumEl = document.getElementById("ga-variant-spectrum");
 var variantNewBtn = document.getElementById("ga-variant-new-btn");
+var variantCloneBtn = document.getElementById("ga-variant-clone-btn");
 var variantDelBtn = document.getElementById("ga-variant-del-btn");
+var comparePickEl = document.getElementById("ga-compare-pick");
+var compareBtn = document.getElementById("ga-compare-btn");
+var compareWrapEl = document.getElementById("ga-compare-table-wrap");
+var compareTableEl = document.getElementById("ga-compare-table");
 var vgNewBtn = document.getElementById("ga-vg-new-btn");
 var vgRoomEl = document.getElementById("ga-vg-room");
 var roomPreviewEl = document.getElementById("ga-room-preview");
@@ -293,6 +625,7 @@ var vlakFacadeHintEl = document.getElementById("ga-vlak-facade-hint");
 var vlakFacadePreviewEl = document.getElementById("ga-vlak-facade-preview");
 var vlakAreaEl = document.getElementById("ga-vlak-area");
 var vlakQtyLabelEl = document.getElementById("ga-vlak-qty-label");
+var vlakOrientatieEl = document.getElementById("ga-vlak-orientatie");
 var vlakClEl = document.getElementById("ga-vlak-cl");
 var vlakCgEl = document.getElementById("ga-vlak-cg");
 var vlakGakEl = document.getElementById("ga-vlak-gak");
@@ -300,6 +633,10 @@ var vlakSaveBtn = document.getElementById("ga-vlak-save-btn");
 var vlakCancelBtn = document.getElementById("ga-vlak-cancel-btn");
 var vlakListEl = document.getElementById("ga-vlak-list");
 var recalcBtn = document.getElementById("ga-recalc-btn");
+var reportBtn = document.getElementById("ga-report-btn");
+var reportInboxBtn = document.getElementById("ga-report-inbox-btn");
+var reportKindEl = document.getElementById("ga-report-kind");
+var reportHintEl = document.getElementById("ga-report-hint");
 var vrResultsHintEl = document.getElementById("ga-vr-results-hint");
 var resSEl = document.getElementById("ga-res-s");
 var resRpEl = document.getElementById("ga-res-rp");
@@ -328,11 +665,17 @@ var selectedVlakId = null;
 var vlakken = [];
 var freshResultVrIds = /* @__PURE__ */ new Set();
 var vrVoldoet = /* @__PURE__ */ new Map();
+var resultsDirty = false;
 var freeRooms = [];
 var floormapRoomsById = /* @__PURE__ */ new Map();
 var vrFacades = [];
+var allLinks = [];
 var linkedBySub = /* @__PURE__ */ new Map();
 var linkedSubIds = /* @__PURE__ */ new Set();
+var compareSelectedIds = /* @__PURE__ */ new Set();
+var buildingLabel = "";
+var buildingExternalRef = "";
+var projectMenu = null;
 function nextRequestId(prefix) {
   requestSeq += 1;
   return `${prefix}_${requestSeq}`;
@@ -349,6 +692,8 @@ function storeAuth2(info) {
 function showLogin() {
   loginPanelEl.classList.remove("hidden");
   panelEl.classList.add("hidden");
+  if (fileMenuRoot) fileMenuRoot.hidden = true;
+  projectMenu?.setEnabled(false);
 }
 function showPanel(info) {
   storeAuth2(info);
@@ -356,6 +701,9 @@ function showPanel(info) {
   loginPanelEl.classList.add("hidden");
   panelEl.classList.remove("hidden");
   userLabelEl.textContent = `Ingelogd als ${info.display_name || info.username}`;
+  if (fileMenuRoot) fileMenuRoot.hidden = false;
+  projectMenu?.setEnabled(true);
+  projectMenu?.refreshTitle();
 }
 function send(type, payload, wantType) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error("WebSocket not open"));
@@ -415,7 +763,7 @@ async function apiGet(url) {
   if (!res.ok || body.ok === false) throw new Error(body.error || `HTTP ${res.status}`);
   return body;
 }
-function parseJsonOk(ret) {
+function parseJsonOk2(ret) {
   if (ret.startsWith("ERROR")) throw new Error(ret);
   return JSON.parse(ret);
 }
@@ -429,14 +777,28 @@ function syncFloormapLink() {
 async function refreshLinks() {
   if (!buildingId || !auth) return;
   const ret = await invokeString("API_ListLinkedSubsections", [auth.token, buildingId]);
-  const data = parseJsonOk(ret);
+  const data = parseJsonOk2(ret);
+  allLinks = data.links || [];
+  rebuildLinkedForSelectedVariant();
+}
+function rebuildLinkedForSelectedVariant() {
   linkedBySub = /* @__PURE__ */ new Map();
   linkedSubIds = /* @__PURE__ */ new Set();
-  for (const l of data.links || []) {
+  for (const l of allLinks) {
     if (!l?.subsection_id) continue;
+    if (selectedVariantId && l.variant_id && l.variant_id !== selectedVariantId) continue;
     linkedBySub.set(l.subsection_id, l);
     linkedSubIds.add(l.subsection_id);
   }
+}
+function roomsForVg(vgId) {
+  const out = [];
+  for (const l of allLinks) {
+    if (l.verblijfsgebied_id !== vgId) continue;
+    const room = floormapRoomsById.get(l.subsection_id);
+    if (room) out.push(room);
+  }
+  return out;
 }
 function vgLabelFromNr(vgNr, fallback = "Verblijfsgebied") {
   const n = String(vgNr).trim();
@@ -475,15 +837,6 @@ function levelLabel(hint) {
 }
 function isGroundLevel(hint) {
   return String(hint || "").toUpperCase() === "GROUND";
-}
-function roomsForVg(vgId) {
-  const out = [];
-  for (const [subId, link] of linkedBySub) {
-    if (link.verblijfsgebied_id !== vgId) continue;
-    const room = floormapRoomsById.get(subId);
-    if (room) out.push(room);
-  }
-  return out;
 }
 function vgNrForVg(vgId, omschrijving) {
   const rooms = roomsForVg(vgId);
@@ -775,10 +1128,12 @@ function fillFacadeSelect() {
   vlakFacadeEl.innerHTML = "";
   const ph = document.createElement("option");
   ph.value = "";
-  ph.textContent = vrFacades.length ? "\u2014 kies gevelcomponent voor deze VR \u2014" : selectedVrId ? "\u2014 geen componenten voor deze VR \u2014" : "\u2014 selecteer eerst een VR \u2014";
+  const allGroups = groupFacadesForPick(vrFacades, used);
+  const readyGroups = allGroups.filter((g) => g.ga_ready);
+  const incompleteN = allGroups.filter((g) => !g.ga_ready).length;
+  ph.textContent = vrFacades.length ? readyGroups.length ? "\u2014 kies gevelcomponent voor deze VR \u2014" : incompleteN ? "\u2014 geen complete componenten (eerst materiaal op gevel) \u2014" : "\u2014 geen componenten voor deze VR \u2014" : selectedVrId ? "\u2014 geen componenten voor deze VR \u2014" : "\u2014 selecteer eerst een VR \u2014";
   vlakFacadeEl.appendChild(ph);
-  const groups = groupFacadesForPick(vrFacades, used);
-  const shown = groups.some((g) => !g.used) ? groups.filter((g) => !g.used) : groups;
+  const shown = readyGroups.some((g) => !g.used) ? readyGroups.filter((g) => !g.used) : readyGroups;
   for (const g of shown) {
     const o = document.createElement("option");
     o.value = g.primaryId;
@@ -801,7 +1156,7 @@ function fillFacadeSelect() {
   if (prev && [...vlakFacadeEl.options].some((o) => o.value === prev)) {
     pick = prev;
   } else {
-    const ready = shown.find((g) => g.ga_ready && !g.used) || shown.find((g) => !g.used) || shown[0];
+    const ready = shown.find((g) => !g.used) || shown[0];
     if (ready) pick = ready.primaryId;
   }
   if (pick) vlakFacadeEl.value = pick;
@@ -861,10 +1216,11 @@ async function loadFacadesForSelectedVr() {
       const used = new Set(
         vlakken.map((v) => v.facade_subsection_id).filter((id) => Boolean(id))
       );
-      const pickGroups = groupFacadesForPick(vrFacades, used);
+      const pickGroups = groupFacadesForPick(vrFacades, used).filter((g) => g.ga_ready);
       const merged = pickGroups.filter((g) => g.members.length > 1).length;
       const pickN = pickGroups.filter((g) => !g.used).length || pickGroups.length;
-      vlakFacadeHintEl.textContent = n === 0 ? `Geen gevelcomponenten voor VR ${vrNr}${excl ? ` (${excl} vervangen door zelfde-materiaal setbewerking)` : ""}.` : `VR ${vrNr}: ${n} component${n === 1 ? "" : "en"} \xB7 ${ready} met materiaal \xB7 ${pickN} keuz${pickN === 1 ? "e" : "es"}${merged ? ` (${merged}\xD7 zelfde materiaal opgeteld)` : ""}${excl ? ` \xB7 ${excl} vervangen (zelfde materiaal)` : ""}.`;
+      const incomplete = n - ready;
+      vlakFacadeHintEl.textContent = n === 0 ? `Geen gevelcomponenten voor VR ${vrNr}${excl ? ` (${excl} vervangen door zelfde-materiaal setbewerking)` : ""}.` : `VR ${vrNr}: ${ready} met materiaal \xB7 ${pickN} kiesbaar${merged ? ` (${merged}\xD7 zelfde materiaal opgeteld)` : ""}${incomplete ? ` \xB7 ${incomplete} zonder materiaal (niet selecteerbaar)` : ""}${excl ? ` \xB7 ${excl} vervangen (zelfde materiaal)` : ""}.`;
     }
   } catch (err) {
     vrFacades = [];
@@ -891,7 +1247,7 @@ function updateFacadeHint() {
     const matLabel = code && name ? `${code} \xB7 ${name}` : code || name || "materiaal gekoppeld";
     vlakFacadePreviewEl.textContent = `Materiaal: ${matLabel} (wijzig op geveltekening)`;
   } else {
-    vlakFacadePreviewEl.textContent = "Geen materiaal op deze component \u2014 koppel het op de geveltekening, daarna hier als vlak toevoegen.";
+    vlakFacadePreviewEl.textContent = "Geen materiaal \u2014 incomplete componenten staan niet in de keuzelijst; koppel eerst op de geveltekening.";
   }
   vlakFacadePreviewEl.classList.toggle("is-empty", !hasMat);
   vlakFacadePreviewEl.classList.toggle("is-warn", !hasMat);
@@ -932,16 +1288,23 @@ function onFacadePick(forceName = false) {
     vlakNameEl.value = opt.dataset.label || "Vlak";
   }
 }
+function refreshFreeRoomsFromLinks() {
+  rebuildLinkedForSelectedVariant();
+  freeRooms = [...floormapRoomsById.values()].filter((r) => !linkedSubIds.has(r.id));
+  fillRoomSelect();
+}
 async function loadVariants() {
   if (!buildingId || !auth) return;
   const ret = await invokeString("API_ListVariants", [auth.token, buildingId]);
-  const data = parseJsonOk(ret);
+  const data = parseJsonOk2(ret);
   variants = data.variants || [];
   if (!selectedVariantId && variants.length) selectedVariantId = variants[0].variant_id;
   if (selectedVariantId && !variants.some((v) => v.variant_id === selectedVariantId)) {
     selectedVariantId = variants[0]?.variant_id ?? null;
   }
+  refreshFreeRoomsFromLinks();
   renderVariants();
+  renderComparePick();
   const cur = variants.find((v) => v.variant_id === selectedVariantId);
   if (cur) fillVariantForm(cur);
   await loadVgs();
@@ -972,12 +1335,114 @@ function renderVariants() {
     btn.addEventListener("click", () => {
       selectedVariantId = v.variant_id;
       fillVariantForm(v);
+      refreshFreeRoomsFromLinks();
       renderVariants();
+      renderComparePick();
       void loadVgs();
     });
     li.appendChild(btn);
     variantListEl.appendChild(li);
   }
+}
+function renderComparePick() {
+  if (!comparePickEl) return;
+  comparePickEl.innerHTML = "";
+  if (variants.length < 2) {
+    comparePickEl.innerHTML = `<p class="hint">Maak of kopieer een tweede variant om te vergelijken.</p>`;
+    return;
+  }
+  for (const v of variants) {
+    const label = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = v.variant_id;
+    cb.checked = compareSelectedIds.has(v.variant_id);
+    cb.addEventListener("change", () => {
+      if (cb.checked) compareSelectedIds.add(v.variant_id);
+      else compareSelectedIds.delete(v.variant_id);
+    });
+    label.appendChild(cb);
+    label.appendChild(
+      document.createTextNode(
+        ` ${v.omschrijving} \xB7 Lb ${v.geluidsbelasting_dba} dB \xB7 ${v.spectrum_kind}`
+      )
+    );
+    comparePickEl.appendChild(label);
+  }
+}
+function fmtCompareNum(n) {
+  if (n == null || !Number.isFinite(Number(n))) return "\u2014";
+  return String(round1(Number(n)));
+}
+async function runVariantCompare() {
+  if (!auth || !buildingId || !compareTableEl || !compareWrapEl) return;
+  const ids = [...compareSelectedIds].filter((id) => variants.some((v) => v.variant_id === id));
+  if (ids.length < 2) throw new Error("Selecteer minstens twee varianten");
+  const ret = await invokeString("API_CompareVariants", [auth.token, buildingId, ids.join(",")]);
+  const data = parseJsonOk2(ret);
+  const rows = data.rows || [];
+  const bySub = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    let entry = bySub.get(r.subsection_id);
+    if (!entry) {
+      const room = floormapRoomsById.get(r.subsection_id);
+      const label = r.vr_nr ? `VR ${r.vr_nr}${r.omschrijving ? ` \xB7 ${r.omschrijving}` : ""}` : r.omschrijving || r.subsection_id.slice(0, 8);
+      entry = { label: room ? vrLabelFromNr(room.vr_nr || r.vr_nr, room.label) : label, byVariant: /* @__PURE__ */ new Map() };
+      bySub.set(r.subsection_id, entry);
+    }
+    entry.byVariant.set(r.variant_id, r);
+  }
+  const selectedVariants = ids.map((id) => variants.find((v) => v.variant_id === id)).filter((v) => Boolean(v));
+  const thead = compareTableEl.querySelector("thead");
+  const tbody = compareTableEl.querySelector("tbody");
+  if (!thead || !tbody) return;
+  thead.innerHTML = "";
+  tbody.innerHTML = "";
+  const hr = document.createElement("tr");
+  hr.innerHTML = `<th>Ruimte</th>`;
+  for (const v of selectedVariants) {
+    const th = document.createElement("th");
+    th.innerHTML = `${esc(v.omschrijving)}<br><span class="hint">Lb ${esc(String(v.geluidsbelasting_dba))} \xB7 ${esc(v.spectrum_kind)} \xB7 ${esc(v.gebruiksfunctie)}</span>`;
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr);
+  const sortedSubs = [...bySub.entries()].sort((a, b) => a[1].label.localeCompare(b[1].label, "nl"));
+  for (const [, entry] of sortedSubs) {
+    const tr = document.createElement("tr");
+    const td0 = document.createElement("td");
+    td0.textContent = entry.label;
+    tr.appendChild(td0);
+    const cellVals = [];
+    for (const v of selectedVariants) {
+      const r = entry.byVariant.get(v.variant_id);
+      const grens = grenswaardeLbik(v.gebruiksfunctie);
+      const gak = r?.gak_dba != null ? Number(r.gak_dba) : null;
+      const lb = Number(v.geluidsbelasting_dba);
+      const lbik = gak != null && Number.isFinite(lb) ? round1(lb - gak) : null;
+      const toets = lbik != null ? lbik <= grens : null;
+      const ga = r?.ga_dba != null ? Number(r.ga_dba) : null;
+      const text = `GA ${fmtCompareNum(ga)} \xB7 GA;k ${fmtCompareNum(gak)} \xB7 Lbi;k ${fmtCompareNum(lbik)}` + (toets == null ? " \xB7 \u2014" : toets ? " \xB7 Voldoet" : " \xB7 Voldoet niet");
+      cellVals.push({ lbik, toets, text });
+    }
+    const lbiks = cellVals.map((c) => c.lbik).filter((x) => x != null);
+    const allSame = lbiks.length <= 1 || lbiks.every((x) => Math.abs(x - lbiks[0]) < 0.05);
+    const toetsDiff = new Set(cellVals.map((c) => String(c.toets))).size > 1;
+    for (const c of cellVals) {
+      const td = document.createElement("td");
+      td.textContent = c.text;
+      if (c.toets === true) td.classList.add("toets-ok");
+      if (c.toets === false) td.classList.add("toets-fail");
+      if (!allSame || toetsDiff) td.classList.add("ga-compare-diff");
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  if (!sortedSubs.length) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td colspan="${selectedVariants.length + 1}">Geen gedeelde ruimten in de geselecteerde varianten.</td>`;
+    tbody.appendChild(tr);
+  }
+  compareWrapEl.classList.remove("hidden");
 }
 async function loadVgs(preferVgId) {
   vgs = [];
@@ -994,7 +1459,7 @@ async function loadVgs(preferVgId) {
     return;
   }
   const ret = await invokeString("API_ListVerblijfsgebieden", [auth.token, selectedVariantId]);
-  const data = parseJsonOk(ret);
+  const data = parseJsonOk2(ret);
   vgs = sortByLabelAz(data.verblijfsgebieden || [], vgDisplayTitle);
   await syncVgTitlesFromFloormap();
   vgs = sortByLabelAz(vgs, vgDisplayTitle);
@@ -1091,7 +1556,7 @@ async function loadVrs(preferVrId) {
     return;
   }
   const ret = await invokeString("API_ListVerblijfsruimten", [auth.token, selectedVgId]);
-  const data = parseJsonOk(ret);
+  const data = parseJsonOk2(ret);
   vrs = sortByLabelAz(data.verblijfsruimten || [], (r) => r.omschrijving || "");
   for (const id of [...freshResultVrIds]) {
     const vr = vrs.find((r) => r.verblijfsruimte_id === id);
@@ -1137,14 +1602,21 @@ function renderVrs() {
       const metrics = effectiveVrMetrics(r);
       btn.textContent = `${r.omschrijving} \xB7 ${metrics.vloer.toFixed(2)} m\xB2 \xB7 V=${metrics.volume.toFixed(1)} m\xB3`;
     }
-    if (r.verblijfsruimte_id === selectedVrId && (r.gak_dba != null || r.ga_dba != null) && freshResultVrIds.has(r.verblijfsruimte_id)) {
+    if (r.gak_dba != null || r.ga_dba != null || r.lbi_dba != null) {
+      if (!vrVoldoet.has(r.verblijfsruimte_id)) {
+        const t = deriveToetsFromStored(r);
+        if (t != null) vrVoldoet.set(r.verblijfsruimte_id, t);
+      }
+      const source = freshResultVrIds.has(r.verblijfsruimte_id) ? "" : " (opgeslagen)";
       const bits = [
         r.ga_dba != null ? `GA=${round1(r.ga_dba)}` : null,
         r.lbi_dba != null ? `Lbi=${round1(r.lbi_dba)}` : null,
         r.gak_dba != null ? `GA;k=${round1(r.gak_dba)}` : null,
         vrVoldoet.get(r.verblijfsruimte_id) === true ? "Voldoet" : vrVoldoet.get(r.verblijfsruimte_id) === false ? "Voldoet niet" : null
       ].filter(Boolean);
-      btn.textContent += ` \xB7 ${bits.join(" \xB7 ")}`;
+      btn.textContent += ` \xB7 ${bits.join(" \xB7 ")}${source}`;
+    } else if (r.verblijfsruimte_id === selectedVrId) {
+      btn.textContent += " \xB7 herberekenen";
     }
     btn.addEventListener("click", () => {
       selectedVrId = r.verblijfsruimte_id;
@@ -1236,18 +1708,75 @@ async function loadVlakken() {
     return;
   }
   const ret = await invokeString("API_ListVlakken", [auth.token, selectedVrId]);
-  const data = parseJsonOk(ret);
+  const data = parseJsonOk2(ret);
   vlakken = data.vlakken || [];
   await loadFacadesForSelectedVr();
   renderVlakken();
   const cur = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
-  if (cur) fillVrEdit(cur);
+  if (cur) {
+    fillVrEdit(cur);
+    hydrateStoredVrResults(cur);
+  }
   await refreshVrCalc();
 }
 function fmtRes(v) {
   return v != null && Number.isFinite(v) ? String(round1(v)) : "\u2014";
 }
-function clearVrResults(hint) {
+function vrHasStoredResults(r) {
+  return r.ga_dba != null || r.lbi_dba != null || r.gak_dba != null;
+}
+function deriveToetsFromStored(vr) {
+  const variant = variants.find((v) => v.variant_id === selectedVariantId);
+  const Lb = Number(variant?.geluidsbelasting_dba ?? 0);
+  const gak = vr.gak_dba != null && Number.isFinite(Number(vr.gak_dba)) ? Number(vr.gak_dba) : null;
+  if (gak == null || !Number.isFinite(Lb)) return null;
+  const lbik = round1(Lb - gak);
+  const grens = grenswaardeLbik(variant?.gebruiksfunctie);
+  return lbik <= grens;
+}
+function hydrateStoredVrResults(vr, hintExtra) {
+  if (!vrHasStoredResults(vr)) return false;
+  const variant = variants.find((v) => v.variant_id === selectedVariantId);
+  const Lb = Number(variant?.geluidsbelasting_dba ?? 0);
+  const grens = grenswaardeLbik(variant?.gebruiksfunctie);
+  const gak = vr.gak_dba != null && Number.isFinite(Number(vr.gak_dba)) ? Number(vr.gak_dba) : null;
+  const lbik = gak != null && Number.isFinite(Lb) ? round1(Lb - gak) : null;
+  const voldoet = deriveToetsFromStored(vr);
+  if (voldoet != null) vrVoldoet.set(vr.verblijfsruimte_id, voldoet);
+  else vrVoldoet.delete(vr.verblijfsruimte_id);
+  if (resSEl) resSEl.textContent = "\u2014";
+  if (resRpEl) resRpEl.textContent = "\u2014";
+  if (resDEl) resDEl.textContent = "\u2014";
+  if (resGaEl) resGaEl.textContent = `${fmtRes(vr.ga_dba)} dB`;
+  if (resLbiEl) resLbiEl.textContent = `${fmtRes(vr.lbi_dba)} dB`;
+  if (resGakEl) resGakEl.textContent = `${fmtRes(vr.gak_dba)} dB`;
+  if (resLbikEl) resLbikEl.textContent = lbik != null ? `${fmtRes(lbik)} dB` : "\u2014";
+  if (resToetsEl) {
+    resToetsEl.classList.remove("toets-ok", "toets-fail");
+    if (voldoet === true) {
+      resToetsEl.textContent = "Voldoet";
+      resToetsEl.classList.add("toets-ok");
+    } else if (voldoet === false) {
+      resToetsEl.textContent = "Voldoet niet";
+      resToetsEl.classList.add("toets-fail");
+    } else {
+      resToetsEl.textContent = "\u2014";
+    }
+  }
+  const dirtyBit = resultsDirty ? " \xB7 niet opgeslagen" : " \xB7 opgeslagen";
+  const req = gak != null ? ` \xB7 GA;k \u2265 ${fmtRes(Lb - grens)} dB (Lb\u2212${grens})` : "";
+  if (vrResultsHintEl) {
+    vrResultsHintEl.textContent = `Opgeslagen resultaten${dirtyBit} \xB7 grens Lbi;k \u2264 ${grens} dB${req}${hintExtra ? ` \xB7 ${hintExtra}` : ""}`;
+    vrResultsHintEl.classList.remove("hidden");
+  }
+  return true;
+}
+function clearVrResults(hint, opts) {
+  const vr = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
+  if (opts?.keepStored !== false && vr && vrHasStoredResults(vr)) {
+    hydrateStoredVrResults(vr, hint);
+    return;
+  }
   if (vrResultsHintEl) {
     vrResultsHintEl.textContent = hint;
     vrResultsHintEl.classList.remove("hidden");
@@ -1268,11 +1797,11 @@ async function refreshVrCalc(opts) {
   const vr = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
   const variant = variants.find((v) => v.variant_id === selectedVariantId);
   if (!auth || !vr) {
-    clearVrResults("Selecteer een VR en voeg vlakken met materiaal toe.");
+    clearVrResults("Selecteer een VR en voeg vlakken met materiaal toe.", { keepStored: false });
     return;
   }
   if (!vlakken.length) {
-    clearVrResults("Nog geen vlakken \u2014 voeg gevelcomponenten toe.");
+    clearVrResults("Nog geen vlakken \u2014 voeg gevelcomponenten toe. Herbereken na toekenning.");
     return;
   }
   const facadeById = new Map(vrFacades.map((f) => [f.id, f]));
@@ -1301,7 +1830,7 @@ async function refreshVrCalc(opts) {
   const missingRa = calcVlakken.filter((v) => !Number.isFinite(v.ra_dba));
   if (missingRa.length) {
     clearVrResults(
-      `Geen RA voor: ${missingRa.map((v) => v.label).join(", ")} \u2014 koppel materiaal op de plattegrond.`
+      `Geen RA voor: ${missingRa.map((v) => v.label).join(", ")} \u2014 materiaal ontbreekt of catalogus-id is verouderd. Koppel materiaal opnieuw op de geveltekening, daarna Herberekenen GA / GA;k.`
     );
     return;
   }
@@ -1315,16 +1844,20 @@ async function refreshVrCalc(opts) {
     geluidsbelasting_dba: Number(variant?.geluidsbelasting_dba ?? 0),
     vlakken: calcVlakken,
     cl_db: useForm && Number.isFinite(formCl) ? formCl : void 0,
-    cg_db: useForm && Number.isFinite(formCg) ? formCg : void 0
+    cg_db: useForm && Number.isFinite(formCg) ? formCg : void 0,
+    gebruiksfunctie: variant?.gebruiksfunctie
   });
   if (!result.ok) {
     clearVrResults(result.reason || "Berekening niet mogelijk.");
     return;
   }
+  const grens = result.grenswaarde_lbik_db;
+  const shouldPersist = opts?.persist !== false && !useForm;
+  if (useForm) resultsDirty = true;
+  const statusBit = useForm ? " \xB7 (live CL/Cg \u2014 niet opgeslagen)" : resultsDirty ? " \xB7 niet opgeslagen" : shouldPersist ? " \xB7 opslaan\u2026" : " \xB7 berekend";
   if (vrResultsHintEl) {
-    const req = result.gak_required_dba != null ? ` \xB7 GA;k \u2265 ${fmtRes(result.gak_required_dba)} dB (Lb\u2212${GRENZWAARDE_LBIK_DB})` : "";
-    const preview = useForm ? " \xB7 (live CL/Cg)" : "";
-    vrResultsHintEl.textContent = `Cr=${result.cr_db} dB \xB7 CL=${round1(result.cl_db)} \xB7 Cg=${round1(result.cg_db)} \xB7 Ruimte=${fmtRes(result.ruimte_db)} dB \xB7 grens Lbi;k \u2264 ${GRENZWAARDE_LBIK_DB} dB${req}${preview}`;
+    const req = result.gak_required_dba != null ? ` \xB7 GA;k \u2265 ${fmtRes(result.gak_required_dba)} dB (Lb\u2212${grens})` : "";
+    vrResultsHintEl.textContent = `Cr=${result.cr_db} dB \xB7 CL=${round1(result.cl_db)} \xB7 Cg=${round1(result.cg_db)} \xB7 Ruimte=${fmtRes(result.ruimte_db)} dB \xB7 grens Lbi;k \u2264 ${grens} dB${req}${statusBit}`;
     vrResultsHintEl.classList.remove("hidden");
   }
   if (resSEl) {
@@ -1355,7 +1888,6 @@ async function refreshVrCalc(opts) {
   else vrVoldoet.delete(vr.verblijfsruimte_id);
   freshResultVrIds.add(vr.verblijfsruimte_id);
   renderVrs();
-  const shouldPersist = opts?.persist !== false && !useForm;
   if (!shouldPersist) return;
   try {
     const ret = await invokeString("API_SaveVerblijfsruimteResults", [
@@ -1365,13 +1897,55 @@ async function refreshVrCalc(opts) {
       result.lbi_dba != null ? String(round1(result.lbi_dba)) : "",
       result.gak_dba != null ? String(round1(result.gak_dba)) : ""
     ]);
-    void ret;
-  } catch {
+    if (typeof ret === "string" && ret.startsWith("ERROR")) {
+      resultsDirty = true;
+      setConn("err", `Resultaten niet opgeslagen: ${ret}`);
+      if (vrResultsHintEl) {
+        vrResultsHintEl.textContent = `${vrResultsHintEl.textContent?.replace(/ · opslaan…$/, "") || ""} \xB7 niet opgeslagen`;
+      }
+      return;
+    }
+    resultsDirty = false;
+    if (vrResultsHintEl) {
+      vrResultsHintEl.textContent = (vrResultsHintEl.textContent || "").replace(/ · opslaan…$/, " \xB7 opgeslagen");
+    }
+  } catch (err) {
+    resultsDirty = true;
+    setConn("err", `Resultaten niet opgeslagen: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+async function resyncStoredLbiForVariant(variantId) {
+  if (!auth || !variantId) return;
+  const variant = variants.find((v) => v.variant_id === variantId);
+  const Lb = Number(variant?.geluidsbelasting_dba ?? 0);
+  if (!Number.isFinite(Lb)) return;
+  const vgRet = await invokeString("API_ListVerblijfsgebieden", [auth.token, variantId]);
+  const vgData = parseJsonOk2(vgRet);
+  for (const g of vgData.verblijfsgebieden || []) {
+    const vrRet = await invokeString("API_ListVerblijfsruimten", [auth.token, g.verblijfsgebied_id]);
+    const vrData = parseJsonOk2(vrRet);
+    for (const vr of vrData.verblijfsruimten || []) {
+      if (vr.ga_dba == null || !Number.isFinite(Number(vr.ga_dba))) continue;
+      const ga = Number(vr.ga_dba);
+      const gak = vr.gak_dba != null && Number.isFinite(Number(vr.gak_dba)) ? Number(vr.gak_dba) : null;
+      const lbi = round1(Lb - ga);
+      try {
+        await invokeString("API_SaveVerblijfsruimteResults", [
+          auth.token,
+          vr.verblijfsruimte_id,
+          String(round1(ga)),
+          String(lbi),
+          gak != null ? String(round1(gak)) : ""
+        ]);
+      } catch {
+      }
+    }
   }
 }
 function clearVlakEdit() {
   selectedVlakId = null;
   vlakNameEl.value = "";
+  if (vlakOrientatieEl) vlakOrientatieEl.value = "";
   if (vlakClEl) vlakClEl.value = "0";
   if (vlakCgEl) vlakCgEl.value = "0";
   vlakGakEl.checked = true;
@@ -1382,6 +1956,7 @@ function clearVlakEdit() {
 function fillVlakEdit(v) {
   selectedVlakId = v.vlak_id;
   vlakNameEl.value = v.omschrijving || "";
+  if (vlakOrientatieEl) vlakOrientatieEl.value = String(v.orientatie || "");
   const live = liveVlakQty(v);
   if (v.facade_subsection_id) {
     const facId = v.facade_subsection_id;
@@ -1433,10 +2008,12 @@ function renderVlakken() {
     info.className = "drawing-list-select";
     const live = liveVlakQty(v);
     const qtyTxt = live.kind === "length" ? `l=${live.qty.toFixed(2)} m` : `S=${live.qty.toFixed(2)} m\xB2`;
+    const ori = String(v.orientatie || "").trim();
+    const oriTxt = ori ? ` \xB7 ${ori}` : "";
     const corrTxt = `CL=${round1(Number(v.cl_db) || 0)} \xB7 Cg=${round1(Number(v.cg_db) || 0)}`;
     const domBit = v.vlak_id === dominantId ? " \xB7 CL/Cg actief" : "";
-    info.textContent = `${v.omschrijving} \xB7 ${qtyTxt} \xB7 ${corrTxt} \xB7 GA;k=${v.meenemen_gak ? "ja" : "nee"}${domBit}`;
-    info.title = "Klik om CL/Cg te wijzigen en opnieuw te berekenen";
+    info.textContent = `${v.omschrijving}${oriTxt} \xB7 ${qtyTxt} \xB7 ${corrTxt} \xB7 GA;k=${v.meenemen_gak ? "ja" : "nee"}${domBit}`;
+    info.title = "Klik om orientatie / CL / Cg te wijzigen en opnieuw te berekenen";
     info.addEventListener("click", () => fillVlakEdit(v));
     li.appendChild(info);
     const actions = document.createElement("span");
@@ -1472,26 +2049,105 @@ function dominantAreaVlakId(list) {
   }
   return bestId;
 }
+async function refreshBuildingMeta() {
+  if (!auth || !buildingId) {
+    buildingLabel = "";
+    buildingExternalRef = "";
+    return;
+  }
+  try {
+    const ret = await invokeString("API_EngineerGetProject", [auth.token, buildingId]);
+    if (ret.startsWith("ERROR")) return;
+    const data = parseJsonOk2(ret);
+    buildingLabel = data.label || data.building?.label || "";
+    buildingExternalRef = data.external_ref || data.building?.external_ref || "";
+  } catch {
+  }
+}
+function setBuildingMetaText(text) {
+  buildingMetaEl.textContent = text;
+  if (buildingMetaSummaryEl) {
+    const compact = text === "\u2014" ? "" : text;
+    buildingMetaSummaryEl.textContent = compact ? `\xB7 ${compact}` : "";
+  }
+}
 async function openBuilding(id) {
   buildingId = id.trim();
   buildingIdEl.value = buildingId;
   syncFloormapLink();
   if (!buildingId) {
     modelPanelEl.classList.add("hidden");
-    buildingMetaEl.textContent = "\u2014";
+    setBuildingMetaText("\u2014");
+    buildingLabel = "";
+    buildingExternalRef = "";
     return;
   }
   setConn("busy", "Laden\u2026");
+  await refreshBuildingMeta();
   await refreshLinks();
   await loadGeometryOptions();
   await loadVariants();
   modelPanelEl.classList.remove("hidden");
-  buildingMetaEl.textContent = `Project ${buildingId.slice(0, 8)}\u2026 \xB7 ${freeRooms.length} vrije rooms`;
+  const title = buildingLabel || buildingExternalRef || `${buildingId.slice(0, 8)}\u2026`;
+  setBuildingMetaText(`${title} \xB7 ${freeRooms.length} vrije rooms`);
+  if (projectIdBarEl) {
+    projectIdBarEl.open = false;
+    localStorage.setItem("app-gevelwering-ga-project-id-collapsed", "1");
+  }
+  projectMenu?.rememberCurrent();
+  projectMenu?.refreshTitle();
   setConn("ok", "Connected");
   const url = new URL(location.href);
   url.searchParams.set("building_id", buildingId);
   history.replaceState(null, "", url.toString());
   await applyFloormapImport();
+}
+async function saveProjectCheckpoint() {
+  if (!auth || !buildingId) throw new Error("Log in en selecteer een project");
+  if (!selectedVariantId) throw new Error("Geen actieve variant");
+  const keepVg = selectedVgId;
+  const keepVr = selectedVrId;
+  setConn("busy", "Project opslaan\u2026");
+  let saved = 0;
+  let skipped = 0;
+  let failed = 0;
+  try {
+    const vgRet = await invokeString("API_ListVerblijfsgebieden", [auth.token, selectedVariantId]);
+    const vgData = parseJsonOk2(vgRet);
+    const allVgs = vgData.verblijfsgebieden || [];
+    for (const g of allVgs) {
+      selectedVgId = g.verblijfsgebied_id;
+      const vrRet = await invokeString("API_ListVerblijfsruimten", [auth.token, g.verblijfsgebied_id]);
+      const vrData = parseJsonOk2(vrRet);
+      const list = vrData.verblijfsruimten || [];
+      for (const vr of list) {
+        selectedVrId = vr.verblijfsruimte_id;
+        vrs = list;
+        try {
+          await loadVlakken();
+          const cur = vrs.find((r) => r.verblijfsruimte_id === vr.verblijfsruimte_id);
+          if (cur && vrHasStoredResults(cur) && !resultsDirty) saved += 1;
+          else if (cur && vrHasStoredResults(cur)) saved += 1;
+          else skipped += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+    }
+    resultsDirty = false;
+    if (keepVg) {
+      selectedVgId = keepVg;
+      await loadVgs(keepVg);
+      if (keepVr) await loadVrs(keepVr);
+    } else {
+      await loadVgs();
+    }
+    const msg = `Project opgeslagen \xB7 ${saved} VR-resultaten${skipped ? ` \xB7 ${skipped} zonder berekening` : ""}${failed ? ` \xB7 ${failed} mislukt` : ""}`;
+    setConn(failed ? "err" : "ok", msg);
+  } catch (err) {
+    setConn("err", err instanceof Error ? err.message : String(err));
+    throw err;
+  }
 }
 async function ensureDefaultVariant() {
   if (!auth || !buildingId) throw new Error("Geen project");
@@ -1514,7 +2170,7 @@ async function ensureDefaultVariant() {
     "SPECTRUM_2",
     "0"
   ]);
-  const data = parseJsonOk(ret);
+  const data = parseJsonOk2(ret);
   selectedVariantId = data.variant_id;
   await loadVariants();
   return selectedVariantId;
@@ -1568,7 +2224,7 @@ async function applyFloormapImport() {
       vrHoogteEl.value || "2.6",
       vrT0El.value || "0.5"
     ]);
-    const data = parseJsonOk(ret);
+    const data = parseJsonOk2(ret);
     selectedVgId = existingVgId;
     selectedVrId = data.verblijfsruimte_id;
     await refreshLinks();
@@ -1587,7 +2243,7 @@ async function applyFloormapImport() {
       vrHoogteEl.value || "2.6",
       vrT0El.value || "0.5"
     ]);
-    const data = parseJsonOk(ret);
+    const data = parseJsonOk2(ret);
     selectedVgId = data.verblijfsgebied_id;
     selectedVrId = data.verblijfsruimte_id;
     await refreshLinks();
@@ -1601,7 +2257,7 @@ async function applyFloormapImport() {
 async function loadQueue() {
   if (!auth) return;
   const ret = await invokeString("API_EngineerListReviewQueue", [auth.token]);
-  const data = parseJsonOk(ret);
+  const data = parseJsonOk2(ret);
   queueListEl.classList.remove("hidden");
   queueListEl.innerHTML = "";
   for (const p of data.projects || []) {
@@ -1676,8 +2332,17 @@ buildingForm.addEventListener("submit", (ev) => {
   void openBuilding(buildingIdEl.value).catch((e) => setConn("err", String(e)));
 });
 queueBtn.addEventListener("click", () => {
+  if (projectIdBarEl) projectIdBarEl.open = true;
   void loadQueue().catch((e) => setConn("err", String(e)));
 });
+(() => {
+  if (!projectIdBarEl) return;
+  const key = "app-gevelwering-ga-project-id-collapsed";
+  if (localStorage.getItem(key) === "1") projectIdBarEl.open = false;
+  projectIdBarEl.addEventListener("toggle", () => {
+    localStorage.setItem(key, projectIdBarEl.open ? "0" : "1");
+  });
+})();
 vgRoomEl.addEventListener("change", () => {
   updateRoomPreview();
   syncVrAddButtons();
@@ -1688,6 +2353,27 @@ variantNewBtn.addEventListener("click", () => {
   variantNameEl.value = "Nieuwe variant";
   variantSpectrumEl.value = "SPECTRUM_2";
   renderVariants();
+});
+variantCloneBtn?.addEventListener("click", () => {
+  void (async () => {
+    if (!auth || !selectedVariantId) throw new Error("Selecteer eerst een variant om te kopi\xEBren");
+    const src = variants.find((v) => v.variant_id === selectedVariantId);
+    const name = `${src?.omschrijving || "Variant"} (kopie)`;
+    const ret = await invokeString("API_CloneVariant", [auth.token, selectedVariantId, name]);
+    const data = parseJsonOk2(ret);
+    selectedVariantId = data.variant_id;
+    compareSelectedIds.add(data.variant_id);
+    if (src) compareSelectedIds.add(src.variant_id);
+    await refreshLinks();
+    await loadVariants();
+    setConn(
+      "ok",
+      `Variant gekopieerd \xB7 ${data.vg_count} VG \xB7 ${data.vr_count} VR \xB7 ${data.vlak_count} vlakken`
+    );
+  })().catch((e) => setConn("err", String(e)));
+});
+compareBtn?.addEventListener("click", () => {
+  void runVariantCompare().then(() => setConn("ok", "Variantvergelijking bijgewerkt")).catch((e) => setConn("err", String(e)));
 });
 variantForm.addEventListener("submit", (ev) => {
   ev.preventDefault();
@@ -1703,10 +2389,11 @@ variantForm.addEventListener("submit", (ev) => {
       variantSpectrumEl.value,
       "0"
     ]);
-    const data = parseJsonOk(ret);
+    const data = parseJsonOk2(ret);
     selectedVariantId = data.variant_id;
     await loadVariants();
-    await refreshVrCalc();
+    await resyncStoredLbiForVariant(data.variant_id);
+    await refreshVrCalc({ persist: true });
     setConn("ok", "Variant opgeslagen");
   })().catch((e) => setConn("err", String(e)));
 });
@@ -1738,7 +2425,7 @@ async function createVgFromSelectedRoom() {
     vrHoogteEl.value || "2.6",
     vrT0El.value || "0.5"
   ]);
-  const data = parseJsonOk(ret);
+  const data = parseJsonOk2(ret);
   selectedVgId = data.verblijfsgebied_id;
   selectedVrId = data.verblijfsruimte_id;
   await refreshLinks();
@@ -1770,7 +2457,7 @@ async function addVrToSelectedVg() {
     vrHoogteEl.value || "2.6",
     vrT0El.value || "0.5"
   ]);
-  const data = parseJsonOk(ret);
+  const data = parseJsonOk2(ret);
   selectedVrId = data.verblijfsruimte_id;
   await refreshLinks();
   await loadGeometryOptions();
@@ -1849,6 +2536,7 @@ vlakForm.addEventListener("submit", (ev) => {
     const facadeId = fac || "";
     const clVal = vlakClEl?.value || "0";
     const cgVal = vlakCgEl?.value || "0";
+    const oriVal = vlakOrientatieEl?.value || "";
     const ret = await invokeString("API_SaveVlak", [
       auth.token,
       selectedVrId,
@@ -1861,7 +2549,8 @@ vlakForm.addEventListener("submit", (ev) => {
       "0",
       facadeId,
       isLen ? "length" : "area",
-      isLen ? qty : ""
+      isLen ? qty : "",
+      oriVal
     ]);
     if (ret.startsWith("ERROR")) throw new Error(ret);
     await loadVlakken();
@@ -1884,7 +2573,8 @@ vlakForm.addEventListener("submit", (ev) => {
         String(v.sort_order || 0),
         v.facade_subsection_id || "",
         "area",
-        ""
+        "",
+        String(v.orientatie || "")
       ]);
       if (syncRet.startsWith("ERROR")) throw new Error(syncRet);
     }
@@ -1935,7 +2625,8 @@ recalcBtn?.addEventListener("click", () => {
         String(v.sort_order || 0),
         v.facade_subsection_id || "",
         "area",
-        ""
+        "",
+        String(v.orientatie || "")
       ]);
       if (syncRet.startsWith("ERROR")) throw new Error(syncRet);
     }
@@ -1947,7 +2638,141 @@ recalcBtn?.addEventListener("click", () => {
     setConn("ok", `Herberekend met CL=${clVal} dB \xB7 Cg=${cgVal} dB`);
   })().catch((e) => setConn("err", String(e)));
 });
+async function saveProjectReport(force = false) {
+  if (!auth || !buildingId) throw new Error("Log in en selecteer een gebouw");
+  if (!selectedVariantId) throw new Error("Selecteer eerst een variant");
+  const status = reportKindEl?.value === "definitief" ? "definitief" : "concept";
+  if (reportHintEl) reportHintEl.textContent = "Rapport wordt gegenereerd\u2026";
+  const res = await fetch("/api/reports/generate", {
+    method: "POST",
+    credentials: "include",
+    headers: apiAuthHeaders(auth.token, true),
+    body: JSON.stringify({
+      building_id: buildingId,
+      variant_id: selectedVariantId,
+      status,
+      force
+    })
+  });
+  let parsed;
+  try {
+    parsed = await res.json();
+  } catch {
+    throw new Error(`Rapport opslaan mislukt (HTTP ${res.status})`);
+  }
+  if (!res.ok || !parsed.ok) {
+    throw new Error(parsed.error || `Rapport opslaan mislukt (HTTP ${res.status})`);
+  }
+  const pdfName = parsed.pdf_filename || parsed.filename_pdf || null;
+  if (parsed.identical && parsed.skipped) {
+    const existing = parsed.existing_filename || "bestaand bestand";
+    const msg = parsed.warning || `Identiek rapport bestaat al (${existing}) \u2014 er is niets weggeschreven.`;
+    if (reportHintEl) reportHintEl.textContent = msg;
+    setConn("err", msg);
+    const forceAnyway = window.confirm(
+      `${msg}
+
+Toch een nieuw bestand schrijven?`
+    );
+    if (forceAnyway) return saveProjectReport(true);
+    return pdfName || (existing.endsWith(".html") || existing.endsWith(".pdf") ? existing : null);
+  }
+  const pathHint = parsed.relative_path || pdfName || parsed.filename || "";
+  const folder = parsed.project_folder ? ` \xB7 map ${parsed.project_folder}` : "";
+  const okMsg = `Rapport opgeslagen (PDF): ${pathHint}${folder}`;
+  if (reportHintEl) reportHintEl.textContent = okMsg;
+  setConn("ok", okMsg);
+  return pdfName || parsed.filename || null;
+}
+async function publishReportToInbox(filename) {
+  if (!auth || !buildingId) throw new Error("Log in en selecteer een gebouw");
+  const reportKind = reportKindEl?.value === "definitief" ? "definitief" : "concept";
+  if (reportHintEl) reportHintEl.textContent = "Publiceren naar inbox\u2026";
+  const res = await fetch("/api/reports/publish", {
+    method: "POST",
+    credentials: "include",
+    headers: apiAuthHeaders(auth.token, true),
+    body: JSON.stringify({
+      building_id: buildingId,
+      filename,
+      report_kind: reportKind,
+      version_label: "1.0"
+    })
+  });
+  let parsed;
+  try {
+    parsed = await res.json();
+  } catch {
+    throw new Error(`Publiceren mislukt (HTTP ${res.status})`);
+  }
+  if (!res.ok || !parsed.ok) {
+    throw new Error(parsed.error || `Publiceren mislukt (HTTP ${res.status})`);
+  }
+  const kindLabel = reportKind === "definitief" ? "definitieve" : "concept";
+  const okMsg = `${kindLabel.charAt(0).toUpperCase()}${kindLabel.slice(1)} rapport in inbox opdrachtgever gezet${parsed.project_status ? ` \xB7 status ${parsed.project_status}` : ""}.`;
+  if (reportHintEl) reportHintEl.textContent = okMsg;
+  setConn("ok", okMsg);
+}
+reportBtn?.addEventListener("click", () => {
+  void saveProjectReport(false).catch((e) => {
+    const msg = String(e);
+    if (reportHintEl) reportHintEl.textContent = msg;
+    setConn("err", msg);
+  });
+});
+reportInboxBtn?.addEventListener("click", () => {
+  void (async () => {
+    const filename = await saveProjectReport(false);
+    if (!filename) throw new Error("Geen rapportbestand om te publiceren");
+    await publishReportToInbox(filename);
+  })().catch((e) => {
+    const msg = String(e);
+    if (reportHintEl) reportHintEl.textContent = msg;
+    setConn("err", msg);
+  });
+});
 if (buildingId) buildingIdEl.value = buildingId;
 syncFloormapLink();
 initPasswordToggles();
+if (fileMenuRoot) {
+  projectMenu = mountProjectMenu(fileMenuRoot, {
+    getToken: () => auth?.token ?? null,
+    getBuildingId: () => buildingId,
+    getProjectMeta: () => ({ label: buildingLabel, external_ref: buildingExternalRef }),
+    invokeString: (name, args) => invokeString(name, args),
+    apiAuthHeaders: () => auth ? apiAuthHeaders(auth.token, true) : {},
+    openBuilding: (id) => openBuilding(id),
+    saveProject: () => saveProjectCheckpoint(),
+    onProjectRenamed: (meta) => {
+      buildingLabel = meta.label;
+      buildingExternalRef = meta.external_ref;
+      const title = buildingLabel || buildingExternalRef || `${buildingId.slice(0, 8)}\u2026`;
+      setBuildingMetaText(`${title} \xB7 ${freeRooms.length} vrije rooms`);
+    },
+    onProjectDeleted: async () => {
+      buildingId = "";
+      buildingLabel = "";
+      buildingExternalRef = "";
+      buildingIdEl.value = "";
+      modelPanelEl.classList.add("hidden");
+      setBuildingMetaText("\u2014");
+      if (projectIdBarEl) projectIdBarEl.open = true;
+      variants = [];
+      vgs = [];
+      vrs = [];
+      selectedVariantId = null;
+      selectedVgId = null;
+      selectedVrId = null;
+      const url = new URL(location.href);
+      url.searchParams.delete("building_id");
+      history.replaceState(null, "", url.toString());
+      syncFloormapLink();
+    },
+    onStatus: (state, text) => setConn(state, text),
+    setTitle: (title) => {
+      document.title = title === "Geen project" ? "Geluidwering Gevels \u2014 Berekening gevelwering" : `${title} \u2014 GA`;
+    }
+  });
+  fileMenuRoot.hidden = true;
+}
 connect();

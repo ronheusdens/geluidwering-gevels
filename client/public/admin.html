@@ -16,7 +16,7 @@
           <h1 class="page-heading">Projectenbeheer</h1>
         </div>
       </div>
-      <p class="lede">Alleen zichtbaar voor het account <code>admin</code>. Kies een klant om projecten te bekijken en de status bij te werken. <a href="/materials.html">Materiaalcatalogus →</a></p>
+      <p class="lede">Alleen zichtbaar voor het account <code>admin</code>. Beheer opdrachtgever-accounts en projectstatus. <a href="/materials.html">Materiaalcatalogus →</a></p>
     </header>
 
     <section class="panel conn-bar" id="admin-conn-bar" aria-live="polite">
@@ -44,6 +44,33 @@
       </div>
 
       <section class="panel">
+        <h2>Opdrachtgever-accounts</h2>
+        <p class="hint">Inzien en aanpassen van login-accounts (niet engineer/admin). Wachtwoord reset geeft een tijdelijk wachtwoord.</p>
+        <div class="actions">
+          <button type="button" id="admin-accounts-refresh-btn" class="secondary">Accounts vernieuwen</button>
+        </div>
+        <div id="admin-accounts-list" class="admin-projects-list"></div>
+        <section class="panel hidden" id="admin-account-edit-panel">
+          <h3 id="admin-account-edit-title">Account bewerken</h3>
+          <form id="admin-account-form" class="form">
+            <input type="hidden" id="admin-account-user-id" />
+            <label>Gebruikersnaam <input id="admin-account-username" readonly /></label>
+            <label>Weergavenaam <input id="admin-account-display-name" maxlength="120" /></label>
+            <label>E-mail <input id="admin-account-email" type="email" required maxlength="200" /></label>
+            <label class="inline-check"><input id="admin-account-active" type="checkbox" /> Account actief</label>
+            <p class="hint" id="admin-account-meta">—</p>
+            <div class="actions">
+              <button type="submit" id="admin-account-save-btn">Opslaan</button>
+              <button type="button" id="admin-account-reset-pw-btn" class="secondary">Wachtwoord resetten</button>
+              <button type="button" id="admin-account-cancel-btn" class="secondary">Sluiten</button>
+            </div>
+            <p class="hint" id="admin-account-reset-out" hidden></p>
+          </form>
+        </section>
+      </section>
+
+      <section class="panel">
+        <h2>Projecten</h2>
         <label class="block-label">
           Klant
           <select id="admin-customer-select">
@@ -61,6 +88,6 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/admin.js?v=pw-eye"></script>
+  <script type="module" src="/admin.js?v=accounts-1"></script>
 </body>
 </html>

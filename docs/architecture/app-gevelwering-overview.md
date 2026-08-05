@@ -59,7 +59,8 @@ flowchart LR
 - Engineer/admin UI: tekeningen, plattegrond, gevels, materialencatalogus, GA-model  
 - VG / VR / vlakken, schaal + oppervlakten, **compositie (+/−)** van gevelcomponenten  
 - Materialen: DGMR-catalogus (`catalogusGG.pdf`) + **eigen materialen** (`source = eigen`)  
-- Berekening gevelwering (NPR/NEN-route zoals geïmplementeerd), toets Lbi;k ≤ 33 dB  
+- Berekening gevelwering (NPR/NEN-route zoals geïmplementeerd); toets Lbi;k ≤ grens per gebruiksfunctie (Woonfunctie 33 dB)  
+- Meerdere **berekeningsvarianten** per project (deep clone + vergelijking op `/ga.html`)  
 - Consumeren van `NoiseLoad[]` (of import)
 
 **Niet in scope**
@@ -76,7 +77,7 @@ flowchart LR
 | Onderdeel | Locatie |
 |-----------|---------|
 | Map / start | `c/app-gevelwering/./start.sh` |
-| UI | `client/` — o.a. `/ga.html`, `/floormap.html`, `/materials.html`, `/engineer.html` |
+| UI | `client/` — o.a. `/ga.html`, `/floormap.html`, `/materials.html`, `/admin.html`, `/engineer.html` |
 | Postgres | Database + schema **`app_gevelwering`** |
 | Fixtures | `fixtures/app-gevelwering/*.basicpp` |
 
@@ -86,14 +87,29 @@ flowchart LR
 
 Procesdiagram: [`docs/workflow gevelweringgevels-app.drawio`](../workflow%20gevelweringgevels-app.drawio) (open in diagrams.net / draw.io).
 
-1. Gebouw/project openen (gedeelde building data).  
+1. Gebouw/project openen via **Bestand**-menu (Openen / Recent) of queue — gedeelde building data in Postgres.  
 2. Tekeningen registreren / engineer-review (`/engineer.html`).  
-3. Plattegrond (`FLOORMAP`): VG/VR-ruimten tekenen, schaal, opslaan; volgorde in de lijst met **Omhoog/Omlaag**.  
-4. Geveltekening: componenten tekenen → **materiaal toekennen** → eventueel **compositie (+/−)** → GA (componentvolgorde eveneens Omhoog/Omlaag).  
-5. `NoiseLoad[]` van wegverkeer-app (of import / handmatig).  
-6. GA-berekening per VR (`/ga.html`); toets Lbi;k; resultaten bewaren / rapporteren (later PDF).
+3. Plattegrond (`FLOORMAP`): VG/VR-ruimten tekenen, schaal, opslaan; volgorde in de lijst met ▲/▼.  
+4. Geveltekening: **Detailgebied** (sleep rechthoek → 2×/3×/4×; rechterlijst blijft zichtbaar) voor kleine componenten; tekenen (materiaal optioneel; oranje/groene led) → **materiaal toekennen** → eventueel **Kopie/Dupliceer** → eventueel **compositie (+/−)** → GA (alleen complete componenten in vlakdelenkiezer; ▲/▼).  
+5. `NoiseLoad[]` van wegverkeer-app (of import / handmatig) → Lb (en later spectrum) op de **variant**.  
+6. GA-berekening per VR (`/ga.html`); per vlak **orientatie** (N/NO/…; basis voor later Lb→CL); toets Lbi;k; resultaten naar Postgres (`ga_dba` / `lbi_dba` / `gak_dba`). **Bestand → Project opslaan** checkpoint alle VR’s van de actieve variant. **Rapport opslaan** schrijft HTML+PDF naar `data/projecten/{project}/rapporten/` (waarschuwing bij identieke inhoud). **Naar inbox opdrachtgever** publiceert de PDF (concept/definitief) naar de klant-inbox; opdrachtgever haalt `.pdf` op.  
+7. Optioneel: variant **kopiëren**, Lb/CL/constructie per scenario wijzigen, **varianten vergelijken**.
 
-Detailontwerp (historisch + invokes): [facade-sound-insulation-app.md](facade-sound-insulation-app.md).
+### Sessie-overleving
+
+| Laag | Overleeft herstart? |
+|------|---------------------|
+| Plattegrond, gevel, materialen, varianten, VG/VR/vlakken | Ja — Postgres |
+| GA / Lbi / GA;k | Ja — zodra opgeslagen (auto na berekening, of **Project opslaan**); UI toont opgeslagen waarden na herladen |
+| Login-token | Nee na tab/browser-sluiten (`sessionStorage`); opnieuw inloggen |
+| Live CL/Cg-preview zonder opslaan | Nee |
+
+**Bestand**-menu (gedeeld op `/engineer.html`, `/floormap.html`, `/ga.html`): Openen…, Recent, Project opslaan, Hernoemen…, Verwijderen… (engineer/admin; verwijdert ook rapportmap onder `data/projecten/`).
+
+Rapport-API (UI-server): `POST /api/reports/generate|publish|cleanup-project-folder`, `GET /api/reports/list|download|inbox`, `POST /api/reports/inbox/read|email-request`. Root override: `GEVELWERING_PROJECTS_ROOT`. Spec: [rapport-gevelwering-pdf.md](rapport-gevelwering-pdf.md).
+
+Detailontwerp (historisch + invokes): [facade-sound-insulation-app.md](facade-sound-insulation-app.md).  
+Schema / multi-variant: [app-gevelwering-postgres-schema.md](app-gevelwering-postgres-schema.md) (DDL **0.2.27+**).
 
 ### 5.1 Materiaaltoekenning (gevel)
 
@@ -102,8 +118,8 @@ Detailontwerp (historisch + invokes): [facade-sound-insulation-app.md](facade-so
 | Catalogus beheren | `/materials.html` (admin) of via **Materiaalcatalogus…** op de gevel | CRUD op `app_gevelwering.material`; filter **Bron → Eigen materialen** |
 | Eigen materiaal | `/floormap.html` (gevel) → **Eigen materiaal…** | `POST /api/floormap/materials` → `source = eigen`, catalog-id `E#####`; selectie in de materiaalkiezer |
 | Toekennen op component | `/floormap.html` (gevel) | Rubriek → subrubriek → materiaal; filter «Alleen eigen materialen» optioneel |
-| Opslaan enkele contour | **Component opslaan** | Schrijft materiaal + geometrie op **het actieve** (bewerkte) component |
-| GA vlakkentoekenning | `/ga.html` | Alleen **lezen** van materiaal op de gekozen gevelcomponent; geen catalogus/eigen-materiaal hier |
+| Opslaan enkele contour | **Component opslaan** | Geometrie (+ optioneel materiaal). Zonder materiaal: oranje led; met materiaal: groen. Incomplete componenten niet kiesbaar bij GA-vlakdelen |
+| GA vlakkentoekenning | `/ga.html` | Alleen **complete** gevelcomponenten (met materiaal); materiaal alleen lezen, geen catalogus hier |
 
 **Belangrijk:** materiaal hoort bij de **componentdefinitie**, niet bij de GA-vlakstap. De materiaalkiezer is gedeeld op de geveltekening. **Component opslaan** koppelt materiaal aan het contour dat je bewerkt — niet automatisch aan de compositie. Voor een compositieresultaat: materiaal kiezen → **Toepassen & opslaan** (zie §5.2).
 
@@ -129,7 +145,27 @@ Feedback (succes/fout) staat onder de compositieknoppen (`fm-compose-feedback`).
 
 - Gevelcomponenten met VR + materiaal voeden vlakken / Stot in de GA-UI.  
 - Composities tellen als één geveldeel; broncontouren van die compositie niet dubbel meenemen.  
-- Na verse berekening: Lbi;k = Lb − GA;k; **Voldoet** als Lbi;k ≤ 33 dB.
+- Na verse berekening: Lbi;k = Lb − GA;k; **Voldoet** als Lbi;k ≤ grens(gebruiksfunctie).  
+- Standaard Woonfunctie: 33 dB; onderwijs / kinderopvang: 28 dB (zie `client/src/ga-calc.ts`).  
+- **Spectrum** op de variant is metadata (weergave/export); de A-gewogen rekenkern past nog geen spectraal R′ toe.
+
+### 5.4 Varianten (multi-scenario)
+
+| Begrip | Rol |
+|--------|-----|
+| **VG / VR** | Bouwbesluit-geometrie (plattegrondruimten); VG groepeert VR’s |
+| **Variant** | Berekeningsscenario: Lb, spectrum, gebruiksfunctie + eigen kopie van de VG/VR/vlak-boom |
+
+**Model:** deep clone per variant (niet shared geometry). Zelfde floormap-ruimte mag in meerdere varianten voorkomen; binnen één variant blijft `(variant_id, subsection_id)` uniek (DDL 0.2.25).
+
+| Actie | Waar |
+|-------|------|
+| Nieuwe lege variant | `/ga.html` → **Nieuwe variant** + opslaan |
+| Kopie vanuit huidige | **Kopieer variant** → `API_CloneVariant` (VG/VR/vlak/element + resultaten) |
+| Bewerken | Wissel variant in de lijst; wijzig Lb/functie/CL onafhankelijk |
+| Vergelijken | Multi-select ≥2 varianten → **Vergelijk**; rijen gematcht op `subsection_id` |
+
+Na clone divergeren scenarios: geometrie-/CL-wijzigingen in A raken B niet. Vrije plattegrondruimten in GA zijn scoped op de **actieve** variant.
 
 ---
 
@@ -149,5 +185,7 @@ Zusterapp-fasering: zie [app-berekening-wegverkeer-overview.md](../../../app-ber
 ## 7. Volgende stap
 
 Doorgaan met productrijping in deze repo (GA, plattegrond, materialen) en de handoff-API met **app-berekening-wegverkeer** vastleggen zodra die app een eigen repo/startpad heeft.
+
+**Engineer-handleiding (online):** na `./start.sh` → [http://127.0.0.1:4173/handleiding.html](http://127.0.0.1:4173/handleiding.html) (inhoudsopgave + zoeken).
 
 Schema / APIs: [app-gevelwering-postgres-schema.md](app-gevelwering-postgres-schema.md).

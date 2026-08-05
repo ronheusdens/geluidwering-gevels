@@ -13,10 +13,10 @@ This DDL **will change**. Treat the header below as authoritative for the curren
 
 | Field | Value |
 |-------|--------|
-| **DDL version** | **0.2.16** |
-| **Date** | 2026-07-22 |
-| **Scope** | … + GA nieuwbouw-model: `variant` → `verblijfsgebied` → `verblijfsruimte` → `vlak` → `vlak_element` |
-| **Breaking?** | No (additive tables) |
+| **DDL version** | **0.2.27** |
+| **Date** | 2026-08-01 |
+| **Scope** | … + multi-variant: `verblijfsruimte.variant_id`, UNIQUE `(variant_id, subsection_id)`, clone/compare APIs |
+| **Breaking?** | Yes for VR uniqueness (was global `UNIQUE(subsection_id)`; now per variant) |
 
 **Rules:**
 
@@ -27,21 +27,22 @@ This DDL **will change**. Treat the header below as authoritative for the curren
 
 ---
 
-## Current scope (0.2.12)
+## Current scope (0.2.25)
 
 | In scope | Out of scope (later DDL versions) |
 |----------|-----------------------------------|
 | `service_user` (login) | `aoi` / GIS extracts |
 | `login_session` (persisted tokens) | `noise_load` (App 1 → App 2) |
 | `access_request` (registration audit) | App 1 traffic load spectra |
-| `customer` / `address` / `building` | GA/Lbi/GA;k rekenkern (fase C) |
-| One `customer` row per `service_user` (`owner_user_id` unique) | |
+| `customer` / `address` / `building` | Spectral R′ / spectrum weighting in GA kernel |
+| One `customer` row per `service_user` (`owner_user_id` unique) | Shared-geometry refactor (VG under building) |
 | `building` = client **project** (one dwelling per project) | |
 | `building.project_status` (incl. `PROJECT_FINISHED`) | |
 | `document` blobs per project (pdf, dwg) | |
 | `drawing_review` / `drawing_region` / `drawing_subsection` | |
 | `material` — catalogusGG.pdf façade catalog + R spectra | |
-| `variant` / `verblijfsgebied` / `verblijfsruimte` / `vlak` / `vlak_element` (nieuwbouw P0) | |
+| `variant` / `verblijfsgebied` / `verblijfsruimte` / `vlak` / `vlak_element` | |
+| Multi-variant: `VR.variant_id`, unique room **per variant**, clone/compare APIs | |
 | Delete guard: project removable only in `INITIAL_REQUEST` | |
 | Seed users `demo`, `ronheusdens`, `admin` | |
 
@@ -123,6 +124,9 @@ erDiagram
 | `sql/app_gevelwering_0_2_5.sql` | One customer per owner; project delete guards + dwelling cleanup |
 | `sql/app_gevelwering_0_2_6.sql` | `document` table — pdf/dwg blobs per project |
 | `sql/app_gevelwering_0_2_12.sql` | `material` catalog (GL.cat); seed `app_gevelwering_0_2_12_gl_material_seed.sql` |
+| `sql/app_gevelwering_0_2_16.sql` | GA model: `variant` → VG → VR → `vlak` → `vlak_element` |
+| `sql/app_gevelwering_0_2_25.sql` | Multi-variant: `verblijfsruimte.variant_id`; UNIQUE `(variant_id, subsection_id)` |
+| `sql/app_gevelwering_0_2_27.sql` | `vlak.orientatie` (N/NO/O/ZO/Z/ZW/W/NW) — basis Lb→CL |
 
 ### 0.2.0 (additive)
 
@@ -182,7 +186,10 @@ ALTER TABLE app_gevelwering.building
 | `API_ListBuildings(token$)` | list outstanding projects for owner (excludes `PROJECT_FINISHED`) |
 | `API_SaveBuildingEntry(token$, …, building_id$)` | upsert customer profile; create or update project |
 | `API_OpenBuilding(token$, id$)` | load project for owner |
-| `API_DeleteProject(token$, building_id$)` | delete project when `INITIAL_REQUEST` |
+| `API_DeleteProject(token$, building_id$)` | delete project when `INITIAL_REQUEST` (customer) |
+| `API_EngineerListProjects(token$)` | engineer/admin: all non-finished projects (Bestand → Openen) |
+| `API_RenameProject(token$, building_id$, label$, external_ref$)` | engineer/admin: rename label/werknummer (any status) |
+| `API_EngineerDeleteProject(token$, building_id$)` | engineer/admin: delete project (any status; UI cleans `data/projecten/`) |
 | `API_ListProjectDocuments(token$, building_id$)` | list drawing metadata for a project |
 | `API_UploadDrawingChunk(token$, …)` | legacy chunked base64 upload (superseded by HTTP API below) |
 | `API_DeleteDrawing(token$, document_id$)` | delete drawing when project is `INITIAL_REQUEST` |
@@ -196,19 +203,24 @@ ALTER TABLE app_gevelwering.building
 | `API_AdminListCustomers(token$)` | admin-only customer list with outstanding + drawing counts |
 | `API_AdminListCustomerProjects(token$, customer_id$)` | admin-only all projects for one customer |
 | `API_AdminUpdateProjectStatus(token$, building$, status$)` | admin-only update of `building.project_status` |
+| `API_AdminListAccounts(token$)` | admin-only opdrachtgever logins (`service_user`, niet engineer/admin) + optioneel `customer` |
+| `API_AdminUpdateAccount(token$, user_id$, display_name$, email$, is_active$)` | admin-only: weergavenaam, e-mail, actief; geen username/rol |
+| `API_AdminResetAccountPassword(token$, user_id$)` | admin-only: tijdelijk wachtwoord + `must_change_password` |
 | `API_AdminListMaterials(token$, q$, category$, limit$, offset$, source_filter$)` | admin material catalog search (paginated); `source_filter$` = `eigen` \| `catalogus` \| empty |
 | `API_AdminGetMaterial(token$, material_id$)` | admin load one material |
 | `API_AdminSaveMaterial(token$, …)` | admin insert/update material + R spectrum |
 | `API_AdminDeleteMaterial(token$, material_id$)` | admin delete material |
 | `API_ListVariants` / `API_SaveVariant` / `API_DeleteVariant` | engineer: berekeningsvarianten per building |
-| `API_ListVerblijfsgebieden` / `API_CreateVerblijfsgebied` / `API_SaveVerblijfsgebied` / `API_DeleteVerblijfsgebied` | engineer: VG (create = VG+eerste VR + floormap subsection) |
-| `API_ListVerblijfsruimten` / `API_AddVerblijfsruimte` / `API_SaveVerblijfsruimte` / `API_DeleteVerblijfsruimte` | engineer: VR (laatste VR niet verwijderbaar) |
+| `API_CloneVariant(token$, source_variant_id$, omschrijving$)` | engineer: deep copy variant + VG/VR/vlak/element (zelfde subsection_ids) |
+| `API_CompareVariants(token$, building_id$, variant_ids_csv$)` | engineer: platte VR-resultaten voor multi-variant vergelijking |
+| `API_ListVerblijfsgebieden` / `API_CreateVerblijfsgebied` / `API_SaveVerblijfsgebied` / `API_DeleteVerblijfsgebied` | engineer: VG (create = VG+eerste VR + floormap subsection; uniqueness subsection **per variant**) |
+| `API_ListVerblijfsruimten` / `API_AddVerblijfsruimte` / `API_SaveVerblijfsruimte` / `API_DeleteVerblijfsruimte` / `API_SaveVerblijfsruimteResults` | engineer: VR (+ persist GA/Lbi/GA;k); laatste VR niet verwijderbaar |
 | `API_ListVlakken` / `API_SaveVlak` / `API_DeleteVlak` | engineer: gevelvlakken |
 | `API_ListVlakElementen` / `API_SaveVlakElement` / `API_DeleteVlakElement` | engineer: elementen ↔ `material` |
-| `API_ListLinkedSubsections(token$, building_id$)` | engineer: floormap subsection → VR-koppelingen (fase B) |
+| `API_ListLinkedSubsections(token$, building_id$)` | engineer: floormap subsection → VR-koppelingen (inclusief `variant_id`) |
 
-**P0 client:** `client/` — **http://127.0.0.1:4173/** (`./start.sh`).  
-**Admin page:** **http://127.0.0.1:4173/admin.html** (restricted in UI and API to `admin`).  
+**P0 client:** `client/` — landing **http://127.0.0.1:4173/** · opdrachtgever **http://127.0.0.1:4173/opdrachtgever.html** (`./start.sh`).  
+**Admin page:** **http://127.0.0.1:4173/admin.html** (restricted in UI and API to `admin`) — opdrachtgever-accounts inzien/bewerken + projectstatus + link naar materiaalcatalogus.  
 **Engineer page:** **http://127.0.0.1:4173/engineer.html** (restricted to `engineer` / `is_engineer` accounts).
 
 ### HTTP drawing upload (P1 — production path)
@@ -279,7 +291,7 @@ Engineer-only room geometry on committed `FLOORMAP` sections (customer progress 
 | Lifecycle | `analysis_status` | `DRAFT` \| `READY_FOR_ANALYSIS` \| `ANALYZED` |
 | Level hint | `level_hint` | `GROUND` \| `FIRST` \| … \| `OTHER` |
 
-APIs: Basic++ `API_ListFloormapSections`, `API_SaveFloormapScale`; HTTP `/api/floormap/*` for section list, subsection CRUD (JSON polylines), scale + room recompute, materials list/create, and **`POST /api/floormap/subsections/reorder`** (`section_id` + `ordered_ids`) for persistent list order via `drawing_subsection.sort_order`. UI: `/floormap.html` — rooms on `FLOORMAP`; façade components + **compositie (+/−)** on elevation regions; **Omhoog/Omlaag** in the saved-components list. Material/compose workflow: [overview §5](app-gevelwering-overview.md#5-workflow-huidige-implementatie).
+APIs: Basic++ `API_ListFloormapSections`, `API_SaveFloormapScale`; HTTP `/api/floormap/*` for section list, subsection CRUD (JSON polylines), scale + room recompute, materials list/create, and **`POST /api/floormap/subsections/reorder`** (`section_id` + `ordered_ids`) for persistent list order via `drawing_subsection.sort_order`. UI: `/floormap.html` — rooms on `FLOORMAP`; façade components + **compositie (+/−)** on elevation regions; ▲/▼ in the saved-components list. Material/compose workflow: [overview §5](app-gevelwering-overview.md#5-workflow-huidige-implementatie).
 
 ### DDL 0.2.12+ — material catalog (catalogusGG + eigen)
 
@@ -298,6 +310,21 @@ Shared reference catalog for façade sound reduction. Primary seed: DGMR **catal
 **Admin CRUD UI:** `/materials.html` — `API_AdminListMaterials(…, source_filter$)` with `eigen` \| `catalogus` \| empty; badge for eigen rows. New materials default `source = eigen`.
 
 **Engineer assignment:** façade pick list `GET /api/floormap/materials`; create eigen `POST /api/floormap/materials` from `/floormap.html` (not GA); bind via subsection `analysis.material_id` / compose apply. GA vlak UI shows material read-only. Workflow: [overview §5](app-gevelwering-overview.md#5-workflow-huidige-implementatie).
+
+### DDL 0.2.25 — multi-variant (clone / compare)
+
+Same floormap room may appear in multiple berekeningsvarianten. Geometry tree is **deep-cloned** per variant (not shared).
+
+| Object | Change |
+|--------|--------|
+| `verblijfsruimte.variant_id` | Denormalized FK → `variant` (NOT NULL); backfilled from parent VG |
+| Uniqueness | Dropped global `UNIQUE(subsection_id)`; added `UNIQUE (variant_id, subsection_id)` |
+| Create / Add VR | API checks subsection unused **within the target variant** only |
+| `API_CloneVariant` | Copies variant row + all VG → VR → vlak → vlak_element (new UUIDs; same `subsection_id` / façade / materials) |
+| `API_CompareVariants` | Flat rows for UI compare table; match rooms across variants by `subsection_id` |
+| `API_ListLinkedSubsections` | Each link includes `variant_id` (GA UI scopes “free rooms” to the active variant) |
+
+Product workflow: [overview §5.4](app-gevelwering-overview.md#54-varianten-multi-scenario).
 
 ---
 
@@ -323,3 +350,5 @@ Shared reference catalog for façade sound reduction. Primary seed: DGMR **catal
 | **0.2.14** | 2026-07-22 | Rebuild `material` from `catalogusGG.pdf`: `master_category`, dikte/gewicht/RA/bron, R63–2000, supplier fields |
 | **0.2.15** | 2026-07-22 | Retag false `category=glas` (non-Glas masters) → `Elementen`; keep `master_category` Glas intact |
 | **0.2.16** | 2026-07-22 | GA nieuwbouw-model: `variant`, `verblijfsgebied`, `verblijfsruimte` (↔ floormap subsection), `vlak`, `vlak_element`; engineer CRUD APIs |
+| **0.2.25** | 2026-08-01 | Multi-variant: `verblijfsruimte.variant_id`; UNIQUE `(variant_id, subsection_id)`; `API_CloneVariant`, `API_CompareVariants` |
+| **0.2.27** | 2026-08-02 | `vlak.orientatie` (kompascodes); List/Save/Clone + GA-UI + rapport |

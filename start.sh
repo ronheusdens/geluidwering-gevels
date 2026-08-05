@@ -39,6 +39,9 @@ SQL24="$SQL_DIR/app_gevelwering_0_2_22.sql"
 SQL25="$SQL_DIR/app_gevelwering_0_2_23.sql"
 SQL25_BACKFILL="$SQL_DIR/app_gevelwering_0_2_23_backfill_rw.py"
 SQL26="$SQL_DIR/app_gevelwering_0_2_24.sql"
+SQL27="$SQL_DIR/app_gevelwering_0_2_25.sql"
+SQL28="$SQL_DIR/app_gevelwering_0_2_26.sql"
+SQL29="$SQL_DIR/app_gevelwering_0_2_27.sql"
 
 BPP_PORT="${BPP_PORT:-18080}"
 UI_PORT="${GEVELWERING_UI_PORT:-4173}"
@@ -47,6 +50,9 @@ export BPP_PG_CONN="${BPP_PG_CONN:-/tmp:5432:${PG_DB}:$(whoami):}"
 # BASIC INCLUDE paths resolve against this app root (fixtures/app-gevelwering/...)
 export BASIC_CWD="$APP_ROOT"
 export GEVELWERING_UI_PORT="$UI_PORT"
+# Generated HTML reports: data/projecten/{slug}_{buildingId8}/rapporten/
+export GEVELWERING_PROJECTS_ROOT="${GEVELWERING_PROJECTS_ROOT:-$APP_ROOT/data/projecten}"
+mkdir -p "$GEVELWERING_PROJECTS_ROOT"
 
 if [[ ! -x "$BIN" ]]; then
   echo "Missing $BIN — build bppServer first:" >&2
@@ -104,6 +110,11 @@ echo "Backfilling Rw (C, Ctr) from R spectra..."
 python3 "$SQL25_BACKFILL" || echo "Warning: Rw backfill skipped or failed" >&2
 echo "Applying DDL $SQL26 (scale_aspect_yx for non-square crops) to database ${PG_DB}..."
 psql -d "$PG_DB" -f "$SQL26" >/dev/null
+echo "Applying DDL $SQL27 (multi-variant: VR.variant_id + unique per variant) to database ${PG_DB}..."
+psql -d "$PG_DB" -f "$SQL27" >/dev/null
+echo "Applying DDL $SQL28 (customer report inbox) to database ${PG_DB}..."
+psql -d "$PG_DB" -f "$SQL28" >/dev/null
+apply_sql "$SQL29"
 
 echo "Starting bppServer on :$BPP_PORT (BASIC_CWD=$BASIC_CWD, bin=$BIN)..."
 "$BIN" --server --port "$BPP_PORT" &
@@ -133,15 +144,18 @@ trap cleanup2 EXIT INT TERM
 
 echo ""
 echo "=============================================="
-echo "  Form URL:  http://127.0.0.1:${UI_PORT}/"
+echo "  Landing:   http://127.0.0.1:${UI_PORT}/"
+echo "  Opdrachtgever: http://127.0.0.1:${UI_PORT}/opdrachtgever.html"
 echo "  bppServer: ws://127.0.0.1:${BPP_PORT}/ws"
 echo "  PG conn:   $BPP_PG_CONN"
-echo "  Login:     ronheusdens / demo  (or demo / demo)"
+echo "  Login:     demo / demo"
 echo "  Admin:     admin / demo  -> /admin.html"
 echo "  Materials: admin / demo  -> /materials.html"
 echo "  Engineer:  engineer / demo -> /engineer.html"
 echo "  Floormap:  engineer / demo -> /floormap.html"
 echo "  GA-model:  engineer / demo -> /ga.html"
+echo "  Handleiding:               -> /handleiding.html"
+echo "  Rapporten: $GEVELWERING_PROJECTS_ROOT"
 echo ""
 echo "  Note: this is LOCAL http/ws only."
 echo "  Public HTTPS/WSS: Apache + scripts/apache2/app-gevelwering-https.conf"

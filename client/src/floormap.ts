@@ -37,6 +37,7 @@ import { discoverRoomPolylines, pixelsToSectionNorm } from "./room-discover";
 import { loadAuth, storeAuth as persistAuth, syncSessionCookie, apiAuthHeaders } from "./auth-store";
 import { resolveBppWsUrl } from "./ws-url";
 import { initPasswordToggles } from "./password-toggle";
+import { mountProjectMenu, type ProjectMenuApi } from "./project-menu";
 
 type Envelope = {
   v: number;
@@ -196,6 +197,12 @@ const zoomFitBtn = document.getElementById("fm-zoom-fit") as HTMLButtonElement;
 const zoomLabelEl = document.getElementById("fm-zoom-label") as HTMLElement;
 const discoverBtn = document.getElementById("fm-discover-btn") as HTMLButtonElement;
 const calibrateBtn = document.getElementById("fm-calibrate-btn") as HTMLButtonElement;
+const calibrateLedEl = document.getElementById("fm-calibrate-led") as HTMLElement | null;
+const detailBtn = document.getElementById("fm-detail-btn") as HTMLButtonElement | null;
+const detailDockEl = document.getElementById("fm-detail-dock") as HTMLElement | null;
+const detailHintEl = document.getElementById("fm-detail-hint") as HTMLElement | null;
+const detailRepickBtn = document.getElementById("fm-detail-repick-btn") as HTMLButtonElement | null;
+const detailCloseBtn = document.getElementById("fm-detail-close-btn") as HTMLButtonElement | null;
 const scaleStatusEl = document.getElementById("fm-scale-status") as HTMLElement;
 const calibrateMetresWrap = document.getElementById("fm-calibrate-metres-wrap") as HTMLElement;
 const calibrateMetresInput = document.getElementById("fm-calibrate-metres") as HTMLInputElement;
@@ -218,7 +225,9 @@ const roomDrawBtn = document.getElementById("fm-room-draw-btn") as HTMLButtonEle
 const roomCloseBtn = document.getElementById("fm-room-close-btn") as HTMLButtonElement;
 const roomSimplifyBtn = document.getElementById("fm-room-simplify-btn") as HTMLButtonElement | null;
 const roomSaveBtn = document.getElementById("fm-room-save-btn") as HTMLButtonElement;
+const roomDuplicateBtn = document.getElementById("fm-room-duplicate-btn") as HTMLButtonElement | null;
 const roomClearBtn = document.getElementById("fm-room-clear-btn") as HTMLButtonElement;
+const roomDeleteBtn = document.getElementById("fm-room-delete-btn") as HTMLButtonElement | null;
 const discoverBtnSide = document.getElementById("fm-discover-btn-side") as HTMLButtonElement | null;
 const setOpsFieldset = document.getElementById("fm-set-ops-fieldset") as HTMLElement | null;
 const materialBlockEl = document.getElementById("fm-material-block") as HTMLElement | null;
@@ -251,6 +260,7 @@ const materialRaEl = document.getElementById("fm-ra") as HTMLElement | null;
 const setApplyBtn = document.getElementById("fm-set-apply-btn") as HTMLButtonElement | null;
 const setClearSelBtn = document.getElementById("fm-set-clear-sel-btn") as HTMLButtonElement | null;
 const discoveryDockEl = document.getElementById("fm-discovery-dock") as HTMLElement;
+const editDockEl = document.getElementById("fm-edit-dock") as HTMLElement | null;
 const discoveryProgressEl = document.getElementById("fm-discovery-progress") as HTMLElement;
 const discoveryHintEl = document.getElementById("fm-discovery-hint") as HTMLElement;
 const discoveryLabelInput = document.getElementById("fm-discovery-label") as HTMLInputElement;
@@ -263,10 +273,15 @@ const nudgeLeftBtn = document.getElementById("fm-nudge-left") as HTMLButtonEleme
 const nudgeRightBtn = document.getElementById("fm-nudge-right") as HTMLButtonElement;
 const nudgeUpBtn = document.getElementById("fm-nudge-up") as HTMLButtonElement;
 const nudgeDownBtn = document.getElementById("fm-nudge-down") as HTMLButtonElement;
+const editNudgeLeftBtn = document.getElementById("fm-edit-nudge-left") as HTMLButtonElement | null;
+const editNudgeRightBtn = document.getElementById("fm-edit-nudge-right") as HTMLButtonElement | null;
+const editNudgeUpBtn = document.getElementById("fm-edit-nudge-up") as HTMLButtonElement | null;
+const editNudgeDownBtn = document.getElementById("fm-edit-nudge-down") as HTMLButtonElement | null;
 const roomCountEl = document.getElementById("fm-room-count") as HTMLElement | null;
 const roomsHintEl = document.getElementById("fm-rooms-hint") as HTMLElement | null;
 const roomListEl = document.getElementById("fm-room-list") as HTMLUListElement | null;
 const gaLinkEl = document.getElementById("fm-ga-link") as HTMLAnchorElement | null;
+const fileMenuRoot = document.getElementById("fm-file-menu") as HTMLElement | null;
 const markRoomLegendEl = document.querySelector("#fm-mark-room-fieldset legend") as HTMLElement | null;
 const savedRoomsHeadingEl = document.getElementById("fm-saved-heading") as HTMLElement | null;
 const pickerHeadingEl = document.querySelector("#fm-picker-panel h2") as HTMLElement | null;
@@ -441,13 +456,20 @@ function syncWorkspaceLabels(kind?: string | null): void {
   if (loadBuildingBtn) loadBuildingBtn.textContent = "Ophalen";
   if (backPickerBtn) backPickerBtn.textContent = "← Overzicht";
   discoverBtn.textContent = `Ontdek ${n.plural}`;
-  if (discoverBtnSide) discoverBtnSide.textContent = `Ontdek ${n.plural}`;
+  if (discoverBtnSide) {
+    discoverBtnSide.textContent = "Ontdek";
+    discoverBtnSide.title = `Ontdek ${n.plural} automatisch`;
+  }
   if (markRoomLegendEl) markRoomLegendEl.textContent = cap;
   roomDrawBtn.textContent = `Teken ${n.singular}`;
-  roomSaveBtn.textContent = `${cap} opslaan`;
+  roomSaveBtn.textContent = "Opslaan";
   roomLabelInput.placeholder =
     floormap ? "bijv. slaapkamer 1" : "bijv. raamstrook / paneel";
   roomPendingHintEl.textContent = `Gebruik Teken ${n.singular} in Tools, klik hoekpunten, sluit af en sla op. Dubbelklik een anker om te verwijderen; Vereenvoudig dunt de omtrek.`;
+  if (roomDeleteBtn) {
+    roomDeleteBtn.textContent = "Verwijderen";
+    roomDeleteBtn.title = `Opgeslagen ${n.singular} permanent verwijderen`;
+  }
   // Never pass a null node into replaceChildren — that aborts openSection before loadRooms.
   if (savedRoomsHeadingEl) {
     const badge =
@@ -463,7 +485,7 @@ function syncWorkspaceLabels(kind?: string | null): void {
   if (roomsHintEl) {
     roomsHintEl.textContent = floormap
       ? `Elke ${n.singular} toont VG/VR, oppervlakte (m²) en omtrek (m) bij ingestelde schaal.`
-      : `Elke ${n.singular} met VG/VR telt later mee in de berekening gevelwering voor die VR. Alleen bronnen met hetzelfde materiaal (of zonder materiaal) worden vervangen door een compositie — andere materialen blijven beschikbaar. Selecteer voor +/− compositie.`;
+      : `Kleuren: groen = in bewerking · teal = bewerkt/opgeslagen · paars = nog open. Oranje/groene led = materiaal. Selecteer voor +/− compositie.`;
   }
   vgVrRowEl?.classList.remove("hidden");
   if (vgVrHintEl) {
@@ -492,6 +514,9 @@ let reqCounter = 0;
 const pending = new Map<string, { resolve: (env: Envelope) => void; reject: (err: Error) => void; want: string }>();
 
 let buildingId = URL_BUILDING;
+let buildingLabel = "";
+let buildingExternalRef = "";
+let projectMenu: ProjectMenuApi | null = null;
 let sections: FloormapSection[] = [];
 let activeSection: FloormapSection | null = null;
 let rooms: RoomSubsection[] = [];
@@ -514,16 +539,84 @@ let catalogMaterials: CatalogMaterial[] = [];
 let materialFilterTimer: ReturnType<typeof setTimeout> | null = null;
 /** subsection_id → VR omschrijving when linked in GA model */
 let linkedRooms = new Map<string, string>();
+/**
+ * Components saved/edited in this browser session — drawn teal so “nog open”
+ * (purple) stays visually distinct from “al bewerkt”.
+ */
+const TOUCHED_ROOMS_KEY = "app-gevelwering-touched-rooms";
+const touchedRoomIds = loadTouchedRoomIds();
+
+function loadTouchedRoomIds(): Set<string> {
+  try {
+    const raw = sessionStorage.getItem(TOUCHED_ROOMS_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw) as unknown;
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr.filter((x): x is string => typeof x === "string" && x.length > 0));
+  } catch {
+    return new Set();
+  }
+}
+
+function persistTouchedRoomIds(): void {
+  try {
+    sessionStorage.setItem(TOUCHED_ROOMS_KEY, JSON.stringify([...touchedRoomIds]));
+  } catch {
+    /* ignore */
+  }
+}
+
+function markRoomTouched(id: string | null | undefined): void {
+  const sid = (id || "").trim();
+  if (!sid || touchedRoomIds.has(sid)) return;
+  touchedRoomIds.add(sid);
+  persistTouchedRoomIds();
+}
+
+function markRoomsTouched(ids: Iterable<string | null | undefined>): void {
+  let changed = false;
+  for (const id of ids) {
+    const sid = (id || "").trim();
+    if (!sid || touchedRoomIds.has(sid)) continue;
+    touchedRoomIds.add(sid);
+    changed = true;
+  }
+  if (changed) persistTouchedRoomIds();
+}
 let pdfDoc: PdfDocument | null = null;
 /** Cropped floormap bitmap at base resolution (before display zoom). */
 let cropBitmap: HTMLCanvasElement | null = null;
 let cropWidthPdfPts = 0;
 let canvasWidth = 0;
 let canvasHeight = 0;
-let viewZoom = 1.0;
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 4;
-const ZOOM_STEP = 0.25;
+/** Detailgebied may zoom further than the normal +/- buttons. */
+const ZOOM_MAX_DETAIL = 8;
+const ZOOM_STEP = 0.1;
+const ZOOM_STORAGE_KEY = "app-gevelwering-floormap-view-zoom";
+const DETAIL_FACTOR_DEFAULT = 1 as const;
+type DetailFactor = 1 | 2 | 3 | 4;
+
+function loadStoredViewZoom(): number {
+  try {
+    const raw = Number(localStorage.getItem(ZOOM_STORAGE_KEY));
+    if (!Number.isFinite(raw) || raw <= 0) return 1;
+    return Math.min(ZOOM_MAX_DETAIL, Math.max(ZOOM_MIN, Math.round(raw * 100) / 100));
+  } catch {
+    return 1;
+  }
+}
+
+function persistViewZoom(z: number): void {
+  try {
+    localStorage.setItem(ZOOM_STORAGE_KEY, String(z));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+let viewZoom = loadStoredViewZoom();
 
 type DiscoveryState = {
   candidates: Pt[][];
@@ -537,6 +630,29 @@ type CalibrateState = {
   points: Pt[];
 };
 let calibrate: CalibrateState | null = null;
+
+type NormRect = { x0: number; y0: number; x1: number; y1: number };
+
+/** Active detail framing (region in section-local 0–1). */
+type DetailState = {
+  rect: NormRect;
+  factor: DetailFactor;
+  /** View zoom when the region was marked — factors multiply this. */
+  baseZoom: number;
+  baseScrollLeft: number;
+  baseScrollTop: number;
+};
+
+/** While dragging a new detail rectangle. */
+type DetailPickState = {
+  start: Pt;
+  current: Pt;
+  /** Waiting for first mousedown. */
+  armed: boolean;
+};
+
+let detail: DetailState | null = null;
+let detailPick: DetailPickState | null = null;
 
 type MeasureTool = "off" | "length";
 type ToolMode = "off" | "length" | "room";
@@ -556,6 +672,8 @@ type PendingRoom = {
   closed: boolean;
   editingId: string | null;
   dragVertex: number | null;
+  /** Whole-polygon drag: last cursor in section-local coords. */
+  dragBodyLast: Pt | null;
   drawing: boolean;
 };
 let pendingRoom: PendingRoom | null = null;
@@ -590,6 +708,8 @@ function showLogin(): void {
   storeAuth(null);
   loginPanelEl.classList.remove("hidden");
   panelEl.classList.add("hidden");
+  if (fileMenuRoot) fileMenuRoot.hidden = true;
+  projectMenu?.setEnabled(false);
 }
 
 function showPanel(info: AuthInfo): void {
@@ -598,6 +718,26 @@ function showPanel(info: AuthInfo): void {
   loginPanelEl.classList.add("hidden");
   panelEl.classList.remove("hidden");
   userLabelEl.textContent = `Signed in as ${info.display_name || info.username}`;
+  if (fileMenuRoot) fileMenuRoot.hidden = false;
+  projectMenu?.setEnabled(true);
+  projectMenu?.refreshTitle();
+}
+
+async function refreshBuildingMeta(): Promise<void> {
+  if (!auth?.token || !buildingId) {
+    buildingLabel = "";
+    buildingExternalRef = "";
+    return;
+  }
+  try {
+    const ret = await invokeString("API_EngineerGetProject", [auth.token, buildingId]);
+    if (ret.startsWith("ERROR")) return;
+    const data = JSON.parse(ret) as { label?: string; external_ref?: string };
+    buildingLabel = data.label || "";
+    buildingExternalRef = data.external_ref || "";
+  } catch {
+    /* keep previous */
+  }
 }
 
 function send(type: string, payload: Record<string, unknown>, wantType: string): Promise<Envelope> {
@@ -727,6 +867,7 @@ function updateScaleUi(): void {
     scaleStatusEl.textContent = "Not set";
     calibrateHintEl.textContent = "Click Calibrate scale when you are ready.";
     if (roomsHintEl) roomsHintEl.textContent = `Set drawing scale to get ${n.singular} areas in m².`;
+    setCalibrateLed(false);
     return;
   }
   const mpu = activeSection.metres_per_norm_unit;
@@ -747,13 +888,22 @@ function updateScaleUi(): void {
       roomsHintEl.textContent = `${n.singular.charAt(0).toUpperCase() + n.singular.slice(1)} area (m²) and perimeter (m) use this scale.`;
     }
     calibrateBtn.textContent = "Recalibrate scale";
+    setCalibrateLed(true, src === "PDF_TEXT" ? "Schaal gezet (uit tekeningtekst)" : "Kalibratie uitgevoerd");
   } else {
     scaleStatusEl.textContent = "Not set — mark a known length, or use detected 1:N";
     calibrateHintEl.textContent = "Click Calibrate scale, mark two points, then enter that length in mm.";
     if (roomsHintEl) roomsHintEl.textContent = "Without scale, only relative sizes are shown.";
     calibrateBtn.textContent = "Calibrate scale";
+    setCalibrateLed(false);
   }
   updateToolHint();
+}
+
+function setCalibrateLed(on: boolean, titleWhenOn = "Kalibratie uitgevoerd"): void {
+  if (!calibrateLedEl) return;
+  calibrateLedEl.classList.toggle("is-on", on);
+  calibrateLedEl.title = on ? titleWhenOn : "Schaal niet gezet";
+  calibrateLedEl.setAttribute("aria-label", on ? titleWhenOn : "Schaal niet gezet");
 }
 
 function activeScaleMpu(): number | null {
@@ -1028,17 +1178,24 @@ function scheduleRoomListRefresh(): void {
 
 function syncPendingRoomButtons(): void {
   const n = activePartNoun();
-  const cap = n.singular.charAt(0).toUpperCase() + n.singular.slice(1);
   const has = Boolean(pendingRoom && pendingRoom.points.length > 0);
   const closed = Boolean(pendingRoom?.closed);
   const kier = !isFloormapKind() && selectedIsKierdichting();
+  const editingId = pendingRoom?.editingId || null;
   roomCloseBtn.disabled = !(pendingRoom?.drawing && pendingRoom.points.length >= 3 && !closed);
   const canSaveClosed = Boolean(closed && pendingRoom && pendingRoom.points.length >= 3);
   const canSaveOpenKier = Boolean(
     kier && pendingRoom && !closed && pendingRoom.points.length >= 2,
   );
   roomSaveBtn.disabled = !(canSaveClosed || canSaveOpenKier);
+  if (roomDuplicateBtn) {
+    // Only closed area components (e.g. glaspartijen); open kier paths skip.
+    roomDuplicateBtn.disabled = !(canSaveClosed && !kier);
+  }
   roomClearBtn.disabled = !has && !pendingRoom?.drawing;
+  if (roomDeleteBtn) {
+    roomDeleteBtn.disabled = !editingId;
+  }
   if (roomSimplifyBtn) {
     roomSimplifyBtn.disabled = !(closed && pendingRoom && ringVertexCount(pendingRoom.points) > 3);
   }
@@ -1047,28 +1204,40 @@ function syncPendingRoomButtons(): void {
       ? `Kierdichting: teken een pad (≥2 punten) of gesloten omtrek; lengte in meters wordt opgeslagen.`
       : `Gebruik Teken ${n.singular} (Tools of hier), klik hoekpunten. Dubbelklik een anker om te verwijderen; Vereenvoudig dunt de omtrek.`;
     roomDrawBtn.textContent = `Teken ${n.singular}`;
+    roomSaveBtn.textContent = "Opslaan";
     return;
   }
   if (pendingRoom.drawing && !pendingRoom.closed) {
     roomPendingHintEl.textContent = kier
       ? `${pendingRoom.points.length} punt(en). Opslaan mag vanaf 2 punten (lengte), of sluit polygoon voor omtrek.`
       : `${pendingRoom.points.length} hoekpunt(en). Omtrek/oppervlakte hierboven; sluit polygoon als klaar (≥3).`;
-    roomDrawBtn.textContent = "Tekenen annuleren";
+    roomDrawBtn.textContent = "Annuleren";
   } else if (pendingRoom.closed) {
     roomPendingHintEl.textContent = pendingRoom.editingId
-      ? "Bewerken geometrie — sleep witte ankers, daarna Opslaan. (Labeltekst hierboven aanpassen kan ook.)"
+      ? "Bewerken: sleep het vlak of witte ankers; pijltjes om te schuiven; daarna Opslaan. Verwijderen wist het opgeslagen component."
       : kier
         ? "Polygoon klaar — omtrek (m) wordt als lengte opgeslagen voor kierdichting."
-        : "Polygoon klaar — dubbelklik ankers om te verwijderen, of Vereenvoudig, daarna Opslaan.";
+        : "Polygoon klaar — sleep vlak/ankers, of Dupliceer…, daarna Opslaan.";
     roomDrawBtn.textContent = `Teken ${n.singular}`;
   }
-  roomSaveBtn.textContent = `${cap} opslaan`;
-  if (markRoomLegendEl) markRoomLegendEl.textContent = cap;
+  roomSaveBtn.textContent = editingId ? "Wijzigingen opslaan" : "Opslaan";
+  if (markRoomLegendEl) {
+    const cap = n.singular.charAt(0).toUpperCase() + n.singular.slice(1);
+    markRoomLegendEl.textContent = cap;
+  }
+  syncEditDock();
+}
+
+function syncEditDock(): void {
+  if (!editDockEl) return;
+  const show = Boolean(pendingRoom?.closed && !discovery);
+  editDockEl.classList.toggle("hidden", !show);
 }
 
 function clearPendingRoom(): void {
   pendingRoom = null;
   syncPendingRoomButtons();
+  syncEditDock();
   syncToolButtons();
   updateMeasureReadouts();
   updateToolHint();
@@ -1086,6 +1255,7 @@ function beginDrawRoom(): void {
     closed: false,
     editingId: null,
     dragVertex: null,
+    dragBodyLast: null,
     drawing: true,
   };
   roomLabelInput.value = `${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} ${rooms.length + 1}`;
@@ -1113,11 +1283,12 @@ function closePendingPolygon(): void {
   pendingRoom.closed = true;
   pendingRoom.drawing = false;
   syncPendingRoomButtons();
+  syncEditDock();
   syncToolButtons();
   updateMeasureReadouts();
   updateToolHint();
   scheduleRoomListRefresh();
-  setStatus(`Polygoon gesloten — sla ${activePartNoun().singular} op als klaar`, "ok");
+  setStatus(`Polygoon gesloten — sleep vlak/ankers of gebruik pijltjes; sla op als klaar`, "ok");
   drawOverlay();
 }
 
@@ -1524,6 +1695,8 @@ async function savePendingRoom(): Promise<void> {
       analysis?: SubsectionAnalysis;
     }>("/api/floormap/subsections", body);
     const wasEdit = Boolean(editingId);
+    const savedId = saved.subsection_id;
+    markRoomTouched(savedId);
     clearPendingRoom();
     // Keep VG/VR on gevel/section so successive components can share the same VR.
     if (isFloormapKind()) {
@@ -1548,18 +1721,284 @@ async function savePendingRoom(): Promise<void> {
       depCount > 0
         ? ` · ${depCount} afgeleide${depCount === 1 ? "" : "n"} herberekend`
         : "";
+    const noMatBit =
+      !isFloormapKind() && !mat && !kier ? " · nog geen materiaal (oranje)" : "";
     setStatus(
       wasEdit
         ? kier && lenM != null
           ? `Geometrie bijgewerkt · lengte ${lenM.toFixed(2)} m${depBit}`
           : m2 != null
-            ? `Geometrie bijgewerkt · ${m2.toFixed(2)} m²${depBit}`
-            : `Geometrie bijgewerkt${depBit}`
+            ? `Geometrie bijgewerkt · ${m2.toFixed(2)} m²${depBit}${noMatBit}`
+            : `Geometrie bijgewerkt${depBit}${noMatBit}`
         : kier && lenM != null
           ? `Opgeslagen ${String(body.label)} · lengte ${lenM.toFixed(2)} m`
           : m2 != null
-            ? `Opgeslagen ${String(body.label)} · ${m2.toFixed(2)} m²`
-            : `Opgeslagen ${String(body.label)}`,
+            ? `Opgeslagen ${String(body.label)} · ${m2.toFixed(2)} m²${noMatBit}`
+            : `Opgeslagen ${String(body.label)}${noMatBit}`,
+      "ok",
+    );
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+    syncPendingRoomButtons();
+  }
+}
+
+function ringBBox(points: Pt[]): { minX: number; minY: number; maxX: number; maxY: number } {
+  let minX = 1;
+  let minY = 1;
+  let maxX = 0;
+  let maxY = 0;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+  if (maxX < minX || maxY < minY) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  return { minX, minY, maxX, maxY };
+}
+
+/** Offsets around the original so copies sit in a ring (1 copy → to the right). */
+function copyOffsetsAround(points: Pt[], count: number): Array<{ dx: number; dy: number }> {
+  const n = Math.max(1, Math.min(20, Math.floor(count)));
+  const box = ringBBox(points);
+  const w = Math.max(0.01, box.maxX - box.minX);
+  const h = Math.max(0.01, box.maxY - box.minY);
+  const span = Math.max(w, h);
+  const gap = Math.max(0.012, span * 0.12);
+  if (n === 1) return [{ dx: w + gap, dy: 0 }];
+  const radius = span * 0.55 + gap;
+  const out: Array<{ dx: number; dy: number }> = [];
+  for (let i = 0; i < n; i++) {
+    const ang = -Math.PI / 2 + (2 * Math.PI * i) / n;
+    out.push({ dx: radius * Math.cos(ang), dy: radius * Math.sin(ang) });
+  }
+  return out;
+}
+
+function promptCopyCount(defaultCount = 1): number | null {
+  const raw = window.prompt("Aantal kopieën rond het origineel (1–20):", String(defaultCount));
+  if (raw == null) return null;
+  const n = Math.floor(Number(String(raw).trim().replace(",", ".")));
+  if (!Number.isFinite(n) || n < 1 || n > 20) {
+    setStatus("Voer een getal tussen 1 en 20 in", "err");
+    return null;
+  }
+  return n;
+}
+
+function copyLabelBase(label: string): string {
+  const t = (label || "").trim() || activePartNoun().singular;
+  return t.replace(/\s*\(kopie(?:\s+\d+)?\)\s*$/i, "").trim() || t;
+}
+
+function analysisForDuplicate(src?: SubsectionAnalysis | null): Record<string, unknown> | undefined {
+  if (!src?.material_id && !src?.catalog_id && !src?.master_category) return undefined;
+  const analysis: Record<string, unknown> = {};
+  if (src.material_id) analysis.material_id = src.material_id;
+  if (src.master_category) analysis.master_category = src.master_category;
+  if (src.material_name) analysis.material_name = src.material_name;
+  if (src.catalog_id) analysis.catalog_id = src.catalog_id;
+  if (src.category) analysis.category = src.category;
+  if (src.rubriek_nr != null) analysis.rubriek_nr = src.rubriek_nr;
+  if (src.quantity_kind === "length") {
+    analysis.quantity_kind = "length";
+    if (src.length_m != null) analysis.length_m = src.length_m;
+    if (src.length_norm != null) analysis.length_norm = src.length_norm;
+  }
+  // Standalone geometry copy — do not keep boolean provenance.
+  return analysis;
+}
+
+async function postNewSubsection(body: Record<string, unknown>): Promise<{ subsection_id: string }> {
+  return apiPost<{ subsection_id: string }>("/api/floormap/subsections", body);
+}
+
+/**
+ * Duplicate a closed component: N copies placed around the original.
+ * Façade: keeps VR + material. Floormap: new VR numbers per copy.
+ */
+async function duplicateClosedComponent(opts: {
+  points: Pt[];
+  holes?: Pt[][];
+  label: string;
+  level_hint: string;
+  vg_nr: number | null;
+  vr_nr: string | null;
+  analysis?: SubsectionAnalysis | null;
+  count: number;
+}): Promise<string | null> {
+  if (!activeSection || !auth) throw new Error("Geen actieve sectie");
+  const points = closeRing(opts.points);
+  if (points.length < 4 || shoelaceArea(points) < 1e-8) {
+    throw new Error("Alleen gesloten componenten met oppervlak kunnen worden gekopieerd");
+  }
+  const holesSrc = (opts.holes || [])
+    .map((h) => closeRing(h))
+    .filter((h) => h.length >= 4 && shoelaceArea(h) >= 1e-8);
+  const offsets = copyOffsetsAround(points, opts.count);
+  const mpu = activeScaleMpu();
+  const base = copyLabelBase(opts.label);
+  const analysisBase = analysisForDuplicate(opts.analysis);
+  let lastId: string | null = null;
+  let nextVr = opts.vr_nr;
+
+  for (let i = 0; i < offsets.length; i++) {
+    const { dx, dy } = offsets[i];
+    const copyPoints = translateRing(points, dx, dy);
+    const copyHoles = holesSrc.map((h) => translateRing(h, dx, dy));
+    let vg = opts.vg_nr;
+    let vr = opts.vr_nr;
+    if (isFloormapKind()) {
+      vg = opts.vg_nr ?? suggestVgNr();
+      // Unique VR among floormap rooms: bump from current suggestion each time.
+      if (i === 0) {
+        roomVgInput.value = String(vg);
+        roomVrInput.value = "";
+        nextVr = suggestNextVrNr();
+      } else {
+        const n = Number(nextVr);
+        nextVr = Number.isFinite(n) ? String(n + 1) : suggestNextVrNr();
+      }
+      vr = String(nextVr);
+    }
+    const label = offsets.length === 1 ? `${base} (kopie)` : `${base} (kopie ${i + 1})`;
+    const body: Record<string, unknown> = {
+      section_id: activeSection.id,
+      label,
+      level_hint: opts.level_hint || "OTHER",
+      vg_nr: vg,
+      vr_nr: vr,
+      points: copyPoints,
+      holes: copyHoles,
+      metres_per_norm_unit: mpu ?? undefined,
+      scale_aspect_yx: activeScaleAspect(),
+    };
+    if (analysisBase) {
+      const analysis = { ...analysisBase };
+      if (copyHoles.length) analysis.holes = copyHoles;
+      body.analysis = analysis;
+    } else if (copyHoles.length) {
+      body.analysis = { holes: copyHoles };
+    }
+    const saved = await postNewSubsection(body);
+    lastId = saved.subsection_id;
+    markRoomTouched(saved.subsection_id);
+  }
+  return lastId;
+}
+
+async function duplicateFromRoom(room: RoomSubsection, count?: number): Promise<void> {
+  const n = count ?? promptCopyCount(1);
+  if (n == null) return;
+  const holes = Array.isArray(room.analysis?.holes)
+    ? room.analysis!.holes!.map((h) => coerceRingPoints(h)).filter((h) => h.length >= 3)
+    : [];
+  setStatus(`Kopiëren (${n})…`, "busy");
+  try {
+    const lastId = await duplicateClosedComponent({
+      points: room.points,
+      holes,
+      label: room.label,
+      level_hint: room.level_hint,
+      vg_nr: room.vg_nr,
+      vr_nr: room.vr_nr,
+      analysis: room.analysis,
+      count: n,
+    });
+    await loadRooms();
+    if (lastId) {
+      const created = rooms.find((r) => r.id === lastId);
+      if (created) editRoom(created);
+    }
+    setStatus(
+      n === 1
+        ? `1 kopie geplaatst naast «${copyLabelBase(room.label)}» — sleep het groene vlak of witte ankers; pijltjes om te schuiven; daarna opslaan`
+        : `${n} kopieën rond «${copyLabelBase(room.label)}» — klik een kopie in de lijst om te slepen`,
+      "ok",
+    );
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+  }
+}
+
+async function duplicateFromPending(count?: number): Promise<void> {
+  if (!pendingRoom?.closed || !activeSection) {
+    setStatus("Sluit eerst een polygoon (of selecteer een opgeslagen component)", "err");
+    return;
+  }
+  if (!isFloormapKind() && selectedIsKierdichting()) {
+    setStatus("Dupliceren geldt voor vlakcomponenten (oppervlak), niet voor open kierdichtingspaden", "err");
+    return;
+  }
+  const n = count ?? promptCopyCount(1);
+  if (n == null) return;
+
+  const snapPoints = pendingRoom.points.map((p) => ({ ...p }));
+  const snapHoles = (pendingRoom.holes || []).map((h) => h.map((p) => ({ ...p })));
+  const editingId = pendingRoom.editingId;
+
+  let analysis: SubsectionAnalysis | null | undefined = null;
+  if (editingId) {
+    const src = rooms.find((r) => r.id === editingId);
+    analysis = src?.analysis ?? null;
+  }
+  if (!analysis && !isFloormapKind()) {
+    const mat = selectedCatalogMaterial();
+    if (mat) {
+      analysis = {
+        material_id: mat.material_id,
+        master_category: mat.master_category,
+        material_name: mat.name,
+        catalog_id: mat.catalog_id,
+        category: mat.category || undefined,
+        rubriek_nr: mat.rubriek_nr ?? undefined,
+      };
+    }
+  }
+
+  const vgVr = parseVgVrInputs();
+  if (vgVr.error) {
+    setStatus(vgVr.error, "err");
+    return;
+  }
+  if (isFloormapKind() && (vgVr.vg_nr == null || vgVr.vr_nr == null)) {
+    setStatus("Vul VG- en VR-nummer in vóór dupliceren", "err");
+    return;
+  }
+
+  const label =
+    roomLabelInput.value.trim() ||
+    `${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} ${rooms.length + 1}`;
+  const level = roomLevelSelect.value || "OTHER";
+  const vg = vgVr.vg_nr;
+  const vr = vgVr.vr_nr;
+
+  setStatus(`Kopiëren (${n})…`, "busy");
+  try {
+    // Unsaved draw: persist original in place first, then place copies around it.
+    if (!editingId) {
+      await savePendingRoom();
+    }
+    const lastId = await duplicateClosedComponent({
+      points: snapPoints,
+      holes: snapHoles,
+      label,
+      level_hint: level,
+      vg_nr: vg,
+      vr_nr: vr,
+      analysis,
+      count: n,
+    });
+    await loadRooms();
+    if (lastId) {
+      const created = rooms.find((r) => r.id === lastId);
+      if (created) editRoom(created);
+    }
+    setStatus(
+      n === 1
+        ? "1 kopie geplaatst — sleep het groene vlak of witte ankers; pijltjes om te schuiven; daarna opslaan"
+        : `${n} kopieën geplaatst — klik een kopie in de lijst om te slepen`,
       "ok",
     );
   } catch (err) {
@@ -1604,6 +2043,7 @@ function editRoom(room: RoomSubsection): void {
     closed: !asOpen,
     editingId: room.id,
     dragVertex: null,
+    dragBodyLast: null,
     drawing: false,
   };
   roomLabelInput.value = room.label;
@@ -1612,6 +2052,7 @@ function editRoom(room: RoomSubsection): void {
   roomVrInput.value = room.vr_nr != null ? String(room.vr_nr) : "";
   void applyMaterialSelectionFromAnalysis(room.analysis);
   syncPendingRoomButtons();
+  syncEditDock();
   syncToolButtons();
   updateMeasureReadouts();
   updateToolHint();
@@ -1620,7 +2061,7 @@ function editRoom(room: RoomSubsection): void {
   selectedLi?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   scrollToRing(pendingRoom.points);
   setStatus(
-    `Bewerken: ${room.label} — sleep ankers op de tekening, daarna «${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} opslaan»`,
+    `Bewerken: ${room.label} — sleep het vlak of witte ankers; pijltjes om te schuiven; daarna «${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} opslaan»`,
     "ok",
   );
   drawOverlay();
@@ -2000,6 +2441,7 @@ async function applyBooleanSet(): Promise<void> {
     booleanPreview = null;
     await loadRooms();
     updateBooleanPreview();
+    markRoomTouched(saved.subsection_id);
     const savedM2 = saved.area_m2 != null ? Number(saved.area_m2) : areaM2;
     const okMsg =
       savedM2 != null
@@ -2063,6 +2505,7 @@ function renderRoomList(): void {
     li.className = "drawing-list-item";
     if (allowSetSelect) li.classList.add("drawing-list-item--set");
     if (pendingRoom?.editingId === r.id) li.classList.add("selected");
+    if (touchedRoomIds.has(r.id)) li.classList.add("drawing-list-item--touched");
     if (allowSetSelect && selectedSetIds.has(r.id)) li.classList.add("set-selected");
     if (allowSetSelect && booleanSourceIds.has(r.id)) li.classList.add("drawing-list-item--ga-source");
     const boolRole = boolGroups.get(r.id);
@@ -2091,6 +2534,7 @@ function renderRoomList(): void {
     info.type = "button";
     info.className = "drawing-list-select";
     const linked = linkedRooms.get(r.id);
+    const hasMaterial = Boolean((r.analysis?.material_id || "").trim());
     const nrBit =
       r.vg_nr != null && r.vr_nr != null
         ? `VG ${r.vg_nr} · VR ${r.vr_nr}`
@@ -2102,10 +2546,10 @@ function renderRoomList(): void {
         gaBit = " · bron (vervangen in berekening)";
       } else if (booleanSourceIds.has(r.id)) {
         gaBit = " · bron (blijft in berekening)";
-      } else if (r.vr_nr && r.analysis?.material_id) {
+      } else if (r.vr_nr && hasMaterial) {
         gaBit = " · in berekening";
       } else if (r.vr_nr) {
-        gaBit = " · berekening: nog materiaal";
+        gaBit = " · berekening: nog materiaal toevoegen";
       }
     }
     const linkBit =
@@ -2117,12 +2561,32 @@ function renderRoomList(): void {
     const parts = [r.label || "(zonder label)", matBit, nrBit, levelLabel(r.level_hint), roomMetricsLabel(r)].filter(
       Boolean,
     );
-    info.textContent = `${parts.join(" · ")}${gaBit}${linkBit}`;
+    if (allowSetSelect) {
+      const led = document.createElement("span");
+      led.className = "scale-calibrated-led";
+      led.setAttribute("role", "status");
+      if (hasMaterial) {
+        led.classList.add("is-on");
+        led.title = "Materiaal gekoppeld";
+        led.setAttribute("aria-label", "Materiaal gekoppeld");
+      } else {
+        led.classList.add("is-warn");
+        led.title = "Nog geen materiaal — koppel later voor vlakdelen";
+        led.setAttribute("aria-label", "Nog geen materiaal");
+      }
+      info.appendChild(led);
+    }
+    const labelSpan = document.createElement("span");
+    labelSpan.className = "drawing-list-select-label";
+    labelSpan.textContent = `${parts.join(" · ")}${gaBit}${linkBit}`;
+    info.appendChild(labelSpan);
     info.title = supersededIds.has(r.id)
       ? "Bron van een setbewerking met hetzelfde materiaal — vervangen door het netto-component"
       : booleanSourceIds.has(r.id)
         ? "Bron van een setbewerking met ander materiaal — blijft beschikbaar in de berekening (bijv. glas)"
-        : "Klik om geometrie te bewerken";
+        : allowSetSelect && !hasMaterial
+          ? "Nog geen materiaal (oranje) — klik om te bewerken of materiaal te koppelen"
+          : "Klik om geometrie te bewerken";
     info.addEventListener("click", () => editRoom(r));
     li.appendChild(info);
     const actions = document.createElement("span");
@@ -2130,9 +2594,10 @@ function renderRoomList(): void {
 
     const upBtn = document.createElement("button");
     upBtn.type = "button";
-    upBtn.className = "secondary drawing-list-move";
-    upBtn.textContent = "Omhoog";
-    upBtn.title = "Verplaats omhoog in de lijst";
+    upBtn.className = "secondary drawing-list-move drawing-list-move-icon";
+    upBtn.textContent = "▲";
+    upBtn.setAttribute("aria-label", "Verplaats omhoog in de lijst");
+    upBtn.title = "Omhoog";
     upBtn.disabled = index === 0;
     upBtn.addEventListener("click", () => {
       void moveRoom(index, -1);
@@ -2141,9 +2606,10 @@ function renderRoomList(): void {
 
     const downBtn = document.createElement("button");
     downBtn.type = "button";
-    downBtn.className = "secondary drawing-list-move";
-    downBtn.textContent = "Omlaag";
-    downBtn.title = "Verplaats omlaag in de lijst";
+    downBtn.className = "secondary drawing-list-move drawing-list-move-icon";
+    downBtn.textContent = "▼";
+    downBtn.setAttribute("aria-label", "Verplaats omlaag in de lijst");
+    downBtn.title = "Omlaag";
     downBtn.disabled = index >= rooms.length - 1;
     downBtn.addEventListener("click", () => {
       void moveRoom(index, 1);
@@ -2163,11 +2629,55 @@ function renderRoomList(): void {
         : "Neem VG/VR over in de berekening gevelwering";
       actions.appendChild(ga);
     }
+
+    const isClosedArea =
+      !(r.analysis?.quantity_kind === "length" && r.analysis?.open_path) &&
+      Array.isArray(r.points) &&
+      r.points.length >= 3;
+    if (isClosedArea) {
+      const dup = document.createElement("button");
+      dup.type = "button";
+      dup.className = "secondary";
+      dup.textContent = "Kopie";
+      dup.title = "Dupliceer rond dit component (Shift+klik: vraag aantal)";
+      dup.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        void duplicateFromRoom(r, ev.shiftKey ? undefined : 1);
+      });
+      actions.appendChild(dup);
+    }
+
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.textContent = "Opslaan";
+    const editingThis = pendingRoom?.editingId === r.id;
+    const kier = !isFloormapKind() && selectedIsKierdichting();
+    const canSaveThis = Boolean(
+      editingThis &&
+        pendingRoom &&
+        ((pendingRoom.closed && pendingRoom.points.length >= 3) ||
+          (kier && !pendingRoom.closed && pendingRoom.points.length >= 2)),
+    );
+    saveBtn.disabled = !canSaveThis;
+    saveBtn.className = canSaveThis ? "" : "secondary";
+    saveBtn.title = editingThis
+      ? canSaveThis
+        ? "Sla de huidige bewerking op"
+        : "Nog niet opslaanbaar — sluit de polygoon of teken verder"
+      : "Open dit component (klik de regel) om te bewerken, daarna Opslaan";
+    saveBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      if (!canSaveThis) return;
+      void savePendingRoom();
+    });
+    actions.appendChild(saveBtn);
+
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "secondary";
     btn.textContent = "Verwijderen";
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
       void deleteRoom(r.id);
     });
     actions.appendChild(btn);
@@ -2242,6 +2752,7 @@ async function loadFloormapSections(bid: string): Promise<void> {
   }
   setStatus("Loading sections…", "busy");
   try {
+    await refreshBuildingMeta();
     await refreshLinkedRooms();
     const data = await apiGet<{ sections: FloormapSection[] }>(
       `/api/floormap/sections?building_id=${encodeURIComponent(buildingId)}`,
@@ -2254,6 +2765,11 @@ async function loadFloormapSections(bid: string): Promise<void> {
     renderSectionList();
     pickerPanelEl.classList.remove("hidden");
     workspacePanelEl.classList.add("hidden");
+    const url = new URL(location.href);
+    url.searchParams.set("building_id", buildingId);
+    history.replaceState(null, "", url.toString());
+    projectMenu?.rememberCurrent();
+    projectMenu?.refreshTitle();
     setStatus(`${sections.length} section(s)`, "ok");
     if (URL_SECTION && sections.some((s) => s.id === URL_SECTION)) {
       await openSection(URL_SECTION);
@@ -2471,7 +2987,7 @@ async function loadCroppedPdf(sec: FloormapSection): Promise<void> {
   const baseVp = page.getViewport({ scale: 1 });
   cropWidthPdfPts = (sec.x_max - sec.x_min) * baseVp.width;
 
-  viewZoom = 1;
+  viewZoom = loadStoredViewZoom();
   await paintCropView();
 }
 
@@ -2533,6 +3049,12 @@ async function paintCropView(): Promise<void> {
   if (!ctx) return;
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(cropBitmap, 0, 0, canvasWidth, canvasHeight);
+  const cssW = `${canvasWidth}px`;
+  const cssH = `${canvasHeight}px`;
+  pdfCanvas.style.width = cssW;
+  pdfCanvas.style.height = cssH;
+  overlayCanvas.style.width = cssW;
+  overlayCanvas.style.height = cssH;
   zoomLabelEl.textContent = `${Math.round(viewZoom * 100)}%`;
   drawOverlay();
 }
@@ -2541,8 +3063,11 @@ function updateZoomLabel(): void {
   zoomLabelEl.textContent = `${Math.round(viewZoom * 100)}%`;
 }
 
-async function setViewZoom(next: number): Promise<void> {
-  viewZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next));
+async function setViewZoom(next: number, maxZoom = ZOOM_MAX_DETAIL): Promise<void> {
+  // Snap +/- steps to whole 10% when close; keep exact values from zoom-to-fit / detail.
+  const rounded = Math.round(next * 100) / 100;
+  viewZoom = Math.min(maxZoom, Math.max(ZOOM_MIN, rounded));
+  persistViewZoom(viewZoom);
   updateZoomLabel();
   await paintCropView();
 }
@@ -2550,7 +3075,7 @@ async function setViewZoom(next: number): Promise<void> {
 async function zoomToFit(): Promise<void> {
   if (!cropBitmap) return;
   const avail = Math.max(200, pdfScrollEl.clientWidth - 16);
-  await setViewZoom(avail / cropBitmap.width);
+  await setViewZoom(avail / cropBitmap.width, ZOOM_MAX);
 }
 
 function canvasToNorm(cx: number, cy: number): Pt {
@@ -2613,13 +3138,14 @@ function drawPolyline(
     const verts = points.length > 1 && Math.hypot(points[0].x - points[points.length - 1].x, points[0].y - points[points.length - 1].y) < 1e-6
       ? points.slice(0, -1)
       : points;
+    const hr = vertexHandleRadiusPx();
     for (const pt of verts) {
       const c = normToCanvas(pt);
-      ctx.fillStyle = "#fff";
-      ctx.strokeStyle = stroke;
-      ctx.lineWidth = 1.5;
+      ctx.fillStyle = "rgba(255,255,255,0.35)";
+      ctx.strokeStyle = "#00bcd4";
+      ctx.lineWidth = detail ? 1.5 : 1;
       ctx.beginPath();
-      ctx.arc(c.x, c.y, 6, 0, Math.PI * 2);
+      ctx.arc(c.x, c.y, hr, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
     }
@@ -2644,17 +3170,17 @@ function drawOverlay(): void {
   for (const r of rooms) {
     if (!r.points?.length) continue;
     const selected = selectedSetIds.has(r.id);
+    const touched = touchedRoomIds.has(r.id);
     const holes = Array.isArray(r.analysis?.holes)
       ? r.analysis!.holes!.map((h) => coerceRingPoints(h)).filter((h) => h.length >= 3)
       : [];
-    drawPolyline(
-      ctx,
-      r.points,
-      selected ? "#1565c0" : "#6a1b9a",
-      selected ? "rgba(21,101,192,0.18)" : "rgba(106,27,154,0.12)",
-      selected ? 2.2 : 1.5,
-      holes.length ? { holes } : undefined,
-    );
+    const stroke = selected ? "#1565c0" : touched ? "#00838f" : "#6a1b9a";
+    const fill = selected
+      ? "rgba(21,101,192,0.18)"
+      : touched
+        ? "rgba(0,131,143,0.16)"
+        : "rgba(106,27,154,0.12)";
+    drawPolyline(ctx, r.points, stroke, fill, selected ? 2.2 : touched ? 1.8 : 1.5, holes.length ? { holes } : undefined);
   }
 
   if (booleanPreview && booleanPreview.outer.length >= 3) {
@@ -2669,6 +3195,9 @@ function drawOverlay(): void {
       holes: booleanPreview.holes,
     });
   }
+
+  // Dim/frame under interactive edit so anchors stay on top and easy to grab.
+  drawDetailOverlay(ctx);
 
   if (discovery) {
     discovery.candidates.forEach((ring, i) => {
@@ -2784,10 +3313,207 @@ function scrollToRing(points: Pt[]): void {
   });
 }
 
+function normalizeNormRect(a: Pt, b: Pt): NormRect {
+  return {
+    x0: Math.min(a.x, b.x),
+    y0: Math.min(a.y, b.y),
+    x1: Math.max(a.x, b.x),
+    y1: Math.max(a.y, b.y),
+  };
+}
+
+function normRectRing(r: NormRect): Pt[] {
+  return [
+    { x: r.x0, y: r.y0 },
+    { x: r.x1, y: r.y0 },
+    { x: r.x1, y: r.y1 },
+    { x: r.x0, y: r.y1 },
+  ];
+}
+
+function normRectSizeOk(r: NormRect): boolean {
+  return r.x1 - r.x0 >= 0.008 && r.y1 - r.y0 >= 0.008;
+}
+
+function syncDetailFactorButtons(): void {
+  const factor = detail?.factor ?? DETAIL_FACTOR_DEFAULT;
+  document.querySelectorAll<HTMLButtonElement>(".detail-factor-btn").forEach((btn) => {
+    const f = Number(btn.dataset.factor);
+    btn.classList.toggle("active", f === factor);
+  });
+}
+
+function updateDetailDock(): void {
+  if (!detailDockEl) return;
+  const picking = Boolean(detailPick);
+  const active = Boolean(detail);
+  detailDockEl.classList.toggle("hidden", !picking && !active);
+  if (detailBtn) {
+    detailBtn.classList.toggle("active", picking || active);
+    detailBtn.textContent = picking ? "Annuleer markeren" : active ? "Detailgebied aan" : "Detailgebied";
+  }
+  if (detailHintEl) {
+    if (picking) {
+      detailHintEl.textContent =
+        "Sleep een rechthoek over het gebied met kleine componenten, laat los om te vergroten.";
+    } else if (detail) {
+      const pct = Math.round(detail.baseZoom * detail.factor * 100);
+      detailHintEl.textContent =
+        detail.factor === 1
+          ? `Actief · 1× (${pct}%) — overzicht bij markeren; kies 2×/3×/4× om in te zoomen.`
+          : `Actief · ${detail.factor}× (${pct}%) — 1× keert terug naar overzicht; Sluiten wist het kader.`;
+    } else {
+      detailHintEl.textContent =
+        "Start op 1× (overzicht). Sleep een rechthoek; daarna 2×/3×/4× t.o.v. dat overzicht. Rechterlijst blijft zichtbaar.";
+    }
+  }
+  syncDetailFactorButtons();
+  if (detailRepickBtn) detailRepickBtn.disabled = picking;
+}
+
+async function applyDetailView(opts?: { scroll?: boolean }): Promise<void> {
+  if (!detail || !cropBitmap) return;
+  // True Nx relative to overview zoom when the region was marked.
+  const target = detail.baseZoom * detail.factor;
+  await setViewZoom(target, ZOOM_MAX_DETAIL);
+  if (opts?.scroll !== false) {
+    scrollToRing(normRectRing(detail.rect));
+  }
+  updateDetailDock();
+  drawOverlay();
+  setStatus(
+    detail.factor === 1
+      ? `Detailgebied 1× (${Math.round(viewZoom * 100)}% — overzicht)`
+      : `Detailgebied ${detail.factor}× (${Math.round(viewZoom * 100)}%)`,
+    "ok",
+  );
+}
+
+async function endDetail(msg?: string): Promise<void> {
+  const restore = detail
+    ? {
+        z: detail.baseZoom,
+        left: detail.baseScrollLeft,
+        top: detail.baseScrollTop,
+      }
+    : null;
+  detail = null;
+  detailPick = null;
+  overlayCanvas.style.cursor = "";
+  if (restore) {
+    await setViewZoom(restore.z);
+    pdfScrollEl.scrollTo({
+      left: restore.left,
+      top: restore.top,
+      behavior: "auto",
+    });
+  }
+  updateDetailDock();
+  drawOverlay();
+  if (msg) setStatus(msg, "ok");
+}
+
+async function beginDetailPick(): Promise<void> {
+  endCalibrate();
+  if (discovery) {
+    setStatus("Finish or cancel discovery before detail zoom", "err");
+    return;
+  }
+  // Always start marking from overview (1× / passend) — leftover 2–4× zoom blocks region pick.
+  if (cropBitmap) {
+    await zoomToFit();
+  } else {
+    await setViewZoom(1, ZOOM_MAX);
+  }
+  pdfScrollEl.scrollTo({ left: 0, top: 0, behavior: "auto" });
+  detailPick = {
+    start: { x: 0, y: 0 },
+    current: { x: 0, y: 0 },
+    armed: true,
+  };
+  overlayCanvas.style.cursor = "crosshair";
+  updateDetailDock();
+  setStatus("Detailgebied 1× — sleep een rechthoek op het overzicht", "busy");
+  drawOverlay();
+}
+
+function startDetailTool(): void {
+  void (async () => {
+    if (detailPick) {
+      await endDetail("Detailgebied geannuleerd");
+      return;
+    }
+    if (detail) {
+      await endDetail("Detailgebied gesloten");
+      return;
+    }
+    await beginDetailPick();
+  })();
+}
+
+function repickDetail(): void {
+  void (async () => {
+    // Drop active frame without restoring old high zoom — beginDetailPick resets to overview.
+    detail = null;
+    await beginDetailPick();
+  })();
+}
+
+async function commitDetailRect(
+  rect: NormRect,
+  factor: DetailFactor = DETAIL_FACTOR_DEFAULT,
+): Promise<void> {
+  if (!normRectSizeOk(rect)) {
+    setStatus("Gebied te klein — sleep een grotere rechthoek", "err");
+    detailPick = null;
+    void beginDetailPick();
+    return;
+  }
+  detailPick = null;
+  overlayCanvas.style.cursor = "";
+  // Capture zoom/scroll before applying magnification so 1× can restore exactly.
+  detail = {
+    rect,
+    factor,
+    baseZoom: viewZoom,
+    baseScrollLeft: pdfScrollEl.scrollLeft,
+    baseScrollTop: pdfScrollEl.scrollTop,
+  };
+  await applyDetailView();
+}
+
+function drawDetailOverlay(ctx: CanvasRenderingContext2D): void {
+  const live =
+    detailPick && !detailPick.armed
+      ? normalizeNormRect(detailPick.start, detailPick.current)
+      : detail?.rect || null;
+  if (!live) return;
+  const x = live.x0 * canvasWidth;
+  const y = live.y0 * canvasHeight;
+  const w = (live.x1 - live.x0) * canvasWidth;
+  const h = (live.y1 - live.y0) * canvasHeight;
+  if (w < 1 || h < 1) return;
+
+  ctx.save();
+  ctx.fillStyle = "rgba(15, 23, 32, 0.28)";
+  ctx.beginPath();
+  ctx.rect(0, 0, canvasWidth, canvasHeight);
+  ctx.rect(x, y, w, h);
+  ctx.fill("evenodd");
+
+  ctx.strokeStyle = detailPick ? "#0288d1" : "#1565c0";
+  ctx.lineWidth = 2;
+  ctx.setLineDash(detailPick ? [7, 4] : []);
+  ctx.strokeRect(x + 0.5, y + 0.5, Math.max(0, w - 1), Math.max(0, h - 1));
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
 function endDiscovery(msg?: string): void {
   discovery = null;
   discoveryDockEl.classList.add("hidden");
   document.body.classList.remove("discovery-active");
+  syncEditDock();
   if (msg) setStatus(msg, "ok");
   updateMeasureReadouts();
   updateToolHint();
@@ -2818,6 +3544,7 @@ function showDiscoveryCandidate(): void {
   discoveryLabelInput.value = `${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} ${rooms.length + 1}`;
   discoveryDockEl.classList.remove("hidden");
   document.body.classList.add("discovery-active");
+  if (editDockEl) editDockEl.classList.add("hidden");
   updateMeasureReadouts();
   updateToolHint();
   drawOverlay();
@@ -2830,6 +3557,7 @@ async function startDiscovery(): Promise<void> {
     return;
   }
   endCalibrate();
+  void endDetail();
   clearPendingRoom();
   if (measure.tool !== "off") clearMeasure(false);
   discoverBtn.disabled = true;
@@ -2903,7 +3631,7 @@ async function acceptDiscovery(): Promise<void> {
     setStatus("Ruimte opslaan…", "busy");
     try {
       const mpu = activeScaleMpu();
-      await apiPost("/api/floormap/subsections", {
+      const saved = await apiPost<{ subsection_id: string }>("/api/floormap/subsections", {
         section_id: activeSection.id,
         label,
         level_hint: level,
@@ -2913,6 +3641,7 @@ async function acceptDiscovery(): Promise<void> {
         metres_per_norm_unit: mpu ?? undefined,
         scale_aspect_yx: activeScaleAspect(),
       });
+      markRoomTouched(saved.subsection_id);
       await loadRooms();
       fillVgVrSuggestions();
       discovery.index += 1;
@@ -2934,7 +3663,7 @@ async function acceptDiscovery(): Promise<void> {
   setStatus("Component opslaan…", "busy");
   try {
     const mpu = activeScaleMpu();
-    await apiPost("/api/floormap/subsections", {
+    const saved = await apiPost<{ subsection_id: string }>("/api/floormap/subsections", {
       section_id: activeSection.id,
       label,
       level_hint: level,
@@ -2942,6 +3671,7 @@ async function acceptDiscovery(): Promise<void> {
       metres_per_norm_unit: mpu ?? undefined,
       scale_aspect_yx: activeScaleAspect(),
     });
+    markRoomTouched(saved.subsection_id);
     await loadRooms();
     discovery.index += 1;
     showDiscoveryCandidate();
@@ -3038,6 +3768,9 @@ function nudgeCurrent(dx: number, dy: number): void {
   }
   if (pendingRoom?.closed) {
     pendingRoom.points = translateRing(pendingRoom.points, dx, dy);
+    if (pendingRoom.holes?.length) {
+      pendingRoom.holes = pendingRoom.holes.map((h) => translateRing(h, dx, dy));
+    }
     updateMeasureReadouts();
     scheduleRoomListRefresh();
     drawOverlay();
@@ -3054,6 +3787,7 @@ function endCalibrate(msg?: string): void {
 
 function startCalibrate(): void {
   endDiscovery();
+  void endDetail();
   if (measure.tool !== "off") clearMeasure(false);
   if (calibrate) {
     endCalibrate("Calibration cancelled");
@@ -3114,14 +3848,28 @@ async function finishCalibrate(): Promise<void> {
 }
 
 async function deleteRoom(id: string): Promise<void> {
+  const label = rooms.find((r) => r.id === id)?.label || "dit component";
+  if (!confirm(`«${label}» permanent verwijderen?`)) return;
   try {
     await apiDelete(`/api/floormap/subsections?subsection_id=${encodeURIComponent(id)}`);
     if (pendingRoom?.editingId === id) clearPendingRoom();
+    if (touchedRoomIds.delete(id)) persistTouchedRoomIds();
+    selectedSetIds.delete(id);
+    constituentSigns.delete(id);
     await loadRooms();
-    setStatus("Room removed", "ok");
+    setStatus("Component verwijderd", "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   }
+}
+
+async function deletePendingRoom(): Promise<void> {
+  const id = pendingRoom?.editingId;
+  if (!id) {
+    setStatus("Open eerst een opgeslagen component om te verwijderen", "err");
+    return;
+  }
+  await deleteRoom(id);
 }
 
 /** Persist list order after swapping two adjacent components (delta = −1 or +1). */
@@ -3160,19 +3908,68 @@ async function moveRoom(index: number, delta: -1 | 1): Promise<void> {
 }
 
 function hitVertex(norm: Pt, points: Pt[], pxRadius = 8): number {
-  const thresh = pxRadius / Math.max(canvasWidth, 1);
-  const n = points.length > 1 && Math.hypot(points[0].x - points[points.length - 1].x, points[0].y - points[points.length - 1].y) < 1e-6
-    ? points.length - 1
-    : points.length;
+  const n =
+    points.length > 1 &&
+    Math.hypot(points[0].x - points[points.length - 1].x, points[0].y - points[points.length - 1].y) < 1e-6
+      ? points.length - 1
+      : points.length;
+  let best = -1;
+  let bestDist = Infinity;
+  const w = Math.max(1, canvasWidth);
+  const h = Math.max(1, canvasHeight);
   for (let i = 0; i < n; i++) {
-    if (Math.hypot(points[i].x - norm.x, points[i].y - norm.y) <= thresh) return i;
+    const dx = (points[i].x - norm.x) * w;
+    const dy = (points[i].y - norm.y) * h;
+    const d = Math.hypot(dx, dy);
+    if (d <= pxRadius && d < bestDist) {
+      bestDist = d;
+      best = i;
+    }
   }
-  return -1;
+  return best;
+}
+
+/** Larger grab targets while detail-zoom is active (small components). */
+function vertexHitRadiusPx(): number {
+  return detail ? 16 : 10;
+}
+
+function vertexHandleRadiusPx(): number {
+  return detail ? 5 : 2;
+}
+
+/** Ray-cast point-in-polygon for a (possibly closed) ring. */
+function pointInRing(pt: Pt, points: Pt[]): boolean {
+  const n =
+    points.length > 1 &&
+    Math.hypot(points[0].x - points[points.length - 1].x, points[0].y - points[points.length - 1].y) < 1e-6
+      ? points.length - 1
+      : points.length;
+  if (n < 3) return false;
+  let inside = false;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = points[i].x;
+    const yi = points[i].y;
+    const xj = points[j].x;
+    const yj = points[j].y;
+    const intersect =
+      yi > pt.y !== yj > pt.y && pt.x < ((xj - xi) * (pt.y - yi)) / (yj - yi + 1e-15) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
 }
 
 overlayCanvas.addEventListener("mousedown", (ev) => {
   const c = eventToCanvas(ev);
   const norm = canvasToNorm(c.x, c.y);
+
+  if (detailPick) {
+    detailPick.armed = false;
+    detailPick.start = { ...norm };
+    detailPick.current = { ...norm };
+    drawOverlay();
+    return;
+  }
 
   if (calibrate) {
     if (calibrate.points.length >= 2) return;
@@ -3197,7 +3994,7 @@ overlayCanvas.addEventListener("mousedown", (ev) => {
   if (pendingRoom?.drawing && !pendingRoom.closed) {
     if (pendingRoom.points.length >= 3) {
       const first = pendingRoom.points[0];
-      if (Math.hypot(norm.x - first.x, norm.y - first.y) <= 10 / Math.max(canvasWidth, 1) || ev.detail === 2) {
+      if (Math.hypot(norm.x - first.x, norm.y - first.y) <= 10 / Math.max(Math.min(canvasWidth, canvasHeight), 1) || ev.detail === 2) {
         closePendingPolygon();
         return;
       }
@@ -3211,13 +4008,26 @@ overlayCanvas.addEventListener("mousedown", (ev) => {
   }
 
   if (pendingRoom?.closed) {
-    const vi = hitVertex(norm, pendingRoom.points, 12);
+    // Prefer corner grab over body-drag; larger hit target in detail-zoom.
+    const vertexHitPx = vertexHitRadiusPx();
+    const vi = hitVertex(norm, pendingRoom.points, vertexHitPx);
     if (vi >= 0) {
+      ev.preventDefault();
       if (ev.detail === 2) {
         removeVertexFromActiveOutline(vi);
         return;
       }
       pendingRoom.dragVertex = vi;
+      pendingRoom.dragBodyLast = null;
+      overlayCanvas.style.cursor = "grabbing";
+      return;
+    }
+    const inside = pointInRing(norm, pendingRoom.points);
+    if (inside) {
+      ev.preventDefault();
+      pendingRoom.dragBodyLast = { ...norm };
+      pendingRoom.dragVertex = null;
+      overlayCanvas.style.cursor = "grabbing";
       return;
     }
   }
@@ -3260,6 +4070,101 @@ overlayCanvas.addEventListener("mousemove", (ev) => {
   const c = eventToCanvas(ev);
   const norm = canvasToNorm(c.x, c.y);
 
+  if (detailPick && !detailPick.armed) {
+    detailPick.current = { ...norm };
+    drawOverlay();
+    return;
+  }
+
+  // Vertex/body drag is handled on window so it survives leaving the overlay
+  // (detail-zoom edges / sidebar). Skip while dragging.
+  if (pendingRoom?.dragVertex != null || pendingRoom?.dragBodyLast) return;
+
+  if (pendingRoom?.closed) {
+    const onVertex = hitVertex(norm, pendingRoom.points, vertexHitRadiusPx()) >= 0;
+    const inside = pointInRing(norm, pendingRoom.points);
+    overlayCanvas.style.cursor = onVertex || inside ? "grab" : "";
+  }
+
+  if (measure.tool === "length" && measure.points.length < 2) {
+    measure.cursor = norm;
+    updateMeasureReadouts();
+    drawOverlay();
+    return;
+  }
+
+  if (discovery?.dragVertex != null) return;
+});
+
+overlayCanvas.addEventListener("mouseup", () => {
+  if (detailPick && !detailPick.armed) {
+    const rect = normalizeNormRect(detailPick.start, detailPick.current);
+    const keepFactor = detail?.factor ?? DETAIL_FACTOR_DEFAULT;
+    void commitDetailRect(rect, keepFactor);
+    return;
+  }
+  if (discovery) {
+    if (discovery.dragVertex != null) {
+      discovery.candidates[discovery.index] = closeRing(discovery.current);
+      discovery.dragVertex = null;
+      updateMeasureReadouts();
+      drawOverlay();
+    }
+    return;
+  }
+  if (pendingRoom?.dragVertex != null || pendingRoom?.dragBodyLast) {
+    pendingRoom.dragVertex = null;
+    pendingRoom.dragBodyLast = null;
+    overlayCanvas.style.cursor = "grab";
+    updateMeasureReadouts();
+    scheduleRoomListRefresh();
+    drawOverlay();
+  }
+});
+
+overlayCanvas.addEventListener("mouseleave", () => {
+  if (detailPick && !detailPick.armed) {
+    // Cancel incomplete drag when pointer leaves the canvas
+    detailPick.armed = true;
+    drawOverlay();
+    setStatus("Detailgebied: sleep opnieuw een rechthoek", "busy");
+    return;
+  }
+  // Keep pendingRoom / discovery vertex drags alive across scroll-edge exits;
+  // window mouseup ends them (see below).
+  // Note: dragVertex can be 0 — never use truthy checks on the index.
+  if (pendingRoom?.dragVertex == null && !pendingRoom?.dragBodyLast && discovery?.dragVertex == null) {
+    overlayCanvas.style.cursor = "";
+  }
+});
+
+window.addEventListener("mouseup", () => {
+  if (pendingRoom?.dragVertex != null || pendingRoom?.dragBodyLast) {
+    pendingRoom.dragVertex = null;
+    pendingRoom.dragBodyLast = null;
+    overlayCanvas.style.cursor = pendingRoom.closed ? "grab" : "";
+    updateMeasureReadouts();
+    scheduleRoomListRefresh();
+    drawOverlay();
+  }
+  if (discovery?.dragVertex != null) {
+    discovery.candidates[discovery.index] = closeRing(discovery.current);
+    discovery.dragVertex = null;
+    updateMeasureReadouts();
+    drawOverlay();
+  }
+});
+
+// Continue vertex/body drag even when the pointer leaves the overlay (detail-zoom edges).
+window.addEventListener("mousemove", (ev) => {
+  // dragVertex === 0 is valid (often top-left); must use != null, not truthy checks.
+  if (pendingRoom?.dragVertex == null && !pendingRoom?.dragBodyLast && discovery?.dragVertex == null) {
+    return;
+  }
+  if (!overlayCanvas.isConnected) return;
+  const c = eventToCanvas(ev);
+  const norm = canvasToNorm(c.x, c.y);
+
   if (pendingRoom?.dragVertex != null) {
     const i = pendingRoom.dragVertex;
     pendingRoom.points[i] = norm;
@@ -3272,43 +4177,30 @@ overlayCanvas.addEventListener("mousemove", (ev) => {
     return;
   }
 
-  if (measure.tool === "length" && measure.points.length < 2) {
-    measure.cursor = norm;
-    updateMeasureReadouts();
-    drawOverlay();
-    return;
-  }
-
-  if (!discovery || discovery.dragVertex == null) return;
-  const i = discovery.dragVertex;
-  discovery.current[i] = norm;
-  if (i === 0) discovery.current[discovery.current.length - 1] = { ...norm };
-  discovery.candidates[discovery.index] = closeRing(discovery.current);
-  updateMeasureReadouts();
-  drawOverlay();
-});
-
-overlayCanvas.addEventListener("mouseup", () => {
-  if (discovery) {
-    if (discovery.dragVertex != null) {
-      discovery.candidates[discovery.index] = closeRing(discovery.current);
-      discovery.dragVertex = null;
+  if (pendingRoom?.dragBodyLast && pendingRoom.closed) {
+    const dx = norm.x - pendingRoom.dragBodyLast.x;
+    const dy = norm.y - pendingRoom.dragBodyLast.y;
+    if (Math.hypot(dx, dy) > 1e-9) {
+      pendingRoom.points = translateRing(pendingRoom.points, dx, dy);
+      if (pendingRoom.holes?.length) {
+        pendingRoom.holes = pendingRoom.holes.map((h) => translateRing(h, dx, dy));
+      }
+      pendingRoom.dragBodyLast = { ...norm };
       updateMeasureReadouts();
+      scheduleRoomListRefresh();
       drawOverlay();
     }
     return;
   }
-  if (pendingRoom?.dragVertex != null) {
-    pendingRoom.dragVertex = null;
+
+  if (discovery?.dragVertex != null) {
+    const i = discovery.dragVertex;
+    discovery.current[i] = norm;
+    if (i === 0) discovery.current[discovery.current.length - 1] = { ...norm };
+    discovery.candidates[discovery.index] = closeRing(discovery.current);
     updateMeasureReadouts();
-    scheduleRoomListRefresh();
     drawOverlay();
   }
-});
-
-overlayCanvas.addEventListener("mouseleave", () => {
-  if (discovery) discovery.dragVertex = null;
-  if (pendingRoom) pendingRoom.dragVertex = null;
 });
 
 loginForm.addEventListener("submit", (ev) => {
@@ -3544,6 +4436,7 @@ async function restoreAfterCatalogReturn(): Promise<void> {
         closed,
         editingId: draft.pending.editingId || null,
         dragVertex: null,
+        dragBodyLast: null,
         drawing: !closed && Boolean(draft.pending.drawing),
       };
       if (roomLabelInput) roomLabelInput.value = draft.label || "";
@@ -3756,6 +4649,7 @@ customMatForm?.addEventListener("submit", (ev) => {
     setCustomMatPanelOpen(false);
     if (customMatNameEl) customMatNameEl.value = "";
     if (data.assigned && subsectionId) {
+      markRoomTouched(subsectionId);
       await loadRooms();
       setStatus(`Materiaal «${data.material.name}» opgeslagen en gekoppeld aan component`, "ok");
     } else {
@@ -3775,13 +4669,14 @@ function updateMaterialQuantityHint(): void {
       "Rubriek 9 (kierdichting): lengte in meters wordt opgeslagen (pad ≥2 punten of gesloten omtrek). Geen oppervlakte.";
   } else {
     hint.textContent =
-      "Kies rubriek + subrubriek en een catalogusmateriaal, of maak een eigen materiaal. Nodig voor de berekening gevelwering per VR.";
+      "Materiaal is optioneel bij opslaan (oranje led). Koppel later voor de berekening; alleen complete componenten (groen) zijn kiesbaar bij vlakdelen.";
   }
 }
 
 backPickerBtn.addEventListener("click", () => {
   endDiscovery();
   endCalibrate();
+  void endDetail();
   clearMeasure(false);
   selectedSetIds.clear();
   constituentSigns.clear();
@@ -3792,13 +4687,39 @@ backPickerBtn.addEventListener("click", () => {
   renderSectionList();
 });
 
-zoomOutBtn.addEventListener("click", () => void setViewZoom(viewZoom - ZOOM_STEP));
-zoomInBtn.addEventListener("click", () => void setViewZoom(viewZoom + ZOOM_STEP));
-zoomBtn.addEventListener("click", () => void setViewZoom(1));
-zoomFitBtn.addEventListener("click", () => void zoomToFit());
+zoomOutBtn.addEventListener("click", () => {
+  const stepped = Math.round((viewZoom - ZOOM_STEP) * 10) / 10;
+  void setViewZoom(stepped, detail ? ZOOM_MAX_DETAIL : ZOOM_MAX);
+});
+zoomInBtn.addEventListener("click", () => {
+  const stepped = Math.round((viewZoom + ZOOM_STEP) * 10) / 10;
+  void setViewZoom(stepped, detail ? ZOOM_MAX_DETAIL : ZOOM_MAX);
+});
+zoomBtn.addEventListener("click", () => {
+  void endDetail();
+  void setViewZoom(1, ZOOM_MAX);
+});
+zoomFitBtn.addEventListener("click", () => {
+  void endDetail();
+  void zoomToFit();
+});
 discoverBtn.addEventListener("click", () => void startDiscovery());
 discoverBtnSide?.addEventListener("click", () => void startDiscovery());
 calibrateBtn.addEventListener("click", () => startCalibrate());
+detailBtn?.addEventListener("click", () => startDetailTool());
+detailCloseBtn?.addEventListener("click", () => {
+  void endDetail("Detailgebied gesloten");
+});
+detailRepickBtn?.addEventListener("click", () => repickDetail());
+document.querySelectorAll<HTMLButtonElement>(".detail-factor-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (!detail) return;
+    const f = Number(btn.dataset.factor);
+    if (f !== 1 && f !== 2 && f !== 3 && f !== 4) return;
+    detail.factor = f as DetailFactor;
+    void applyDetailView();
+  });
+});
 calibrateApplyBtn.addEventListener("click", () => void finishCalibrate());
 calibrateRepickBtn.addEventListener("click", () => repickCalibrate());
 calibrateMetresInput.addEventListener("keydown", (evt) => {
@@ -3812,9 +4733,15 @@ roomDrawBtn.addEventListener("click", () => startDrawRoom());
 roomCloseBtn.addEventListener("click", () => closePendingPolygon());
 roomSimplifyBtn?.addEventListener("click", () => simplifyActiveOutline());
 roomSaveBtn.addEventListener("click", () => void savePendingRoom());
+roomDuplicateBtn?.addEventListener("click", () => {
+  void duplicateFromPending();
+});
 roomClearBtn.addEventListener("click", () => {
   clearPendingRoom();
-  setStatus("Room mark cleared", "ok");
+  setStatus("Markering gewist", "ok");
+});
+roomDeleteBtn?.addEventListener("click", () => {
+  void deletePendingRoom();
 });
 
 document.querySelectorAll<HTMLButtonElement>(".tool-mode-btn").forEach((btn) => {
@@ -3842,7 +4769,44 @@ toolClearBtn?.addEventListener("click", () => {
   });
 })();
 window.addEventListener("keydown", (evt) => {
+  const tag = (evt.target as HTMLElement | null)?.tagName;
+  const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+  if ((evt.metaKey || evt.ctrlKey) && (evt.key === "d" || evt.key === "D")) {
+    if (typing) return;
+    if (pendingRoom?.closed) {
+      evt.preventDefault();
+      void duplicateFromPending(evt.shiftKey ? undefined : 1);
+      return;
+    }
+  }
+  if (!typing && pendingRoom?.closed && !evt.metaKey && !evt.ctrlKey && !evt.altKey) {
+    const step = evt.shiftKey ? 0.02 : 0.01;
+    if (evt.key === "ArrowLeft") {
+      evt.preventDefault();
+      nudgeCurrent(-step, 0);
+      return;
+    }
+    if (evt.key === "ArrowRight") {
+      evt.preventDefault();
+      nudgeCurrent(step, 0);
+      return;
+    }
+    if (evt.key === "ArrowUp") {
+      evt.preventDefault();
+      nudgeCurrent(0, -step);
+      return;
+    }
+    if (evt.key === "ArrowDown") {
+      evt.preventDefault();
+      nudgeCurrent(0, step);
+      return;
+    }
+  }
   if (evt.key !== "Escape") return;
+  if (detailPick || detail) {
+    void endDetail("Detailgebied gesloten");
+    return;
+  }
   if (pendingRoom) {
     clearPendingRoom();
     setStatus("Room mark cleared", "ok");
@@ -3860,6 +4824,10 @@ nudgeLeftBtn.addEventListener("click", () => nudgeCurrent(-0.01, 0));
 nudgeRightBtn.addEventListener("click", () => nudgeCurrent(0.01, 0));
 nudgeUpBtn.addEventListener("click", () => nudgeCurrent(0, -0.01));
 nudgeDownBtn.addEventListener("click", () => nudgeCurrent(0, 0.01));
+editNudgeLeftBtn?.addEventListener("click", () => nudgeCurrent(-0.01, 0));
+editNudgeRightBtn?.addEventListener("click", () => nudgeCurrent(0.01, 0));
+editNudgeUpBtn?.addEventListener("click", () => nudgeCurrent(0, -0.01));
+editNudgeDownBtn?.addEventListener("click", () => nudgeCurrent(0, 0.01));
 
 syncPendingRoomButtons();
 syncEigenOnlyFilterUi();
@@ -3907,4 +4875,45 @@ function connect(): void {
 buildingInput.value = buildingId;
 initPasswordToggles();
 initEngineerLayoutSplit();
+
+if (fileMenuRoot) {
+  projectMenu = mountProjectMenu(fileMenuRoot, {
+    getToken: () => auth?.token ?? null,
+    getBuildingId: () => buildingId,
+    getProjectMeta: () => ({ label: buildingLabel, external_ref: buildingExternalRef }),
+    invokeString: (name, args) => invokeString(name, args),
+    apiAuthHeaders: () => (auth ? apiAuthHeaders(auth.token, true) : {}),
+    openBuilding: (id) => loadFloormapSections(id),
+    saveProject: async () => {
+      if (!buildingId) throw new Error("Geen project geselecteerd");
+      setStatus("Plattegrond/gevel worden per actie opgeslagen — projectcontext bewaard", "ok");
+    },
+    onProjectRenamed: (meta) => {
+      buildingLabel = meta.label;
+      buildingExternalRef = meta.external_ref;
+    },
+    onProjectDeleted: async () => {
+      buildingId = "";
+      buildingLabel = "";
+      buildingExternalRef = "";
+      buildingInput.value = "";
+      sections = [];
+      rooms = [];
+      pickerPanelEl.classList.add("hidden");
+      workspacePanelEl.classList.add("hidden");
+      const url = new URL(location.href);
+      url.searchParams.delete("building_id");
+      url.searchParams.delete("section_id");
+      history.replaceState(null, "", url.toString());
+      if (gaLinkEl) gaLinkEl.href = "/ga.html";
+    },
+    onStatus: (state, text) => setStatus(text, state),
+    setTitle: (title) => {
+      document.title =
+        title === "Geen project" ? "Geluidwering Gevels — Drawing analysis" : `${title} — Plattegrond`;
+    },
+  });
+  fileMenuRoot.hidden = true;
+}
+
 connect();

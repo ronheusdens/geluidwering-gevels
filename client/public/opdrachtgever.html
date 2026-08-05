@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Geluidwering Gevels — Opdrachtgever</title>
+  <link rel="stylesheet" href="/styles.css?v=method-help" />
+</head>
+<body>
+  <main class="page">
+    <header class="header">
+      <div class="brand">
+        <img class="brand-logo" src="/assets/stilte-logo.jpg" alt="" width="68" height="68" />
+        <div class="brand-copy">
+          <p class="brand-name">Geluidwering Gevels</p>
+          <h1 id="page-title" class="page-heading">Opdrachtgever</h1>
+        </div>
+      </div>
+      <p class="lede" id="page-lede">Log in om uw akoestische projecten te beheren.</p>
+    </header>
+
+    <section class="panel conn-bar" id="conn-bar" aria-live="polite">
+      <span class="conn-led disconnected" id="conn-led" aria-hidden="true"></span>
+      <span id="conn-status">Verbinden…</span>
+    </section>
+
+    <section id="login-panel" class="panel">
+      <nav class="auth-tabs" role="tablist" aria-label="Authenticatie">
+        <button type="button" id="tab-signin" class="auth-tab active" role="tab" aria-selected="true">Inloggen</button>
+        <button type="button" id="tab-register" class="auth-tab" role="tab" aria-selected="false">Toegang aanvragen</button>
+      </nav>
+
+      <form id="login-form" class="form auth-pane" novalidate>
+        <fieldset>
+          <legend>Inloggen</legend>
+          <label>Gebruikersnaam <input name="username" required autocomplete="username" value="demo" /></label>
+          <label>Wachtwoord <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
+        </fieldset>
+        <div class="actions">
+          <button type="submit" id="login-btn">Inloggen</button>
+        </div>
+        <p class="hint">Demo-account: <code>demo</code> / <code>demo</code></p>
+      </form>
+
+      <form id="register-form" class="form auth-pane hidden" novalidate>
+        <fieldset>
+          <legend>Account aanvragen</legend>
+          <label>Gebruikersnaam <input name="username" required autocomplete="username" pattern="[a-zA-Z0-9._-]{3,32}" title="3–32 letters, cijfers, . _ -" /></label>
+          <label>E-mail <input name="email" type="email" required autocomplete="email" /></label>
+          <label>Weergavenaam <input name="display_name" autocomplete="name" placeholder="Optioneel" /></label>
+        </fieldset>
+        <div class="actions">
+          <button type="submit" id="register-btn">Toegang aanvragen</button>
+        </div>
+        <p class="hint">U ontvangt een toegangswachtwoord voor de eerste login. Lokaal wordt dit hier getoond; in productie per e-mail.</p>
+      </form>
+
+      <section id="register-result" class="panel register-result hidden" aria-live="polite">
+        <h2>Toegang verleend</h2>
+        <p id="register-message"></p>
+        <p class="access-pw">Toegangswachtwoord: <code id="access-password"></code></p>
+        <p class="hint">Log in met dit wachtwoord en wijzig het daarna onder <strong>Profiel</strong>.</p>
+        <button type="button" id="goto-signin-btn" class="secondary">Naar inloggen</button>
+      </section>
+    </section>
+
+    <section id="app-panel" class="hidden">
+      <div class="panel user-bar">
+        <span id="user-label"></span>
+        <div class="user-actions">
+          <button type="button" id="method-btn" class="secondary">Berekeningsmethode</button>
+          <button type="button" id="profile-btn" class="secondary">Profiel</button>
+          <button type="button" id="logout-btn" class="secondary">Uitloggen</button>
+        </div>
+      </div>
+
+      <section id="method-panel" class="panel method-panel hidden" aria-labelledby="method-title">
+        <h2 id="method-title">Berekeningsmethode GA / GA;k</h2>
+        <div class="method-scroll" tabindex="0">
+          <p>
+            De resultaten <strong>GA</strong> (gevelgeluidwering) en <strong>GA;k</strong>
+            (karakteristieke gevelgeluidwering) in deze app volgen de rekenmethode uit
+            <strong>NPR&nbsp;5272</strong> (praktijkrichtlijn bij NEN-EN&nbsp;12354-3) en de
+            toetsingsdefinitie uit <strong>NEN&nbsp;5077</strong> (waaronder de ondergrens
+            V/S<sub>tot</sub>&nbsp;≥&nbsp;3&nbsp;m).
+          </p>
+          <h3>Wat wordt berekend?</h3>
+          <ul>
+            <li><strong>R′</strong> — samengestelde geluidisolatie van de gevelelementen (RA per materiaal, omgerekend naar partiële R<sub>A,s</sub> en energetisch gecombineerd).</li>
+            <li><strong>D<sub>2m,nT</sub></strong> — genormeerd gevelgeluiddrukniveauverschil, met ruimtecorrectie, CL en C<sub>g</sub>.</li>
+            <li><strong>GA</strong> = D<sub>2m,nT</sub> − C<sub>r</sub> (reflectiecorrectie C<sub>r</sub>&nbsp;=&nbsp;3&nbsp;dB).</li>
+            <li><strong>L<sub>bi</sub></strong> = L<sub>b</sub> − GA (binnenniveau bij gegeven geluidsbelasting).</li>
+            <li><strong>GA;k</strong> = GA − 10·log<sub>10</sub>(max(V/S<sub>tot</sub>,&nbsp;3)&nbsp;/&nbsp;(6·T<sub>0</sub>)), conform NEN&nbsp;5077.</li>
+            <li><strong>L<sub>bi;k</sub></strong> = L<sub>b</sub> − GA;k (karakteristiek binnenniveau). Toetsing: L<sub>bi;k</sub>&nbsp;≤&nbsp;<strong>33&nbsp;dB</strong> → <strong>Voldoet</strong>.</li>
+          </ul>
+          <h3>Conformiteit</h3>
+          <p>
+            De formules komen overeen met de gebruikelijke NPR&nbsp;5272-rekenroute zoals die ook in
+            gangbare software voor geluidwering van gevels wordt toegepast. Invoer (volumes,
+            T<sub>0</sub>, oppervlakken, RA, CL/C<sub>g</sub>) bepaalt het resultaat; deze app
+            verandert de normatieve relaties niet.
+          </p>
+          <p class="hint">
+            Let op: NPR&nbsp;5272 is een praktijkrichtlijn. Definitieve toetsing van de
+            karakteristieke gevelgeluidwering gebeurt formeel via meting volgens NEN&nbsp;5077;
+            de berekening dient ter ontwerp- en toetsingsondersteuning.
+          </p>
+          <h3>Kernformules</h3>
+          <pre class="method-formulas">R<sub>A,s,i</sub> = RA<sub>i</sub> + 10·log<sub>10</sub>(S / Q<sub>i</sub>)
+R′ = −10·log<sub>10</sub>(Σ 10<sup>−R<sub>A,s,i</sub>/10</sup>)
+Ruimte = 10·log<sub>10</sub>(V / (6·T<sub>0</sub>·S))
+D<sub>2m,nT</sub> = R′ + C<sub>g</sub> + Ruimte + CL
+GA = D<sub>2m,nT</sub> − 3
+GA;k = GA − 10·log<sub>10</sub>(max(V/S<sub>tot</sub>, 3) / (6·T<sub>0</sub>))</pre>
+        </div>
+        <div class="actions">
+          <button type="button" id="method-close-btn" class="secondary">Sluiten</button>
+        </div>
+      </section>
+
+      <section id="profile-panel" class="panel hidden">
+        <h2>Profiel</h2>
+        <p id="profile-service-email" class="hint"></p>
+        <p id="profile-pw-warning" class="pw-warning hidden">Stel eerst een nieuw wachtwoord in voordat u verdergaat.</p>
+
+        <form id="customer-profile-form" class="form" novalidate>
+          <fieldset>
+            <legend>Klantgegevens</legend>
+            <label>Naam <input name="name" required autocomplete="name" /></label>
+            <label>E-mail <input name="email" type="email" autocomplete="email" /></label>
+            <label>Telefoon <input name="phone" type="tel" autocomplete="tel" /></label>
+            <label>Opmerkingen <textarea name="notes" rows="2"></textarea></label>
+          </fieldset>
+          <fieldset>
+            <legend>Klantadres (optioneel)</legend>
+            <label>Straat <input name="cust_street" autocomplete="street-address" /></label>
+            <label>Postcode <input name="cust_postal" autocomplete="postal-code" /></label>
+            <label>Plaats <input name="cust_city" autocomplete="address-level2" /></label>
+            <label>Gemeente <input name="cust_municipality" /></label>
+            <label>Land <input name="cust_country" maxlength="2" value="NL" /></label>
+          </fieldset>
+          <div class="actions">
+            <button type="submit" id="save-profile-btn">Klantprofiel opslaan</button>
+          </div>
+        </form>
+
+        <form id="password-form" class="form" novalidate>
+          <fieldset>
+            <legend>Wachtwoord wijzigen</legend>
+            <label>Huidig wachtwoord <input name="current_password" type="password" required autocomplete="current-password" /></label>
+            <label>Nieuw wachtwoord <input name="new_password" type="password" required autocomplete="new-password" minlength="6" /></label>
+            <label>Bevestig nieuw wachtwoord <input name="confirm_password" type="password" required autocomplete="new-password" minlength="6" /></label>
+          </fieldset>
+          <div class="actions">
+            <button type="submit" id="change-pw-btn">Wachtwoord bijwerken</button>
+          </div>
+        </form>
+
+        <div class="actions">
+          <button type="button" id="profile-close-btn" class="secondary">Sluiten</button>
+        </div>
+      </section>
+
+      <section class="panel" id="inbox-panel" hidden>
+        <h2>Inbox <span class="inbox-badge" id="inbox-badge" hidden></span></h2>
+        <p class="hint">Rapportages die de engineer voor u heeft vrijgegeven.</p>
+        <ul id="inbox-list" class="inbox-list" aria-label="Inbox rapportages"></ul>
+        <p id="inbox-empty" class="hint hidden">Nog geen rapportages in uw inbox.</p>
+      </section>
+
+      <section class="panel" id="projects-panel">
+        <h2>Projecten</h2>
+        <p class="hint">Uw projecten en de voortgang naar het conceptrapport. Selecteer een project voor details.</p>
+        <ul id="project-list" class="project-list" aria-label="Lopende projecten"></ul>
+        <p id="project-list-empty" class="hint hidden">Nog geen lopende projecten.</p>
+        <div class="actions">
+          <button type="button" id="new-project-btn">Nieuw project</button>
+          <button type="button" id="refresh-list-btn" class="secondary">Lijst vernieuwen</button>
+        </div>
+      </section>
+
+      <section id="project-detail-panel" class="panel hidden">
+        <h2 id="project-detail-title">Projectdetails</h2>
+        <p class="hint" id="project-status-view"></p>
+
+        <div class="project-progress" id="project-progress" aria-label="Projectvoortgang" hidden>
+          <ol class="progress-steps" id="project-progress-steps"></ol>
+          <p class="progress-caption" id="project-progress-caption"></p>
+          <div class="progress-report-slot" id="project-report-slot" hidden>
+            <p class="inbox-message" id="project-report-hint"></p>
+            <div class="actions">
+              <button type="button" id="download-report-btn" disabled>PDF ophalen</button>
+              <button type="button" id="email-report-btn" class="secondary" disabled>Laten e-mailen</button>
+            </div>
+          </div>
+        </div>
+
+        <form id="project-form" class="form" novalidate>
+          <input type="hidden" name="project_id" id="project-id-input" value="" />
+          <fieldset>
+            <legend>Adres woning</legend>
+            <label>Straat <input name="dwell_street" required /></label>
+            <label>Postcode <input name="dwell_postal" required /></label>
+            <label>Plaats <input name="dwell_city" required /></label>
+            <label>Gemeente <input name="dwell_municipality" /></label>
+            <label>Land <input name="dwell_country" maxlength="2" value="NL" /></label>
+          </fieldset>
+          <fieldset>
+            <legend>Tekeningen (PDF, DWG)</legend>
+            <label class="block-label">
+              Bestanden uploaden
+              <input type="file" id="drawing-file-input" accept=".pdf,.dwg,application/pdf" multiple />
+            </label>
+            <p class="hint" id="drawing-upload-hint">Selecteer een of meer PDF- of DWG-bestanden voor dit project.</p>
+            <ul id="drawing-list" class="drawing-list" aria-label="Geüploade tekeningen"></ul>
+            <div class="actions">
+              <button type="button" id="submit-drawings-btn" class="secondary" disabled>Tekeningen indienen ter beoordeling</button>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Projectgegevens</legend>
+            <label>Projectnaam <input name="label" placeholder="bijv. Nieuwbouw Lot 12" /></label>
+            <label>Uw referentie <input name="external_ref" placeholder="optioneel" /></label>
+          </fieldset>
+          <div class="actions">
+            <button type="submit" id="save-btn">Project opslaan</button>
+            <button type="button" id="reload-btn" class="secondary" disabled>Project herladen</button>
+            <button type="button" id="delete-project-btn" class="secondary" disabled>Project verwijderen</button>
+          </div>
+        </form>
+      </section>
+    </section>
+  </main>
+  <script type="module" src="/app.js?v=pdf-inbox"></script>
+</body>
+</html>

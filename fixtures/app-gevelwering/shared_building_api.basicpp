@@ -5,19 +5,21 @@ REM Invoke: API_Bootstrap, API_Login, API_ValidateSession, API_Logout,
 REM         API_RequestAccess, API_ChangePassword,
 REM         API_GetCustomerProfile, API_SaveCustomerProfile,
 REM         API_ListBuildings, API_SaveBuildingEntry, API_OpenBuilding, API_DeleteProject,
+REM         API_EngineerListProjects, API_RenameProject, API_EngineerDeleteProject,
 REM         API_ListProjectDocuments, API_UploadDrawingChunk, API_DeleteDrawing,
 REM         API_CustomerSubmitDrawings,
 REM         API_EngineerListReviewQueue, API_EngineerGetProject, API_ReviewDrawings,
 REM         API_ListDrawingRegions, API_SaveDrawingRegion, API_DeleteDrawingRegion,
 REM         API_ListFloormapSections, API_SaveFloormapScale,
 REM         API_AdminListCustomers, API_AdminListCustomerProjects, API_AdminUpdateProjectStatus,
+REM         API_AdminListAccounts, API_AdminUpdateAccount, API_AdminResetAccountPassword,
 REM         API_AdminListMaterials, API_AdminGetMaterial, API_AdminSaveMaterial, API_AdminDeleteMaterial,
-REM         GA model (DDL 0.2.16): API_ListVariants, API_SaveVariant, API_DeleteVariant,
+REM         GA model (DDL 0.2.16+): API_ListVariants, API_SaveVariant, API_DeleteVariant, API_CloneVariant,
 REM         API_ListVerblijfsgebieden, API_CreateVerblijfsgebied, API_SaveVerblijfsgebied, API_DeleteVerblijfsgebied,
 REM         API_ListVerblijfsruimten, API_AddVerblijfsruimte, API_SaveVerblijfsruimte, API_DeleteVerblijfsruimte,
 REM         API_ListVlakken, API_SaveVlak, API_DeleteVlak,
 REM         API_ListVlakElementen, API_SaveVlakElement, API_DeleteVlakElement,
-REM         API_ListLinkedSubsections
+REM         API_ListLinkedSubsections, API_CompareVariants
 REM Note: nested user PROCEDURE calls from API_* are supported (root_program + retained lookup).
 REM =============================================================================
 
@@ -443,6 +445,245 @@ PROCEDURE API_AdminUpdateProjectStatus(session_token$, building_id$, project_sta
     END IF
 
     RETURN "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "building_id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34) + "," + CHR$(34) + "project_status" + CHR$(34) + ":" + CHR$(34) + ps$ + CHR$(34) + "}"
+END PROCEDURE
+
+REM --- Admin opdrachtgever accounts (service_user, non-engineer) ---
+
+PROCEDURE API_AdminListAccounts(session_token$) AS STRING
+    DIM sql$, rid%, n%, i%, out$, t$, username$
+    DIM uid$, uname$, email$, dname$, active$, mustchg$, cid$, cname$, created$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    IF username$ <> "admin" THEN
+        RETURN "ERROR: admin access required"
+    END IF
+
+    sql$ = "SELECT u.id::text AS user_id, u.username, COALESCE(u.email,'') AS email, "
+    sql$ = sql$ + "COALESCE(u.display_name,'') AS display_name, "
+    sql$ = sql$ + "u.is_active::text AS is_active, u.must_change_password::text AS must_change_password, "
+    sql$ = sql$ + "COALESCE(c.id::text,'') AS customer_id, COALESCE(c.name,'') AS customer_name, "
+    sql$ = sql$ + "u.created_at::text AS created_at "
+    sql$ = sql$ + "FROM app_gevelwering.service_user u "
+    sql$ = sql$ + "LEFT JOIN app_gevelwering.customer c ON c.owner_user_id = u.id "
+    sql$ = sql$ + "WHERE COALESCE(u.is_engineer, false) = false "
+    sql$ = sql$ + "AND u.username <> 'admin' "
+    sql$ = sql$ + "ORDER BY lower(u.username) ASC"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    n% = POSTGRES_NUM_ROWS(rid%)
+
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "accounts" + CHR$(34) + ":["
+    i% = 0
+    WHILE i% < n%
+        IF i% > 0 THEN
+            out$ = out$ + ","
+        END IF
+        uid$ = POSTGRES_GET_BY_NAME$(rid%, i%, "user_id")
+        uname$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "username"), CHR$(34), "")
+        email$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "email"), CHR$(34), "")
+        dname$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "display_name"), CHR$(34), "")
+        active$ = POSTGRES_GET_BY_NAME$(rid%, i%, "is_active")
+        mustchg$ = POSTGRES_GET_BY_NAME$(rid%, i%, "must_change_password")
+        cid$ = POSTGRES_GET_BY_NAME$(rid%, i%, "customer_id")
+        cname$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "customer_name"), CHR$(34), "")
+        created$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "created_at"), CHR$(34), "")
+        out$ = out$ + "{" + CHR$(34) + "user_id" + CHR$(34) + ":" + CHR$(34) + uid$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "username" + CHR$(34) + ":" + CHR$(34) + uname$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "email" + CHR$(34) + ":" + CHR$(34) + email$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "display_name" + CHR$(34) + ":" + CHR$(34) + dname$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "is_active" + CHR$(34) + ":"
+        IF active$ = "t" OR active$ = "true" THEN
+            out$ = out$ + "true"
+        ELSE
+            out$ = out$ + "false"
+        END IF
+        out$ = out$ + "," + CHR$(34) + "must_change_password" + CHR$(34) + ":"
+        IF mustchg$ = "t" OR mustchg$ = "true" THEN
+            out$ = out$ + "true"
+        ELSE
+            out$ = out$ + "false"
+        END IF
+        out$ = out$ + "," + CHR$(34) + "customer_id" + CHR$(34) + ":"
+        IF cid$ = "" THEN
+            out$ = out$ + "null"
+        ELSE
+            out$ = out$ + CHR$(34) + cid$ + CHR$(34)
+        END IF
+        out$ = out$ + "," + CHR$(34) + "customer_name" + CHR$(34) + ":" + CHR$(34) + cname$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "created_at" + CHR$(34) + ":" + CHR$(34) + created$ + CHR$(34) + "}"
+        i% = i% + 1
+    WEND
+    out$ = out$ + "]}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_AdminUpdateAccount(session_token$, user_id$, display_name$, email$, is_active$) AS STRING
+    DIM sql$, rid%, t$, username$, uid$, dname$, em$, active$, out$, uname$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR user_id$ = "" THEN
+        RETURN "ERROR: session_token and user_id are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    uid$ = SUBSTITUTE$(user_id$, "'", "''")
+    dname$ = SUBSTITUTE$(display_name$, "'", "''")
+    em$ = SUBSTITUTE$(email$, "'", "''")
+    active$ = LCASE$(SUBSTITUTE$(is_active$, "'", "''"))
+
+    sql$ = "SELECT u.username "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    IF username$ <> "admin" THEN
+        RETURN "ERROR: admin access required"
+    END IF
+
+    sql$ = "SELECT username, COALESCE(is_engineer::text,'false') AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.service_user WHERE id = '" + uid$ + "'::uuid"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: account not found"
+    END IF
+    uname$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    IF uname$ = "admin" OR POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") = "true" OR POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") = "t" THEN
+        RETURN "ERROR: cannot edit admin or engineer accounts here"
+    END IF
+
+    IF em$ = "" THEN
+        RETURN "ERROR: email is required"
+    END IF
+    sql$ = "SELECT 1 FROM app_gevelwering.service_user "
+    sql$ = sql$ + "WHERE lower(email) = lower('" + em$ + "') AND id <> '" + uid$ + "'::uuid"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) >= 1 THEN
+        RETURN "ERROR: email already registered"
+    END IF
+
+    IF active$ = "1" OR active$ = "true" OR active$ = "t" OR active$ = "yes" THEN
+        active$ = "true"
+    ELSE
+        active$ = "false"
+    END IF
+    IF dname$ = "" THEN
+        dname$ = uname$
+    END IF
+
+    sql$ = "UPDATE app_gevelwering.service_user SET "
+    sql$ = sql$ + "display_name = '" + dname$ + "', "
+    sql$ = sql$ + "email = '" + em$ + "', "
+    sql$ = sql$ + "is_active = " + active$ + "::boolean, "
+    sql$ = sql$ + "updated_at = now() "
+    sql$ = sql$ + "WHERE id = '" + uid$ + "'::uuid "
+    sql$ = sql$ + "RETURNING id::text AS id, username, COALESCE(email,'') AS email, "
+    sql$ = sql$ + "COALESCE(display_name,'') AS display_name, is_active::text AS is_active"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: account update failed"
+    END IF
+
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true"
+    out$ = out$ + "," + CHR$(34) + "user_id" + CHR$(34) + ":" + CHR$(34) + POSTGRES_GET_BY_NAME$(rid%, 0, "id") + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "username" + CHR$(34) + ":" + CHR$(34) + SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "username"), CHR$(34), "") + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "email" + CHR$(34) + ":" + CHR$(34) + SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "email"), CHR$(34), "") + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "display_name" + CHR$(34) + ":" + CHR$(34) + SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "display_name"), CHR$(34), "") + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "is_active" + CHR$(34) + ":"
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "is_active") = "t" OR POSTGRES_GET_BY_NAME$(rid%, 0, "is_active") = "true" THEN
+        out$ = out$ + "true"
+    ELSE
+        out$ = out$ + "false"
+    END IF
+    out$ = out$ + "}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_AdminResetAccountPassword(session_token$, user_id$) AS STRING
+    DIM sql$, rid%, t$, username$, uid$, uname$, temp_pw$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR user_id$ = "" THEN
+        RETURN "ERROR: session_token and user_id are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    uid$ = SUBSTITUTE$(user_id$, "'", "''")
+
+    sql$ = "SELECT u.username "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    IF username$ <> "admin" THEN
+        RETURN "ERROR: admin access required"
+    END IF
+
+    sql$ = "SELECT username, COALESCE(is_engineer::text,'false') AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.service_user WHERE id = '" + uid$ + "'::uuid"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: account not found"
+    END IF
+    uname$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    IF uname$ = "admin" OR POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") = "true" OR POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") = "t" THEN
+        RETURN "ERROR: cannot reset admin or engineer accounts here"
+    END IF
+
+    sql$ = "SELECT substr(encode(gen_random_bytes(12), 'hex'), 1, 16) AS temp_pw"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: failed to generate password"
+    END IF
+    temp_pw$ = POSTGRES_GET_BY_NAME$(rid%, 0, "temp_pw")
+
+    sql$ = "UPDATE app_gevelwering.service_user SET "
+    sql$ = sql$ + "password_hash = crypt('" + SUBSTITUTE$(temp_pw$, "'", "''") + "', gen_salt('bf')), "
+    sql$ = sql$ + "must_change_password = true, updated_at = now() "
+    sql$ = sql$ + "WHERE id = '" + uid$ + "'::uuid "
+    sql$ = sql$ + "RETURNING id::text AS id, username"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: password reset failed"
+    END IF
+
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true"
+    out$ = out$ + "," + CHR$(34) + "user_id" + CHR$(34) + ":" + CHR$(34) + POSTGRES_GET_BY_NAME$(rid%, 0, "id") + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "username" + CHR$(34) + ":" + CHR$(34) + SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "username"), CHR$(34), "") + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "access_password" + CHR$(34) + ":" + CHR$(34) + temp_pw$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "must_change_password" + CHR$(34) + ":true"
+    out$ = out$ + "," + CHR$(34) + "message" + CHR$(34) + ":" + CHR$(34) + "Tijdelijk wachtwoord uitgegeven; gebruiker moet bij volgende login wijzigen." + CHR$(34)
+    out$ = out$ + "}"
+    RETURN out$
 END PROCEDURE
 
 REM --- Admin material catalog (app_gevelwering.material / catalogusGG.pdf) ---
@@ -1508,6 +1749,171 @@ PROCEDURE API_DeleteProject(session_token$, building_id$) AS STRING
     RETURN "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "deleted_project_id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34) + "}"
 END PROCEDURE
 
+REM Engineer/admin: list open projects (broader than review queue) for Bestand → Openen
+PROCEDURE API_EngineerListProjects(session_token$) AS STRING
+    DIM sql$, rid%, n%, i%, out$, t$, username$, is_eng$
+    DIM b_id$, b_label$, b_ref$, c_name$, project_status$, updated_at$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT b.id::text AS building_id, COALESCE(b.label,'') AS label, "
+    sql$ = sql$ + "COALESCE(b.external_ref,'') AS external_ref, c.name AS customer_name, "
+    sql$ = sql$ + "b.project_status::text AS project_status, b.updated_at::text AS updated_at "
+    sql$ = sql$ + "FROM app_gevelwering.building b "
+    sql$ = sql$ + "JOIN app_gevelwering.customer c ON c.id = b.customer_id "
+    sql$ = sql$ + "WHERE b.project_status <> 'PROJECT_FINISHED'::app_gevelwering.project_status "
+    sql$ = sql$ + "ORDER BY b.updated_at DESC"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    n% = POSTGRES_NUM_ROWS(rid%)
+
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "projects" + CHR$(34) + ":["
+    i% = 0
+    WHILE i% < n%
+        IF i% > 0 THEN
+            out$ = out$ + ","
+        END IF
+        b_id$ = POSTGRES_GET_BY_NAME$(rid%, i%, "building_id")
+        b_label$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "label"), CHR$(34), "")
+        b_ref$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "external_ref"), CHR$(34), "")
+        c_name$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "customer_name"), CHR$(34), "")
+        project_status$ = POSTGRES_GET_BY_NAME$(rid%, i%, "project_status")
+        updated_at$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "updated_at"), CHR$(34), "")
+        out$ = out$ + "{" + CHR$(34) + "building_id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "label" + CHR$(34) + ":" + CHR$(34) + b_label$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "external_ref" + CHR$(34) + ":" + CHR$(34) + b_ref$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "customer_name" + CHR$(34) + ":" + CHR$(34) + c_name$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "project_status" + CHR$(34) + ":" + CHR$(34) + project_status$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "updated_at" + CHR$(34) + ":" + CHR$(34) + updated_at$ + CHR$(34) + "}"
+        i% = i% + 1
+    WEND
+    out$ = out$ + "]}"
+    RETURN out$
+END PROCEDURE
+
+REM Engineer/admin: rename project label / werknummer (any status)
+PROCEDURE API_RenameProject(session_token$, building_id$, label$, external_ref$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, b_id$, lab$, ref$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR building_id$ = "" THEN
+        RETURN "ERROR: session_token and building_id are required"
+    END IF
+    IF label$ = "" AND external_ref$ = "" THEN
+        RETURN "ERROR: label or external_ref is required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    b_id$ = SUBSTITUTE$(building_id$, "'", "''")
+    lab$ = SUBSTITUTE$(label$, "'", "''")
+    ref$ = SUBSTITUTE$(external_ref$, "'", "''")
+
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "UPDATE app_gevelwering.building SET "
+    sql$ = sql$ + "label = '" + lab$ + "', "
+    sql$ = sql$ + "external_ref = '" + ref$ + "', "
+    sql$ = sql$ + "updated_at = now() "
+    sql$ = sql$ + "WHERE id = '" + b_id$ + "'::uuid "
+    sql$ = sql$ + "RETURNING id::text AS id, COALESCE(label,'') AS label, COALESCE(external_ref,'') AS external_ref"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: project not found"
+    END IF
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true"
+    out$ = out$ + "," + CHR$(34) + "building_id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "label" + CHR$(34) + ":" + CHR$(34) + SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "label"), CHR$(34), "") + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "external_ref" + CHR$(34) + ":" + CHR$(34) + SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "external_ref"), CHR$(34), "") + CHR$(34) + "}"
+    RETURN out$
+END PROCEDURE
+
+REM Engineer/admin: delete project (any status) — client also cleans data/projecten folder
+PROCEDURE API_EngineerDeleteProject(session_token$, building_id$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, b_id$, b_label$, b_ref$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR building_id$ = "" THEN
+        RETURN "ERROR: session_token and building_id are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    b_id$ = SUBSTITUTE$(building_id$, "'", "''")
+
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT COALESCE(b.label,'') AS label, COALESCE(b.external_ref,'') AS external_ref "
+    sql$ = sql$ + "FROM app_gevelwering.building b WHERE b.id = '" + b_id$ + "'::uuid"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: project not found"
+    END IF
+    b_label$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "label"), CHR$(34), "")
+    b_ref$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "external_ref"), CHR$(34), "")
+
+    sql$ = "DELETE FROM app_gevelwering.building WHERE id = '" + b_id$ + "'::uuid "
+    sql$ = sql$ + "RETURNING id::text AS id"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: project delete failed: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true"
+    out$ = out$ + "," + CHR$(34) + "deleted_project_id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "label" + CHR$(34) + ":" + CHR$(34) + b_label$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "external_ref" + CHR$(34) + ":" + CHR$(34) + b_ref$ + CHR$(34) + "}"
+    RETURN out$
+END PROCEDURE
+
 PROCEDURE API_ListProjectDocuments(session_token$, building_id$) AS STRING
     DIM sql$, rid%, n%, i%, out$, t$, owner_id$, b_id$
     DIM d_id$, d_name$, d_ext$, d_size$, d_created$
@@ -1799,19 +2205,23 @@ PROCEDURE API_EngineerListReviewQueue(session_token$) AS STRING
     END IF
     username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
     is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
-    IF username$ <> "engineer" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
         RETURN "ERROR: engineer access required"
     END IF
 
+    REM Active engineer work: status from admin/customer path; drawings optional (LEFT JOIN)
     sql$ = "SELECT b.id::text AS building_id, COALESCE(b.label,'') AS label, c.name AS customer_name, "
     sql$ = sql$ + "b.project_status::text AS project_status, COUNT(d.id)::text AS drawing_count, "
-    sql$ = sql$ + "COALESCE(dr.reviewed_at::text,'') AS reviewed_at "
+    sql$ = sql$ + "COALESCE(MAX(dr.reviewed_at)::text,'') AS reviewed_at "
     sql$ = sql$ + "FROM app_gevelwering.building b "
     sql$ = sql$ + "JOIN app_gevelwering.customer c ON c.id = b.customer_id "
-    sql$ = sql$ + "JOIN app_gevelwering.document d ON d.building_id = b.id "
+    sql$ = sql$ + "LEFT JOIN app_gevelwering.document d ON d.building_id = b.id "
     sql$ = sql$ + "LEFT JOIN app_gevelwering.drawing_review dr ON dr.building_id = b.id "
-    sql$ = sql$ + "WHERE b.project_status IN ('PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED'::app_gevelwering.project_status, 'PROJECT_UNDERWAY'::app_gevelwering.project_status) "
-    sql$ = sql$ + "GROUP BY b.id, b.label, c.name, b.project_status, dr.reviewed_at "
+    sql$ = sql$ + "WHERE b.project_status IN ("
+    sql$ = sql$ + "'PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED'::app_gevelwering.project_status, "
+    sql$ = sql$ + "'PROJECT_UNDERWAY'::app_gevelwering.project_status, "
+    sql$ = sql$ + "'PROJECT_NEAR_FINAL'::app_gevelwering.project_status) "
+    sql$ = sql$ + "GROUP BY b.id, b.label, c.name, b.project_status "
     sql$ = sql$ + "ORDER BY b.updated_at DESC"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
     n% = POSTGRES_NUM_ROWS(rid%)
@@ -1868,7 +2278,7 @@ PROCEDURE API_EngineerGetProject(session_token$, building_id$) AS STRING
     END IF
     username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
     is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
-    IF username$ <> "engineer" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
         RETURN "ERROR: engineer access required"
     END IF
 
@@ -2034,7 +2444,7 @@ PROCEDURE API_ReviewDrawings(session_token$, building_id$, sufficient$, legible$
     user_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "user_id")
     username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
     is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
-    IF username$ <> "engineer" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
         RETURN "ERROR: engineer access required"
     END IF
 
@@ -2260,7 +2670,7 @@ PROCEDURE API_SaveDrawingRegion(session_token$, document_id$, page_index$, label
     user_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "user_id")
     username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
     is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
-    IF username$ <> "engineer" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
         RETURN "ERROR: engineer access required"
     END IF
 
@@ -2335,7 +2745,7 @@ PROCEDURE API_DeleteDrawingRegion(session_token$, region_id$) AS STRING
     END IF
     username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
     is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
-    IF username$ <> "engineer" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
         RETURN "ERROR: engineer access required"
     END IF
 
@@ -2373,7 +2783,7 @@ PROCEDURE API_ListFloormapSections(session_token$, building_id$) AS STRING
     END IF
     username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
     is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
-    IF username$ <> "engineer" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
         RETURN "ERROR: engineer access required"
     END IF
 
@@ -2478,7 +2888,7 @@ PROCEDURE API_SaveFloormapScale(session_token$, section_id$, metres_per_norm_uni
     END IF
     username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
     is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
-    IF username$ <> "engineer" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
         RETURN "ERROR: engineer access required"
     END IF
 

@@ -12,13 +12,35 @@
  *   GA;k   = GA − 10·log10(max(V/Stot, 3) / (6·T))
  *            Stot = som S van vlakken met meenemen_gak (lengte telt niet mee)
  *   Lbi;k  = Lb − GA;k
- *   Toets  = Lbi;k ≤ 33 dB → Voldoet
+ *   Toets  = Lbi;k ≤ grens (gebruiksfunctie) → Voldoet
+ *
+ * Spectrum is metadata only until a spectral R' kernel exists.
  */
 
 export const CR_DB = 3;
 
-/** Grenswaarde karakteristiek binnenniveau Lbi;k (dB). */
+/** Default grenswaarde karakteristiek binnenniveau Lbi;k (dB). */
 export const GRENZWAARDE_LBIK_DB = 33;
+
+/** @type {Record<string, number>} */
+export const GRENZWAARDE_LBIK_BY_FUNCTIE = {
+  Woonfunctie: 33,
+  "Bijeenkomst voor kinderopvang": 28,
+  Gezondheidszorgfunctie: 33,
+  Onderwijsfunctie: 28,
+  "Wgh, gezondheidszorg geluidgevoelig": 33,
+  "Wgh, onderwijsfunctie geluidgevoelig": 28,
+  Overig: 33,
+};
+
+/** @param {string|null|undefined} gebruiksfunctie */
+export function grenswaardeLbik(gebruiksfunctie) {
+  const key = String(gebruiksfunctie || "").trim();
+  if (key && Object.prototype.hasOwnProperty.call(GRENZWAARDE_LBIK_BY_FUNCTIE, key)) {
+    return GRENZWAARDE_LBIK_BY_FUNCTIE[key];
+  }
+  return GRENZWAARDE_LBIK_DB;
+}
 
 /** @param {number} x */
 export function round1(x) {
@@ -94,6 +116,10 @@ export function gakCorrectionDb(volumeM3, t0s, stotM2) {
  *   geluidsbelasting_dba: number,
  *   vlakken: GaVlakInput[],
  *   cr_db?: number,
+ *   cl_db?: number,
+ *   cg_db?: number,
+ *   gebruiksfunctie?: string|null,
+ *   grenswaarde_lbik_db?: number|null,
  * }} GaVrInput
  */
 
@@ -106,6 +132,10 @@ export function computeVrGa(input) {
   const T = Number(input.t0_s) > 0 ? Number(input.t0_s) : 0.5;
   const Lb = Number(input.geluidsbelasting_dba);
   const Cr = input.cr_db != null ? Number(input.cr_db) : CR_DB;
+  const grens =
+    input.grenswaarde_lbik_db != null && Number.isFinite(Number(input.grenswaarde_lbik_db))
+      ? Number(input.grenswaarde_lbik_db)
+      : grenswaardeLbik(input.gebruiksfunctie);
   const vlakken = Array.isArray(input.vlakken) ? input.vlakken : [];
 
   /** @type {{ label: string, kind: string, quantity: number, ra_dba: number, ras: number|null, meenemen_gak: boolean, cl_db: number, cg_db: number, area_for_s: number }[]} */
@@ -159,6 +189,7 @@ export function computeVrGa(input) {
       gak_corr_db: null,
       lbik_dba: null,
       gak_required_dba: null,
+      grenswaarde_lbik_db: grens,
       voldoet: null,
     };
   }
@@ -204,6 +235,7 @@ export function computeVrGa(input) {
       gak_corr_db: null,
       lbik_dba: null,
       gak_required_dba: null,
+      grenswaarde_lbik_db: grens,
       voldoet: null,
     };
   }
@@ -213,9 +245,9 @@ export function computeVrGa(input) {
   const lbi = Number.isFinite(Lb) ? Lb - ga : null;
   const gakCorr = stot > 0 ? gakCorrectionDb(V, T, stot) : null;
   const gak = gakCorr != null ? ga - gakCorr : null;
-  const gakRequired = Number.isFinite(Lb) ? Lb - GRENZWAARDE_LBIK_DB : null;
+  const gakRequired = Number.isFinite(Lb) ? Lb - grens : null;
   const lbik = gak != null && Number.isFinite(Lb) ? Lb - gak : null;
-  const voldoet = lbik != null ? lbik <= GRENZWAARDE_LBIK_DB : null;
+  const voldoet = lbik != null ? lbik <= grens : null;
 
   return {
     ok: true,
@@ -235,6 +267,7 @@ export function computeVrGa(input) {
     gak_corr_db: gakCorr,
     lbik_dba: lbik,
     gak_required_dba: gakRequired,
+    grenswaarde_lbik_db: grens,
     voldoet,
   };
 }

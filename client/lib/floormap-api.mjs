@@ -480,28 +480,92 @@ export async function handleFloormapVrComponentsList(req, res, url) {
           .filter((id) => UUID_RE.test(id)),
       ),
     ];
-    /** @type {Map<string, { ra_dba: number|null, catalog_id: string|null }>} */
+    const catalogIds = [
+      ...new Set(
+        part.eligible
+          .map((s) => {
+            const a =
+              s.analysis && typeof s.analysis === "object" && !Array.isArray(s.analysis)
+                ? s.analysis
+                : {};
+            return a.catalog_id != null ? String(a.catalog_id).trim() : "";
+          })
+          .filter((c) => c.length > 0),
+      ),
+    ];
+    /** @type {Map<string, { id: string, ra_dba: number|null, catalog_id: string|null, name: string|null }>} */
     const matById = new Map();
-    if (matIds.length) {
+    /** @type {Map<string, { id: string, ra_dba: number|null, catalog_id: string|null, name: string|null }>} */
+    const matByCatalog = new Map();
+    if (matIds.length || catalogIds.length) {
+      const clauses = [];
+      const params = [];
+      if (matIds.length) {
+        params.push(matIds);
+        clauses.push(`id = ANY($${params.length}::uuid[])`);
+      }
+      if (catalogIds.length) {
+        params.push(catalogIds);
+        clauses.push(`catalog_id = ANY($${params.length}::text[])`);
+      }
       const { rows: mats } = await client.query(
-        `SELECT id::text AS id, ra_dba, catalog_id
+        `SELECT id::text AS id, ra_dba, catalog_id, name
          FROM app_gevelwering.material
-         WHERE id = ANY($1::uuid[])`,
-        [matIds],
+         WHERE ${clauses.join(" OR ")}`,
+        params,
       );
       for (const m of mats) {
-        matById.set(String(m.id), {
+        const info = {
+          id: String(m.id),
           ra_dba:
             m.ra_dba != null && Number.isFinite(Number(m.ra_dba)) ? Number(m.ra_dba) : null,
-          catalog_id: m.catalog_id != null && String(m.catalog_id).trim() ? String(m.catalog_id).trim() : null,
-        });
+          catalog_id:
+            m.catalog_id != null && String(m.catalog_id).trim()
+              ? String(m.catalog_id).trim()
+              : null,
+          name: m.name != null ? String(m.name) : null,
+        };
+        matById.set(info.id, info);
+        if (info.catalog_id) matByCatalog.set(info.catalog_id, info);
       }
     }
+
+    /** Heal stale material_id UUIDs after catalog reseed (keep catalog_id, rewrite id). */
+    const heals = [];
+    for (const s of part.eligible) {
+      const a =
+        s.analysis && typeof s.analysis === "object" && !Array.isArray(s.analysis)
+          ? { ...s.analysis }
+          : {};
+      const mid = s.material_id != null ? String(s.material_id) : "";
+      const cat =
+        a.catalog_id != null && String(a.catalog_id).trim() ? String(a.catalog_id).trim() : "";
+      if (mid && matById.has(mid)) continue;
+      if (!cat || !matByCatalog.has(cat)) continue;
+      const fresh = matByCatalog.get(cat);
+      if (!fresh || fresh.id === mid) continue;
+      a.material_id = fresh.id;
+      if (fresh.name) a.material_name = fresh.name;
+      heals.push({ id: s.id, analysis: a, material_id: fresh.id });
+      s.material_id = fresh.id;
+      s.material_name = fresh.name || s.material_name;
+      s.analysis = a;
+    }
+    for (const h of heals) {
+      await client.query(
+        `UPDATE app_gevelwering.drawing_subsection
+         SET analysis = $2::jsonb, updated_at = now()
+         WHERE id = $1::uuid`,
+        [h.id, JSON.stringify(h.analysis)],
+      );
+    }
+
     json(req, res, 200, {
       ok: true,
       building_id: buildingId,
       vr_nr: part.vr_nr,
       rule: "include matching VR; exclude same-material boolean sources and geometry-only outlines",
+      material_id_healed: heals.length,
       eligible: part.eligible.map((s) => {
         const a =
           s.analysis && typeof s.analysis === "object" && !Array.isArray(s.analysis)
@@ -514,9 +578,12 @@ export async function handleFloormapVrComponentsList(req, res, url) {
               ? "length"
               : "area";
         const mid = s.material_id != null ? String(s.material_id) : "";
-        const matInfo = mid && matById.has(mid) ? matById.get(mid) : null;
         const catalogFromAnalysis =
           a.catalog_id != null && String(a.catalog_id).trim() ? String(a.catalog_id).trim() : null;
+        const matInfo =
+          (mid && matById.get(mid)) ||
+          (catalogFromAnalysis && matByCatalog.get(catalogFromAnalysis)) ||
+          null;
         const liveArea = qkind === "length" ? null : liveAreaM2FromRow(s);
         const liveLen = qkind === "length" ? liveLengthMFromRow(s) : null;
         return {
@@ -531,11 +598,11 @@ export async function handleFloormapVrComponentsList(req, res, url) {
           area_m2: liveArea,
           quantity_kind: qkind,
           length_m: liveLen,
-          ga_ready: Boolean(s.ga_ready),
-          material_id: s.material_id,
+          ga_ready: Boolean(matInfo?.id || mid),
+          material_id: matInfo?.id || s.material_id || null,
           catalog_id: matInfo?.catalog_id || catalogFromAnalysis,
           master_category: s.master_category,
-          material_name: s.material_name,
+          material_name: matInfo?.name || s.material_name,
           ra_dba: matInfo ? matInfo.ra_dba : null,
           boolean_op: a.boolean_op || null,
         };

@@ -2,6 +2,7 @@ import { loadAuth, storeAuth as persistAuth, syncSessionCookie, apiAuthHeaders }
 import { resolveBppWsUrl } from "./ws-url";
 import { initPasswordToggles } from "./password-toggle";
 import { initEngineerLayoutSplit } from "./layout-split";
+import { mountProjectMenu, type ProjectMenuApi } from "./project-menu";
 import {
   metresPerNormFromCalibration,
   normalizeAspectYx,
@@ -117,6 +118,7 @@ const userLabelEl = document.getElementById("engineer-user-label") as HTMLElemen
 const logoutBtn = document.getElementById("engineer-logout-btn") as HTMLButtonElement;
 const refreshBtn = document.getElementById("engineer-refresh-btn") as HTMLButtonElement;
 const gaLinkEl = document.getElementById("engineer-ga-link") as HTMLAnchorElement | null;
+const fileMenuRoot = document.getElementById("engineer-file-menu") as HTMLElement | null;
 const queueListEl = document.getElementById("engineer-queue-list") as HTMLElement;
 const reviewPanelEl = document.getElementById("engineer-review-panel") as HTMLElement;
 const projectTitleEl = document.getElementById("engineer-project-title") as HTMLElement;
@@ -195,6 +197,7 @@ let reqCounter = 0;
 const pending = new Map<string, { resolve: (env: Envelope) => void; reject: (err: Error) => void; want: string }>();
 
 let activeProject: ProjectDetail | null = null;
+let projectMenu: ProjectMenuApi | null = null;
 let activeDocumentId: string | null = null;
 let pdfDoc: PdfDocument | null = null;
 let pdfPageNum = 1;
@@ -273,6 +276,8 @@ function showLogin(): void {
   loginPanelEl.classList.remove("hidden");
   panelEl.classList.add("hidden");
   reviewPanelEl.classList.add("hidden");
+  if (fileMenuRoot) fileMenuRoot.hidden = true;
+  projectMenu?.setEnabled(false);
 }
 
 function showPanel(info: AuthInfo): void {
@@ -281,6 +286,9 @@ function showPanel(info: AuthInfo): void {
   loginPanelEl.classList.add("hidden");
   panelEl.classList.remove("hidden");
   userLabelEl.textContent = `Signed in as ${info.display_name || info.username}`;
+  if (fileMenuRoot) fileMenuRoot.hidden = false;
+  projectMenu?.setEnabled(true);
+  projectMenu?.refreshTitle();
 }
 
 function send(type: string, payload: Record<string, unknown>, wantType: string): Promise<Envelope> {
@@ -380,7 +388,7 @@ async function bootstrapAndLogin(username: string, password: string): Promise<vo
 
 async function loadQueue(): Promise<void> {
   if (!auth?.token) return;
-  setStatus("Loading review queue…", "busy");
+  setStatus("Projecten laden…", "busy");
   const ret = await invokeString("API_EngineerListReviewQueue", [auth.token]);
   if (ret.startsWith("ERROR")) {
     setStatus(ret, "err");
@@ -391,28 +399,29 @@ async function loadQueue(): Promise<void> {
   const projects = parsed.projects ?? [];
   queueListEl.innerHTML = "";
   if (projects.length === 0) {
-    queueListEl.innerHTML = `<p class="hint">No projects awaiting review.</p>`;
-    setStatus("Queue empty", "ok");
+    queueListEl.innerHTML = `<p class="hint">Geen actieve projecten (status: gegevens aangeleverd / in uitvoering / bijna afgerond). Zet de status in admin of laat de opdrachtgever tekeningen indienen. Of gebruik Bestand → Openen.</p>`;
+    setStatus("Geen actieve projecten", "ok");
     return;
   }
   for (const p of projects) {
     const card = document.createElement("article");
     card.className = "admin-project-card panel";
     const title = p.label || p.building_id.slice(0, 8);
+    const docs = Number(p.drawing_count) || 0;
     card.innerHTML = `
       <h3>${title}</h3>
-      <p class="hint">${p.customer_name} · ${statusLabel(p.project_status)} · ${p.drawing_count} drawing(s)</p>
+      <p class="hint">${p.customer_name} · ${statusLabel(p.project_status)} · ${docs} tekening(en)</p>
     `;
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = "Open for review";
+    btn.textContent = "Openen";
     btn.addEventListener("click", () => {
       void openProject(p.building_id);
     });
     card.appendChild(btn);
     queueListEl.appendChild(card);
   }
-  setStatus(`${projects.length} project(s) in queue`, "ok");
+  setStatus(`${projects.length} project(en)`, "ok");
 }
 
 async function openProject(buildingId: string): Promise<void> {
@@ -453,6 +462,8 @@ async function openProject(buildingId: string): Promise<void> {
     docHintEl.textContent = "No drawings on this project.";
   }
   renderRegionList();
+  projectMenu?.rememberCurrent();
+  projectMenu?.refreshTitle();
   setStatus("Project loaded", "ok");
 }
 
@@ -2150,6 +2161,16 @@ toolClearSidebarBtn?.addEventListener("click", () => {
   });
 })();
 
+(() => {
+  const panel = document.getElementById("engineer-project-id-bar") as HTMLDetailsElement | null;
+  if (!panel) return;
+  const key = "app-gevelwering-engineer-project-id-collapsed";
+  panel.open = localStorage.getItem(key) !== "1";
+  panel.addEventListener("toggle", () => {
+    localStorage.setItem(key, panel.open ? "0" : "1");
+  });
+})();
+
 window.addEventListener("keydown", (evt) => {
   if (evt.key === "Escape" && measure.tool !== "off") {
     clearMeasure(true);
@@ -2337,4 +2358,44 @@ reviewForm.addEventListener("submit", (evt) => {
 updateZoomLabel();
 initPasswordToggles();
 initEngineerLayoutSplit();
+
+if (fileMenuRoot) {
+  projectMenu = mountProjectMenu(fileMenuRoot, {
+    getToken: () => auth?.token ?? null,
+    getBuildingId: () => activeProject?.building_id || "",
+    getProjectMeta: () => ({
+      label: activeProject?.label || "",
+      external_ref: activeProject?.external_ref || "",
+    }),
+    invokeString: (name, args) => invokeString(name, args),
+    apiAuthHeaders: () => (auth ? apiAuthHeaders(auth.token, true) : {}),
+    openBuilding: (id) => openProject(id),
+    saveProject: async () => {
+      if (!activeProject) throw new Error("Geen project geselecteerd");
+      setStatus("Tekeningen en review worden per actie opgeslagen — projectcontext bewaard", "ok");
+    },
+    onProjectRenamed: (meta) => {
+      if (!activeProject) return;
+      activeProject.label = meta.label;
+      activeProject.external_ref = meta.external_ref;
+      projectTitleEl.textContent = activeProject.label || "Project";
+      projectMetaEl.textContent = `${activeProject.customer_name} · ${statusLabel(activeProject.project_status)} · ref ${activeProject.external_ref || "—"}`;
+    },
+    onProjectDeleted: async () => {
+      activeProject = null;
+      activeDocumentId = null;
+      reviewPanelEl.classList.add("hidden");
+      projectTitleEl.textContent = "";
+      projectMetaEl.textContent = "";
+      if (gaLinkEl) gaLinkEl.classList.add("hidden");
+      await loadQueue();
+    },
+    onStatus: (state, text) => setStatus(text, state),
+    setTitle: (title) => {
+      document.title =
+        title === "Geen project" ? "Geluidwering Gevels — Engineer review" : `${title} — Engineer`;
+    },
+  });
+  fileMenuRoot.hidden = true;
+}
 connect();

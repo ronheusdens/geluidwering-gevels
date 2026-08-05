@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Geluidwering Gevels — Engineer review</title>
-  <link rel="stylesheet" href="/styles.css?v=pw-eye" />
+  <link rel="stylesheet" href="/styles.css?v=file-menu-light" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body class="engineer-body">
@@ -17,6 +17,7 @@
           <h1 class="page-heading">Engineer drawing review</h1>
         </div>
       </div>
+      <nav class="file-menu" id="engineer-file-menu" aria-label="Bestand" hidden></nav>
     </header>
 
     <section class="panel conn-bar" id="engineer-conn-bar" aria-live="polite">
@@ -34,6 +35,7 @@
         <div class="actions">
           <button type="submit" id="engineer-login-btn">Sign in</button>
         </div>
+        <p class="hint"><a href="/handleiding.html">Engineer-gebruikershandleiding</a> (NL)</p>
       </form>
     </section>
 
@@ -41,13 +43,14 @@
       <div class="panel user-bar">
         <span id="engineer-user-label"></span>
         <button type="button" id="engineer-logout-btn" class="secondary">Sign out</button>
-        <button type="button" id="engineer-refresh-btn" class="secondary">Refresh queue</button>
+        <button type="button" id="engineer-refresh-btn" class="secondary">Ververs projecten</button>
         <a id="engineer-ga-link" class="secondary-link hidden" href="/ga.html">Berekening gevelwering</a>
+        <a class="secondary-link" href="/handleiding.html">Handleiding</a>
       </div>
 
       <details class="panel tools-panel engineer-queue-panel" id="engineer-queue-bar" open>
         <summary class="tools-panel-toggle">
-          <strong>Review queue</strong>
+          <strong>Projecten</strong>
           <span class="tools-panel-chevron" aria-hidden="true"></span>
         </summary>
         <div class="tools-panel-main engineer-queue-body">
@@ -56,12 +59,15 @@
       </details>
 
       <section class="panel hidden engineer-workspace-panel" id="engineer-review-panel">
-        <div class="engineer-workspace-head">
-          <div>
-            <h2 id="engineer-project-title">Project</h2>
+        <details class="tools-panel panel-inset engineer-project-id-bar" id="engineer-project-id-bar" open>
+          <summary class="tools-panel-toggle">
+            <strong id="engineer-project-title">Project</strong>
+            <span class="tools-panel-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="tools-panel-main engineer-project-id-body">
             <p class="hint" id="engineer-project-meta"></p>
           </div>
-        </div>
+        </details>
 
         <div class="engineer-layout">
           <div class="engineer-viewer-wrap">
@@ -275,6 +281,6 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/engineer.js?v=pw-eye"></script>
+  <script type="module" src="/engineer.js?v=file-menu"></script>
 </body>
 </html>

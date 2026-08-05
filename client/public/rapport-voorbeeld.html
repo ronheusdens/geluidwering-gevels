@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Rapportvoorbeeld — Nieuwbouw woning</title>
+  <style>
+    /* Printbare rapport-mock, geïnspireerd op Stilte/DGMR gevelwering-export */
+    @page {
+      size: A4;
+      margin: 14mm 14mm 16mm 14mm;
+    }
+
+    :root {
+      --ink: #111;
+      --muted: #444;
+      --line: #bbb;
+      --bar: #d8d8d8;
+      --ok: #1b5e20;
+      --warn: #8a5a00;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: #e8e8e8;
+      font: 10.5pt/1.35 "Helvetica Neue", Helvetica, Arial, sans-serif;
+    }
+
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      padding: 0.65rem 1rem;
+      background: #1c1f1a;
+      color: #fff;
+      font-size: 0.9rem;
+    }
+
+    .toolbar a { color: #cde; }
+    .toolbar button {
+      font: inherit;
+      border: 0;
+      border-radius: 3px;
+      padding: 0.35rem 0.7rem;
+      cursor: pointer;
+      background: #fff;
+      color: #111;
+    }
+
+    .sheet {
+      width: 210mm;
+      min-height: 297mm;
+      margin: 1rem auto 2rem;
+      padding: 14mm;
+      background: #fff;
+      box-shadow: 0 2px 16px rgba(0, 0, 0, 0.18);
+    }
+
+    .page-head {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 1rem;
+      align-items: start;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 0.55rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .page-head h1 {
+      margin: 0;
+      font-size: 13pt;
+      font-weight: 700;
+      line-height: 1.25;
+      max-width: 28rem;
+    }
+
+    .page-head .werknummer {
+      margin: 0.25rem 0 0;
+      font-size: 9.5pt;
+      color: var(--muted);
+    }
+
+    .logo {
+      width: 72px;
+      height: auto;
+      display: block;
+    }
+
+    .meta {
+      display: grid;
+      grid-template-columns: 9.5rem 1fr;
+      gap: 0.15rem 0.75rem;
+      margin: 0.5rem 0 0.85rem;
+      font-size: 9.5pt;
+    }
+
+    .meta dt { color: var(--muted); }
+    .meta dd { margin: 0; font-weight: 600; }
+
+    .badge {
+      display: inline-block;
+      padding: 0.1rem 0.45rem;
+      border-radius: 2px;
+      background: #f3e5ab;
+      color: var(--warn);
+      font-size: 8.5pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .variant-bar {
+      background: var(--bar);
+      font-weight: 700;
+      padding: 0.35rem 0.5rem;
+      margin: 0.85rem 0 0.55rem;
+      font-size: 10.5pt;
+    }
+
+    h2 {
+      margin: 0.85rem 0 0.35rem;
+      font-size: 10.5pt;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 0.15rem;
+    }
+
+    h3 {
+      margin: 0.75rem 0 0.3rem;
+      font-size: 10pt;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 8.8pt;
+      margin: 0.35rem 0 0.65rem;
+    }
+
+    th, td {
+      border: 1px solid var(--line);
+      padding: 0.22rem 0.35rem;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f2f2f2;
+      font-weight: 650;
+      text-align: left;
+    }
+
+    td.num, th.num { text-align: right; white-space: nowrap; }
+    td.center, th.center { text-align: center; }
+
+    .ok { color: var(--ok); font-weight: 700; }
+    .missing { color: #888; font-style: italic; }
+
+    .vr-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.25rem 1.25rem;
+      font-size: 9.5pt;
+      margin: 0.35rem 0 0.55rem;
+    }
+
+    .vr-grid .row {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 0.35rem;
+    }
+
+    .vr-grid .lab { color: var(--muted); }
+    .vr-grid .val { font-weight: 650; text-align: right; }
+    .vr-grid .unit { color: var(--muted); min-width: 1.6rem; }
+
+    .vlak-head {
+      margin-top: 0.55rem;
+      font-weight: 650;
+    }
+
+    .corr { font-size: 9pt; margin: 0.2rem 0 0.35rem; color: var(--muted); }
+
+    .page-foot {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 1.25rem;
+      padding-top: 0.4rem;
+      border-top: 1px solid var(--line);
+      font-size: 8.5pt;
+      color: var(--muted);
+    }
+
+    .note {
+      font-size: 8.5pt;
+      color: var(--muted);
+      margin: 0.5rem 0 0;
+    }
+
+    @media print {
+      body { background: #fff; }
+      .toolbar { display: none !important; }
+      .sheet {
+        margin: 0;
+        width: auto;
+        min-height: 0;
+        box-shadow: none;
+        padding: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <strong>Rapportvoorbeeld</strong>
+    <span>Project: Nieuwbouw woning · status Concept / tussentijds</span>
+    <button type="button" onclick="window.print()">Afdrukken / PDF</button>
+    <a href="/ga.html">GA</a>
+    ·
+    <a href="/handleiding.html">Handleiding</a>
+  </div>
+
+  <article class="sheet">
+    <header class="page-head">
+      <div>
+        <h1>Gevelwering nieuwbouw woning</h1>
+        <p class="werknummer">Werknummer: <span class="missing">— (external_ref)</span> · <span class="badge">Concept</span></p>
+      </div>
+      <img class="logo" src="/assets/stilte-logo.jpg" alt="Stilte" />
+    </header>
+
+    <dl class="meta">
+      <dt>Project / omschrijving</dt>
+      <dd>Gevelwering nieuwbouw woning</dd>
+      <dt>Rekenmethode</dt>
+      <dd>NPR 5272 / NEN 5077</dd>
+      <dt>Status object</dt>
+      <dd>Nieuwbouw</dd>
+      <dt>Categorie</dt>
+      <dd>Weg- of spoorweglawaai</dd>
+      <dt>Gebruiksfunctie</dt>
+      <dd>Woonfunctie (grens Lbi;k ≤ 33 dB)</dd>
+      <dt>Rapportstatus</dt>
+      <dd>Tussentijds concept — ook genereerbaar vóór afronding</dd>
+      <dt>Projectstatus app</dt>
+      <dd>PROJECT_NEAR_FINAL</dd>
+    </dl>
+
+    <div class="variant-bar">VARIANT: Variant · Lb 61,0 dB · Spectrum 2</div>
+
+    <h2>Geluidbelasting</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Spectrum</th>
+          <th class="num">63</th>
+          <th class="num">125</th>
+          <th class="num">250</th>
+          <th class="num">500</th>
+          <th class="num">1000</th>
+          <th class="num">2000</th>
+          <th class="num">Totaal [dB]</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Spectrum 2 (verkeersgeluid)</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num"><strong>61,0</strong></td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note">Octaafbanden volgen wanneer het spectraal model beschikbaar is; nu is Lb-totaal leidend in de rekenkern.</p>
+
+    <h2>Verblijfsgebieden</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Omschrijving</th>
+          <th class="num">Stot [m²]</th>
+          <th class="num">Vtot [m³]</th>
+          <th class="num">GA;k [dB]</th>
+          <th class="center">Voldoet</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>VG 1 · woonverblijfgebied</td>
+          <td class="num missing">—</td>
+          <td class="num">125,8</td>
+          <td class="num missing">—</td>
+          <td class="center missing">n.n.b.</td>
+        </tr>
+        <tr>
+          <td>VG 2 · slaapkamer</td>
+          <td class="num">≈ 5,4</td>
+          <td class="num">31,4</td>
+          <td class="num">29,7</td>
+          <td class="center ok">Ja</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Resultaten GA;k</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Verblijfsruimte</th>
+          <th class="num">Vloer [m²]</th>
+          <th class="num">GA [dB]</th>
+          <th class="num">Lbi [dB]</th>
+          <th class="num">GA;k [dB]</th>
+          <th class="center">Voldoet</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>VR 1 · Woonkamer/keuken</td>
+          <td class="num">48,4</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="center missing">herberekenen</td>
+        </tr>
+        <tr>
+          <td>VR 2 · Slaapkamer 1</td>
+          <td class="num">12,1</td>
+          <td class="num">34,4</td>
+          <td class="num">26,6</td>
+          <td class="num">29,7</td>
+          <td class="center ok">Ja</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Verblijfsruimte: VR 2 · Slaapkamer 1</h3>
+    <div class="vr-grid">
+      <div>
+        <div class="row"><span class="lab">Vloeroppervlak</span><span class="val">12,07</span><span class="unit">m²</span></div>
+        <div class="row"><span class="lab">Vertrekhoogte</span><span class="val">2,60</span><span class="unit">m</span></div>
+        <div class="row"><span class="lab">Volume</span><span class="val">31,38</span><span class="unit">m³</span></div>
+        <div class="row"><span class="lab">Nagalmtijd T₀</span><span class="val">0,50</span><span class="unit">s</span></div>
+      </div>
+      <div>
+        <div class="row"><span class="lab">Max. geluidsbelasting</span><span class="val">61,0</span><span class="unit">dB</span></div>
+        <div class="row"><span class="lab">Geluidwering GA</span><span class="val">34,4</span><span class="unit">dB</span></div>
+        <div class="row"><span class="lab">Binnenniveau Lbi</span><span class="val">26,6</span><span class="unit">dB</span></div>
+        <div class="row"><span class="lab">Karakteristieke GA;k</span><span class="val">29,7</span><span class="unit">dB</span></div>
+        <div class="row"><span class="lab">Lbi;k (= Lb − GA;k)</span><span class="val">31,3</span><span class="unit">dB</span></div>
+        <div class="row"><span class="lab">Voldoet</span><span class="val ok">Ja</span><span class="unit"></span></div>
+      </div>
+    </div>
+
+    <p class="vlak-head">Vlakken (samenvatting huidig model)</p>
+    <p class="corr">CL = 0,0 dB · Cg = 0,0 dB (zoals in GA-model; per vlak overschrijfbaar)</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Omschrijving</th>
+          <th class="num">S [m²]</th>
+          <th class="num">CL</th>
+          <th class="num">Cg</th>
+          <th class="center">In GA;k</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Steenachtigen/beton/blokken: Porotherm/isolatie/metselsteen</td>
+          <td class="num">2,50</td>
+          <td class="num">0,0</td>
+          <td class="num">0,0</td>
+          <td class="center">ja</td>
+        </tr>
+        <tr>
+          <td>Glas 4-16-4 (GDL)</td>
+          <td class="num">2,00</td>
+          <td class="num">0,0</td>
+          <td class="num">0,0</td>
+          <td class="center">ja</td>
+        </tr>
+        <tr>
+          <td>Elementen: Kozijn hout (gemiddeld)</td>
+          <td class="num">0,86</td>
+          <td class="num">0,0</td>
+          <td class="num">0,0</td>
+          <td class="center">ja</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note">
+      Volledige elementtabel met catalogus-id, RA en (later) octaafbanden volgt de DGMR-/Stilte-export 1:1
+      zodra materialen per element in het rapport worden meegenomen.
+    </p>
+
+    <footer class="page-foot">
+      <span>Geluidwering gevels · Stilte · rapportvoorbeeld</span>
+      <span>Gegenereerd ter illustratie · Afdrukken → PDF</span>
+    </footer>
+  </article>
+</body>
+</html>

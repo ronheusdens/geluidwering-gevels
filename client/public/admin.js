@@ -95,6 +95,20 @@ var customerSelectEl = document.getElementById("admin-customer-select");
 var projectsPanelEl = document.getElementById("admin-projects-panel");
 var customerTitleEl = document.getElementById("admin-customer-title");
 var projectsListEl = document.getElementById("admin-projects-list");
+var accountsListEl = document.getElementById("admin-accounts-list");
+var accountsRefreshBtn = document.getElementById("admin-accounts-refresh-btn");
+var accountEditPanelEl = document.getElementById("admin-account-edit-panel");
+var accountForm = document.getElementById("admin-account-form");
+var accountUserIdEl = document.getElementById("admin-account-user-id");
+var accountUsernameEl = document.getElementById("admin-account-username");
+var accountDisplayNameEl = document.getElementById("admin-account-display-name");
+var accountEmailEl = document.getElementById("admin-account-email");
+var accountActiveEl = document.getElementById("admin-account-active");
+var accountMetaEl = document.getElementById("admin-account-meta");
+var accountEditTitleEl = document.getElementById("admin-account-edit-title");
+var accountResetPwBtn = document.getElementById("admin-account-reset-pw-btn");
+var accountCancelBtn = document.getElementById("admin-account-cancel-btn");
+var accountResetOutEl = document.getElementById("admin-account-reset-out");
 var ws = null;
 var sessionId = null;
 var auth = null;
@@ -126,6 +140,8 @@ function showLogin() {
   loginPanelEl.classList.remove("hidden");
   adminPanelEl.classList.add("hidden");
   projectsPanelEl.classList.add("hidden");
+  accountEditPanelEl?.classList.add("hidden");
+  if (accountsListEl) accountsListEl.innerHTML = "";
 }
 function showAdmin(info) {
   auth = info;
@@ -133,6 +149,9 @@ function showAdmin(info) {
   loginPanelEl.classList.add("hidden");
   adminPanelEl.classList.remove("hidden");
   adminUserLabelEl.textContent = `Ingelogd als ${info.display_name || info.username}`;
+}
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 function send(type, payload, wantType) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -207,6 +226,70 @@ function statusOptions(current) {
 }
 function isOutstanding(status) {
   return status !== "PROJECT_FINISHED";
+}
+function closeAccountEdit() {
+  accountEditPanelEl?.classList.add("hidden");
+  if (accountResetOutEl) {
+    accountResetOutEl.hidden = true;
+    accountResetOutEl.textContent = "";
+  }
+}
+function fillAccountEdit(a) {
+  if (!accountEditPanelEl || !accountForm) return;
+  if (accountUserIdEl) accountUserIdEl.value = a.user_id;
+  if (accountUsernameEl) accountUsernameEl.value = a.username;
+  if (accountDisplayNameEl) accountDisplayNameEl.value = a.display_name || "";
+  if (accountEmailEl) accountEmailEl.value = a.email || "";
+  if (accountActiveEl) accountActiveEl.checked = Boolean(a.is_active);
+  if (accountEditTitleEl) accountEditTitleEl.textContent = `Account: ${a.username}`;
+  if (accountMetaEl) {
+    const cust = a.customer_name ? `Klantprofiel: ${a.customer_name}` : "Nog geen klantprofiel (alleen login)";
+    const must = a.must_change_password ? " \xB7 moet wachtwoord wijzigen" : "";
+    accountMetaEl.textContent = `${cust} \xB7 aangemaakt ${a.created_at || "\u2014"}${must}`;
+  }
+  if (accountResetOutEl) {
+    accountResetOutEl.hidden = true;
+    accountResetOutEl.textContent = "";
+  }
+  accountEditPanelEl.classList.remove("hidden");
+  accountEditPanelEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+async function loadAccounts() {
+  if (!auth?.token || !accountsListEl) return;
+  const ret = await invokeString("API_AdminListAccounts", [auth.token]);
+  if (ret.startsWith("ERROR")) {
+    setStatus(ret, "err");
+    if (ret.includes("login") || ret.includes("admin")) showLogin();
+    return;
+  }
+  const parsed = JSON.parse(ret);
+  const accounts = parsed.accounts ?? [];
+  if (!accounts.length) {
+    accountsListEl.innerHTML = `<p class="hint">Nog geen opdrachtgever-accounts.</p>`;
+    return;
+  }
+  accountsListEl.innerHTML = accounts.map((a) => {
+    const activeBit = a.is_active ? "actief" : "geblokkeerd";
+    const cust = a.customer_name || "\u2014";
+    const must = a.must_change_password ? " \xB7 wachtwoord wijzigen" : "";
+    return `
+        <article class="panel admin-project-card${a.is_active ? "" : " admin-project-finished"}" data-user-id="${esc(a.user_id)}">
+          <h3>${esc(a.display_name || a.username)} <span class="hint">(@${esc(a.username)})</span></h3>
+          <p class="hint">${esc(a.email || "geen e-mail")} \xB7 ${activeBit}${must}</p>
+          <p class="hint">Klant: ${esc(cust)}</p>
+          <div class="actions">
+            <button type="button" class="admin-account-edit">Bewerken</button>
+          </div>
+        </article>`;
+  }).join("");
+  for (const btn of accountsListEl.querySelectorAll(".admin-account-edit")) {
+    btn.addEventListener("click", () => {
+      const card = btn.closest("[data-user-id]");
+      const id = card?.dataset.userId || "";
+      const a = accounts.find((x) => x.user_id === id);
+      if (a) fillAccountEdit(a);
+    });
+  }
 }
 async function loadCustomers() {
   if (!auth?.token) return;
@@ -345,6 +428,7 @@ async function bootstrapSession() {
       const info = JSON.parse(validated);
       if (info.username === "admin") {
         showAdmin({ token: stored.token, username: info.username, display_name: info.display_name });
+        await loadAccounts();
         await loadCustomers();
         return;
       }
@@ -371,6 +455,7 @@ loginForm.addEventListener("submit", async (ev) => {
       return;
     }
     showAdmin(info);
+    await loadAccounts();
     await loadCustomers();
     setStatus("Beheerder ingelogd", "ok");
   } catch (err) {
@@ -400,6 +485,67 @@ refreshBtn.addEventListener("click", async () => {
   } finally {
     refreshBtn.disabled = false;
   }
+});
+accountsRefreshBtn?.addEventListener("click", async () => {
+  accountsRefreshBtn.disabled = true;
+  try {
+    await loadAccounts();
+    setStatus("Accounts vernieuwd", "ok");
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+  } finally {
+    accountsRefreshBtn.disabled = false;
+  }
+});
+accountCancelBtn?.addEventListener("click", () => closeAccountEdit());
+accountForm?.addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  void (async () => {
+    if (!auth?.token || !accountUserIdEl) return;
+    const uid = accountUserIdEl.value.trim();
+    if (!uid) return;
+    setStatus("Account opslaan\u2026", "busy");
+    const ret = await invokeString("API_AdminUpdateAccount", [
+      auth.token,
+      uid,
+      accountDisplayNameEl?.value.trim() || "",
+      accountEmailEl?.value.trim() || "",
+      accountActiveEl?.checked ? "true" : "false"
+    ]);
+    if (ret.startsWith("ERROR")) {
+      setStatus(ret, "err");
+      return;
+    }
+    setStatus("Account bijgewerkt", "ok");
+    await loadAccounts();
+    const listRet = await invokeString("API_AdminListAccounts", [auth.token]);
+    if (!listRet.startsWith("ERROR")) {
+      const parsed = JSON.parse(listRet);
+      const a = (parsed.accounts || []).find((x) => x.user_id === uid);
+      if (a) fillAccountEdit(a);
+    }
+  })().catch((e) => setStatus(String(e), "err"));
+});
+accountResetPwBtn?.addEventListener("click", () => {
+  void (async () => {
+    if (!auth?.token || !accountUserIdEl) return;
+    const uid = accountUserIdEl.value.trim();
+    if (!uid) return;
+    if (!confirm("Tijdelijk wachtwoord uitgeven voor dit account?")) return;
+    setStatus("Wachtwoord resetten\u2026", "busy");
+    const ret = await invokeString("API_AdminResetAccountPassword", [auth.token, uid]);
+    if (ret.startsWith("ERROR")) {
+      setStatus(ret, "err");
+      return;
+    }
+    const parsed = JSON.parse(ret);
+    if (accountResetOutEl) {
+      accountResetOutEl.hidden = false;
+      accountResetOutEl.textContent = `Tijdelijk wachtwoord voor ${parsed.username || "account"}: ${parsed.access_password || "\u2014"} (eenmalig tonen; gebruiker moet wijzigen bij login).`;
+    }
+    setStatus("Wachtwoord gereset", "ok");
+    await loadAccounts();
+  })().catch((e) => setStatus(String(e), "err"));
 });
 bootstrapSession().catch((err) => {
   setStatus(err instanceof Error ? err.message : String(err), "err");
