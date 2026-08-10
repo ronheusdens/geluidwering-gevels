@@ -802,19 +802,23 @@ function fillFacadeSelect(): void {
   ph.value = "";
   const allGroups = groupFacadesForPick(vrFacades, used);
   const readyGroups = allGroups.filter((g) => g.ga_ready);
+  const available = readyGroups.filter((g) => !g.used);
   const incompleteN = allGroups.filter((g) => !g.ga_ready).length;
   ph.textContent = vrFacades.length
-    ? readyGroups.length
+    ? available.length
       ? "— kies gevelcomponent voor deze VR —"
-      : incompleteN
-        ? "— geen complete componenten (eerst materiaal op gevel) —"
-        : "— geen componenten voor deze VR —"
+      : readyGroups.length
+        ? "— alle materialen al als vlak toegevoegd —"
+        : incompleteN
+          ? "— geen complete componenten (eerst materiaal op gevel) —"
+          : "— geen componenten voor deze VR —"
     : selectedVrId
       ? "— geen componenten voor deze VR —"
       : "— selecteer eerst een VR —";
   vlakFacadeEl.appendChild(ph);
 
-  const shown = readyGroups.some((g) => !g.used) ? readyGroups.filter((g) => !g.used) : readyGroups;
+  // Never re-offer a material that already has a vlak (same material_id / key).
+  const shown = available;
 
   for (const g of shown) {
     const o = document.createElement("option");
@@ -834,6 +838,7 @@ function fillFacadeSelect(): void {
     const primary = g.members[0];
     o.dataset.materialId = (primary?.material_id || "").trim();
     o.dataset.catalogId = (primary?.catalog_id || "").trim();
+    if (g.materialKey) o.dataset.materialKey = g.materialKey;
     vlakFacadeEl.appendChild(o);
   }
 
@@ -843,7 +848,7 @@ function fillFacadeSelect(): void {
   if (prev && [...vlakFacadeEl.options].some((o) => o.value === prev)) {
     pick = prev;
   } else {
-    const ready = shown.find((g) => !g.used) || shown[0];
+    const ready = shown[0];
     if (ready) pick = ready.primaryId;
   }
   if (pick) vlakFacadeEl.value = pick;
@@ -949,12 +954,13 @@ async function loadFacadesForSelectedVr(): Promise<void> {
       );
       const pickGroups = groupFacadesForPick(vrFacades, used).filter((g) => g.ga_ready);
       const merged = pickGroups.filter((g) => g.members.length > 1).length;
-      const pickN = pickGroups.filter((g) => !g.used).length || pickGroups.length;
+      const pickN = pickGroups.filter((g) => !g.used).length;
+      const already = pickGroups.filter((g) => g.used).length;
       const incomplete = n - ready;
       vlakFacadeHintEl.textContent =
         n === 0
           ? `Geen gevelcomponenten voor VR ${vrNr}${excl ? ` (${excl} vervangen door zelfde-materiaal setbewerking)` : ""}.`
-          : `VR ${vrNr}: ${ready} met materiaal · ${pickN} kiesbaar${merged ? ` (${merged}× zelfde materiaal opgeteld)` : ""}${incomplete ? ` · ${incomplete} zonder materiaal (niet selecteerbaar)` : ""}${excl ? ` · ${excl} vervangen (zelfde materiaal)` : ""}.`;
+          : `VR ${vrNr}: ${ready} met materiaal · ${pickN} kiesbaar${already ? ` · ${already} materiaal(en) al als vlak` : ""}${merged ? ` (${merged}× zelfde materiaal opgeteld)` : ""}${incomplete ? ` · ${incomplete} zonder materiaal (niet selecteerbaar)` : ""}${excl ? ` · ${excl} vervangen (zelfde materiaal)` : ""}.`;
     }
   } catch (err) {
     vrFacades = [];
@@ -1512,8 +1518,8 @@ async function loadVlakken(): Promise<void> {
   const cur = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
   if (cur) {
     fillVrEdit(cur);
-    // Restore DB results immediately so a restart shows GA;k before live recalc finishes.
-    hydrateStoredVrResults(cur);
+    // Only restore DB results when there are still vlakken; otherwise refreshVrCalc clears.
+    if (vlakken.length) hydrateStoredVrResults(cur);
   }
   await refreshVrCalc();
 }
@@ -1601,6 +1607,35 @@ function clearVrResults(hint: string, opts?: { keepStored?: boolean }): void {
   }
 }
 
+/** Clear on-screen and stored GA/Lbi/GA;k when a VR has no vlakken left. */
+async function clearPersistedVrCalc(hint: string): Promise<void> {
+  const vr = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
+  clearVrResults(hint, { keepStored: false });
+  if (!vr) return;
+  vr.ga_dba = null;
+  vr.lbi_dba = null;
+  vr.gak_dba = null;
+  vrVoldoet.delete(vr.verblijfsruimte_id);
+  freshResultVrIds.delete(vr.verblijfsruimte_id);
+  resultsDirty = false;
+  renderVrs();
+  if (!auth) return;
+  try {
+    const ret = await invokeString("API_SaveVerblijfsruimteResults", [
+      auth.token,
+      vr.verblijfsruimte_id,
+      "",
+      "",
+      "",
+    ]);
+    if (typeof ret === "string" && ret.startsWith("ERROR")) {
+      setConn("err", `Resultaten niet gewist: ${ret}`);
+    }
+  } catch (err) {
+    setConn("err", `Resultaten niet gewist: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 async function refreshVrCalc(opts?: { useFormCorrections?: boolean; persist?: boolean }): Promise<void> {
   const vr = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
   const variant = variants.find((v) => v.variant_id === selectedVariantId);
@@ -1609,7 +1644,9 @@ async function refreshVrCalc(opts?: { useFormCorrections?: boolean; persist?: bo
     return;
   }
   if (!vlakken.length) {
-    clearVrResults("Nog geen vlakken — voeg gevelcomponenten toe. Herbereken na toekenning.");
+    await clearPersistedVrCalc(
+      "Nog geen vlakken — berekening gewist. Voeg gevelcomponenten toe om opnieuw te berekenen.",
+    );
     return;
   }
 
@@ -2423,6 +2460,32 @@ vlakForm.addEventListener("submit", (ev) => {
         throw new Error(
           "Deze component heeft nog geen materiaal — koppel het op de geveltekening, daarna hier als vlak toevoegen",
         );
+      }
+      const usedIds = new Set(
+        vlakken.map((v) => v.facade_subsection_id).filter((id): id is string => Boolean(id)),
+      );
+      const groups = groupFacadesForPick(vrFacades, usedIds);
+      const pickGroup = groups.find((g) => g.primaryId === fac || g.memberIds.includes(fac));
+      if (pickGroup?.used) {
+        throw new Error(
+          "Dit materiaal is al als vlak toegevoegd — hetzelfde materiaal mag niet meerdere keren",
+        );
+      }
+      const matKey =
+        (opt?.dataset.materialKey || "").trim() ||
+        (pickGroup?.materialKey || "").trim() ||
+        materialGroupKey(vrFacades.find((f) => f.id === fac) || ({} as VrFacadeOpt));
+      if (matKey) {
+        for (const v of vlakken) {
+          const facId = v.facade_subsection_id;
+          if (!facId) continue;
+          const f = vrFacades.find((x) => x.id === facId);
+          if (f && materialGroupKey(f) === matKey) {
+            throw new Error(
+              "Dit materiaal is al als vlak toegevoegd — hetzelfde materiaal mag niet meerdere keren",
+            );
+          }
+        }
       }
     }
     const isLen =

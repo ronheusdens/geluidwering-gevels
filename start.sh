@@ -42,6 +42,7 @@ SQL26="$SQL_DIR/app_gevelwering_0_2_24.sql"
 SQL27="$SQL_DIR/app_gevelwering_0_2_25.sql"
 SQL28="$SQL_DIR/app_gevelwering_0_2_26.sql"
 SQL29="$SQL_DIR/app_gevelwering_0_2_27.sql"
+SQL30="$SQL_DIR/app_gevelwering_0_2_28.sql"
 
 BPP_PORT="${BPP_PORT:-18080}"
 UI_PORT="${GEVELWERING_UI_PORT:-4173}"
@@ -80,13 +81,61 @@ apply_sql "$SQL11"
 apply_sql "$SQL12"
 apply_sql "$SQL13"
 apply_sql "$SQL14"
-echo "Seeding GL.cat materials $SQL14_SEED..."
-psql -d "$PG_DB" -f "$SQL14_SEED" >/dev/null
 apply_sql "$SQL15"
-echo "Applying DDL $SQL16 (catalogusGG rebuild) to database ${PG_DB}..."
-psql -d "$PG_DB" -f "$SQL16" >/dev/null
-echo "Seeding catalogusGG.pdf materials $SQL16_SEED..."
-psql -d "$PG_DB" -f "$SQL16_SEED" >/dev/null
+
+# Early app_meta so one-time seed flag works before full 0.2.28 DDL.
+psql -d "$PG_DB" -c \
+  "CREATE TABLE IF NOT EXISTS app_gevelwering.app_meta (
+     key text PRIMARY KEY,
+     value text NOT NULL DEFAULT '',
+     updated_at timestamptz NOT NULL DEFAULT now()
+   );" >/dev/null
+
+# Material catalog: create catalogusGG shape once; never DROP when rows exist.
+# Seed catalogusGG only when the table is empty (app-owned thereafter).
+mat_has_catalog_id="$(
+  psql -d "$PG_DB" -tAc \
+    "SELECT 1 FROM information_schema.columns
+     WHERE table_schema = 'app_gevelwering'
+       AND table_name = 'material'
+       AND column_name = 'catalog_id'
+     LIMIT 1" 2>/dev/null || true
+)"
+mat_count="$(
+  psql -d "$PG_DB" -tAc "SELECT COUNT(*)::text FROM app_gevelwering.material" 2>/dev/null || echo 0
+)"
+mat_count="$(echo "$mat_count" | tr -d '[:space:]')"
+[[ -z "$mat_count" ]] && mat_count=0
+
+if [[ -z "$mat_has_catalog_id" ]]; then
+  if [[ "$mat_count" != "0" ]]; then
+    echo "ERROR: material table lacks catalog_id but has ${mat_count} rows — refuse DROP" >&2
+    exit 1
+  fi
+  echo "Applying DDL $SQL16 (catalogusGG material shape, empty table) to database ${PG_DB}..."
+  psql -d "$PG_DB" -f "$SQL16" >/dev/null
+  mat_count=0
+fi
+
+seeded_flag="$(
+  psql -d "$PG_DB" -tAc \
+    "SELECT value FROM app_gevelwering.app_meta WHERE key = 'material_catalog_seeded' LIMIT 1" \
+    2>/dev/null || true
+)"
+seeded_flag="$(echo "$seeded_flag" | tr -d '[:space:]')"
+
+if [[ "$mat_count" == "0" && "$seeded_flag" != "1" ]]; then
+  echo "One-time seed: catalogusGG.pdf materials → ${PG_DB}..."
+  psql -d "$PG_DB" -f "$SQL16_SEED" >/dev/null
+  psql -d "$PG_DB" -c \
+    "INSERT INTO app_gevelwering.app_meta (key, value, updated_at)
+     VALUES ('material_catalog_seeded', '1', now())
+     ON CONFLICT (key) DO UPDATE SET value = '1', updated_at = now();" \
+    >/dev/null 2>&1 || true
+else
+  echo "Material catalog already present (${mat_count} rows) — skip re-seed (app-owned)."
+fi
+
 apply_sql "$SQL17"
 echo "Applying DDL $SQL18 (GA model: variant/VG/VR/vlak) to database ${PG_DB}..."
 psql -d "$PG_DB" -f "$SQL18" >/dev/null
@@ -100,7 +149,7 @@ echo "Applying DDL $SQL22 (VR unique only among floormap rooms via API) to datab
 psql -d "$PG_DB" -f "$SQL22" >/dev/null
 echo "Applying DDL $SQL23 (material rubriek + subrubriek taxonomy) to database ${PG_DB}..."
 psql -d "$PG_DB" -f "$SQL23" >/dev/null
-echo "Assigning material rubriek/subrubriek from GG taxonomy..."
+echo "Assigning material rubriek/subrubriek from GG taxonomy (idempotent)..."
 python3 "$SQL23_ASSIGN"
 echo "Applying DDL $SQL24 (engineer display_name) to database ${PG_DB}..."
 psql -d "$PG_DB" -f "$SQL24" >/dev/null
@@ -115,6 +164,14 @@ psql -d "$PG_DB" -f "$SQL27" >/dev/null
 echo "Applying DDL $SQL28 (customer report inbox) to database ${PG_DB}..."
 psql -d "$PG_DB" -f "$SQL28" >/dev/null
 apply_sql "$SQL29"
+echo "Applying DDL $SQL30 (material favorites + presets, app_meta) to database ${PG_DB}..."
+psql -d "$PG_DB" -f "$SQL30" >/dev/null
+# Ensure seeded flag after first successful catalog load
+psql -d "$PG_DB" -c \
+  "INSERT INTO app_gevelwering.app_meta (key, value, updated_at)
+   SELECT 'material_catalog_seeded', '1', now()
+   WHERE EXISTS (SELECT 1 FROM app_gevelwering.material LIMIT 1)
+   ON CONFLICT (key) DO NOTHING;" >/dev/null
 
 echo "Starting bppServer on :$BPP_PORT (BASIC_CWD=$BASIC_CWD, bin=$BIN)..."
 "$BIN" --server --port "$BPP_PORT" &

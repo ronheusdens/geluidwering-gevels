@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Geluidwering Gevels — Drawing analysis</title>
-  <link rel="stylesheet" href="/styles.css?v=file-menu-light" />
+  <link rel="stylesheet" href="/styles.css?v=about-menu" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body class="engineer-body">
@@ -24,7 +24,7 @@
         ·
         <a href="/handleiding.html">Handleiding</a>
       </p>
-      <nav class="file-menu" id="fm-file-menu" aria-label="Bestand" hidden></nav>
+      <nav class="file-menu" id="fm-file-menu" aria-label="Bestand en Over" hidden></nav>
     </header>
 
     <section class="panel conn-bar" id="fm-conn-bar" aria-live="polite">
@@ -235,6 +235,17 @@
               </div>
               <p class="hint" id="fm-vg-vr-hint">Zelfde VG + andere VR = ruimten in hetzelfde verblijfsgebied. VR is uniek per project (bijv. 1, 3A).</p>
               <div id="fm-material-block" class="hidden">
+                <label class="block-label">Meest gebruikt (dit project)
+                  <select id="fm-material-favorite" disabled>
+                    <option value="">— geen favorieten —</option>
+                  </select>
+                </label>
+                <div class="actions fm-favorite-actions">
+                  <button type="button" id="fm-favorite-add-btn" class="secondary" disabled title="Voeg het geselecteerde materiaal toe aan meest gebruikt">+ Meest gebruikt</button>
+                  <button type="button" id="fm-favorite-remove-btn" class="secondary" disabled title="Verwijder uit meest gebruikt">−</button>
+                  <button type="button" id="fm-preset-save-btn" class="secondary" disabled title="Huidige favorieten opslaan als benoemde preset">Preset opslaan…</button>
+                  <button type="button" id="fm-preset-apply-btn" class="secondary" disabled title="Preset toepassen op dit project">Preset laden…</button>
+                </div>
                 <label class="block-label">Rubriek
                   <select id="fm-material-category">
                     <option value="">— kies rubriek —</option>
@@ -248,40 +259,14 @@
                 <label class="block-label">Filter naam
                   <input id="fm-material-filter" type="search" placeholder="zoek in naam / catalogus-id" autocomplete="off" />
                 </label>
-                <label class="checkbox-label fm-eigen-filter" id="fm-eigen-filter-label">
-                  <input id="fm-material-eigen-only" type="checkbox" />
-                  <span>Alleen eigen materialen</span>
-                  <span class="fm-eigen-filter-state" id="fm-eigen-filter-state" aria-hidden="true">uit</span>
-                </label>
                 <label class="block-label">Materiaal (naam)
                   <select id="fm-material-id" disabled>
                     <option value="">— kies rubriek eerst —</option>
                   </select>
                 </label>
                 <div class="actions fm-material-actions">
-                  <button type="button" id="fm-open-mat-btn" class="secondary" title="Opent de materiaalcatalogus (admin)">Materiaalcatalogus…</button>
-                  <button type="button" id="fm-custom-mat-toggle" class="secondary">Eigen materiaal…</button>
-                </div>
-                <div id="fm-custom-mat-panel" class="fm-custom-mat hidden">
-                  <h3>Eigen materiaal</h3>
-                  <p class="hint">Wordt opgeslagen in de catalogus (source = eigen) en geselecteerd voor dit component. Optioneel meteen gekoppeld bij opslaan van de contour.</p>
-                  <form id="fm-custom-mat-form" class="form">
-                    <label class="block-label">Rubriek
-                      <select id="fm-custom-mat-rubriek" required>
-                        <option value="">— kies rubriek —</option>
-                      </select>
-                    </label>
-                    <label class="block-label">Naam
-                      <input id="fm-custom-mat-name" maxlength="120" required placeholder="bijv. eigen glas 6-12-4" />
-                    </label>
-                    <label class="block-label">RA [dB]
-                      <input id="fm-custom-mat-ra" type="number" min="0" max="100" step="0.1" required value="30" />
-                    </label>
-                    <div class="actions">
-                      <button type="submit">Opslaan en kiezen</button>
-                      <button type="button" id="fm-custom-mat-cancel" class="secondary">Annuleren</button>
-                    </div>
-                  </form>
+                  <button type="button" id="fm-open-mat-btn" class="secondary" title="Opent de volledige materiaalcatalogus">Materiaalcatalogus…</button>
+                  <button type="button" id="fm-custom-mat-toggle" class="secondary" title="Nieuw materiaal toevoegen via de volledige catalogus">Nieuw materiaal…</button>
                 </div>
                 <div id="fm-material-spectrum" class="fm-material-spectrum hidden" aria-live="polite">
                   <p class="fm-material-spectrum-title">R-spectrum (dB) · 125–2000&nbsp;Hz + totaal</p>
@@ -356,6 +341,6 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/floormap.js?v=list-save"></script>
+  <script type="module" src="/floormap.js?v=new-mat-cat"></script>
 </body>
 </html>

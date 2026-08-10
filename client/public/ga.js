@@ -260,6 +260,11 @@ function computeVrGa(input) {
   };
 }
 
+// src/app-version.ts
+var APP_VERSION = "0.1.0";
+var APP_NAME = "Geluidwering Gevels";
+var USER_DOCS_HREF = "/handleiding.html";
+
 // src/project-menu.ts
 var RECENT_KEY = "app-gevelwering-recent-projects";
 var RECENT_MAX = 8;
@@ -318,6 +323,7 @@ async function cleanupProjectFolder(buildingId2, headers) {
 }
 function mountProjectMenu(root, host) {
   root.classList.add("file-menu");
+  root.setAttribute("aria-label", "Bestand en Over");
   root.innerHTML = `
     <div class="file-menu-bar">
       <details class="file-menu-details" id="pm-root">
@@ -335,6 +341,16 @@ function mountProjectMenu(root, host) {
           <li><button type="button" role="menuitem" data-act="delete" class="danger">Verwijderen\u2026</button></li>
         </ul>
       </details>
+      <details class="file-menu-details" id="pm-about">
+        <summary class="file-menu-summary">Over</summary>
+        <ul class="file-menu-list" role="menu">
+          <li class="file-menu-about-version" role="menuitem">${APP_NAME}</li>
+          <li class="file-menu-about-version" role="menuitem">Versie ${APP_VERSION}</li>
+          <li>
+            <a class="file-menu-about-link" href="${USER_DOCS_HREF}" role="menuitem">Gebruikershandleiding</a>
+          </li>
+        </ul>
+      </details>
       <span class="file-menu-project-title" id="pm-title" aria-live="polite">Geen project</span>
     </div>
     <dialog class="file-menu-dialog" id="pm-open-dialog">
@@ -350,6 +366,7 @@ function mountProjectMenu(root, host) {
     </dialog>
   `;
   const detailsEl = root.querySelector("#pm-root");
+  const aboutEl = root.querySelector("#pm-about");
   const titleEl = root.querySelector("#pm-title");
   const recentEl = root.querySelector("#pm-recent");
   const dialogEl = root.querySelector("#pm-open-dialog");
@@ -379,6 +396,7 @@ function mountProjectMenu(root, host) {
   }
   function closeMenu() {
     detailsEl.open = false;
+    aboutEl.open = false;
     const recent = root.querySelector(".file-menu-recent");
     if (recent) recent.open = false;
   }
@@ -534,6 +552,12 @@ Dit wist berekeningen, tekeningen en rapportmappen. Dit kan niet ongedaan worden
       status("err", err instanceof Error ? err.message : String(err));
     }
   }
+  detailsEl.addEventListener("toggle", () => {
+    if (detailsEl.open) aboutEl.open = false;
+  });
+  aboutEl.addEventListener("toggle", () => {
+    if (aboutEl.open) detailsEl.open = false;
+  });
   root.addEventListener("click", (ev) => {
     const btn = ev.target.closest("button[data-act]");
     if (!btn || !root.contains(btn)) return;
@@ -544,7 +568,7 @@ Dit wist berekeningen, tekeningen en rapportmappen. Dit kan niet ongedaan worden
     else if (act === "delete") void deleteProject();
   });
   document.addEventListener("click", (ev) => {
-    if (!detailsEl.open) return;
+    if (!detailsEl.open && !aboutEl.open) return;
     if (root.contains(ev.target)) return;
     closeMenu();
   });
@@ -1130,10 +1154,11 @@ function fillFacadeSelect() {
   ph.value = "";
   const allGroups = groupFacadesForPick(vrFacades, used);
   const readyGroups = allGroups.filter((g) => g.ga_ready);
+  const available = readyGroups.filter((g) => !g.used);
   const incompleteN = allGroups.filter((g) => !g.ga_ready).length;
-  ph.textContent = vrFacades.length ? readyGroups.length ? "\u2014 kies gevelcomponent voor deze VR \u2014" : incompleteN ? "\u2014 geen complete componenten (eerst materiaal op gevel) \u2014" : "\u2014 geen componenten voor deze VR \u2014" : selectedVrId ? "\u2014 geen componenten voor deze VR \u2014" : "\u2014 selecteer eerst een VR \u2014";
+  ph.textContent = vrFacades.length ? available.length ? "\u2014 kies gevelcomponent voor deze VR \u2014" : readyGroups.length ? "\u2014 alle materialen al als vlak toegevoegd \u2014" : incompleteN ? "\u2014 geen complete componenten (eerst materiaal op gevel) \u2014" : "\u2014 geen componenten voor deze VR \u2014" : selectedVrId ? "\u2014 geen componenten voor deze VR \u2014" : "\u2014 selecteer eerst een VR \u2014";
   vlakFacadeEl.appendChild(ph);
-  const shown = readyGroups.some((g) => !g.used) ? readyGroups.filter((g) => !g.used) : readyGroups;
+  const shown = available;
   for (const g of shown) {
     const o = document.createElement("option");
     o.value = g.primaryId;
@@ -1149,6 +1174,7 @@ function fillFacadeSelect() {
     const primary = g.members[0];
     o.dataset.materialId = (primary?.material_id || "").trim();
     o.dataset.catalogId = (primary?.catalog_id || "").trim();
+    if (g.materialKey) o.dataset.materialKey = g.materialKey;
     vlakFacadeEl.appendChild(o);
   }
   vlakFacadeEl.size = Math.min(8, Math.max(3, shown.length + 1));
@@ -1156,7 +1182,7 @@ function fillFacadeSelect() {
   if (prev && [...vlakFacadeEl.options].some((o) => o.value === prev)) {
     pick = prev;
   } else {
-    const ready = shown.find((g) => !g.used) || shown[0];
+    const ready = shown[0];
     if (ready) pick = ready.primaryId;
   }
   if (pick) vlakFacadeEl.value = pick;
@@ -1218,9 +1244,10 @@ async function loadFacadesForSelectedVr() {
       );
       const pickGroups = groupFacadesForPick(vrFacades, used).filter((g) => g.ga_ready);
       const merged = pickGroups.filter((g) => g.members.length > 1).length;
-      const pickN = pickGroups.filter((g) => !g.used).length || pickGroups.length;
+      const pickN = pickGroups.filter((g) => !g.used).length;
+      const already = pickGroups.filter((g) => g.used).length;
       const incomplete = n - ready;
-      vlakFacadeHintEl.textContent = n === 0 ? `Geen gevelcomponenten voor VR ${vrNr}${excl ? ` (${excl} vervangen door zelfde-materiaal setbewerking)` : ""}.` : `VR ${vrNr}: ${ready} met materiaal \xB7 ${pickN} kiesbaar${merged ? ` (${merged}\xD7 zelfde materiaal opgeteld)` : ""}${incomplete ? ` \xB7 ${incomplete} zonder materiaal (niet selecteerbaar)` : ""}${excl ? ` \xB7 ${excl} vervangen (zelfde materiaal)` : ""}.`;
+      vlakFacadeHintEl.textContent = n === 0 ? `Geen gevelcomponenten voor VR ${vrNr}${excl ? ` (${excl} vervangen door zelfde-materiaal setbewerking)` : ""}.` : `VR ${vrNr}: ${ready} met materiaal \xB7 ${pickN} kiesbaar${already ? ` \xB7 ${already} materiaal(en) al als vlak` : ""}${merged ? ` (${merged}\xD7 zelfde materiaal opgeteld)` : ""}${incomplete ? ` \xB7 ${incomplete} zonder materiaal (niet selecteerbaar)` : ""}${excl ? ` \xB7 ${excl} vervangen (zelfde materiaal)` : ""}.`;
     }
   } catch (err) {
     vrFacades = [];
@@ -1715,7 +1742,7 @@ async function loadVlakken() {
   const cur = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
   if (cur) {
     fillVrEdit(cur);
-    hydrateStoredVrResults(cur);
+    if (vlakken.length) hydrateStoredVrResults(cur);
   }
   await refreshVrCalc();
 }
@@ -1793,6 +1820,33 @@ function clearVrResults(hint, opts) {
     resToetsEl.classList.remove("toets-ok", "toets-fail");
   }
 }
+async function clearPersistedVrCalc(hint) {
+  const vr = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
+  clearVrResults(hint, { keepStored: false });
+  if (!vr) return;
+  vr.ga_dba = null;
+  vr.lbi_dba = null;
+  vr.gak_dba = null;
+  vrVoldoet.delete(vr.verblijfsruimte_id);
+  freshResultVrIds.delete(vr.verblijfsruimte_id);
+  resultsDirty = false;
+  renderVrs();
+  if (!auth) return;
+  try {
+    const ret = await invokeString("API_SaveVerblijfsruimteResults", [
+      auth.token,
+      vr.verblijfsruimte_id,
+      "",
+      "",
+      ""
+    ]);
+    if (typeof ret === "string" && ret.startsWith("ERROR")) {
+      setConn("err", `Resultaten niet gewist: ${ret}`);
+    }
+  } catch (err) {
+    setConn("err", `Resultaten niet gewist: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 async function refreshVrCalc(opts) {
   const vr = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
   const variant = variants.find((v) => v.variant_id === selectedVariantId);
@@ -1801,7 +1855,9 @@ async function refreshVrCalc(opts) {
     return;
   }
   if (!vlakken.length) {
-    clearVrResults("Nog geen vlakken \u2014 voeg gevelcomponenten toe. Herbereken na toekenning.");
+    await clearPersistedVrCalc(
+      "Nog geen vlakken \u2014 berekening gewist. Voeg gevelcomponenten toe om opnieuw te berekenen."
+    );
     return;
   }
   const facadeById = new Map(vrFacades.map((f) => [f.id, f]));
@@ -2529,6 +2585,29 @@ vlakForm.addEventListener("submit", (ev) => {
         throw new Error(
           "Deze component heeft nog geen materiaal \u2014 koppel het op de geveltekening, daarna hier als vlak toevoegen"
         );
+      }
+      const usedIds = new Set(
+        vlakken.map((v) => v.facade_subsection_id).filter((id) => Boolean(id))
+      );
+      const groups = groupFacadesForPick(vrFacades, usedIds);
+      const pickGroup = groups.find((g) => g.primaryId === fac || g.memberIds.includes(fac));
+      if (pickGroup?.used) {
+        throw new Error(
+          "Dit materiaal is al als vlak toegevoegd \u2014 hetzelfde materiaal mag niet meerdere keren"
+        );
+      }
+      const matKey = (opt?.dataset.materialKey || "").trim() || (pickGroup?.materialKey || "").trim() || materialGroupKey(vrFacades.find((f) => f.id === fac) || {});
+      if (matKey) {
+        for (const v of vlakken) {
+          const facId = v.facade_subsection_id;
+          if (!facId) continue;
+          const f = vrFacades.find((x) => x.id === facId);
+          if (f && materialGroupKey(f) === matKey) {
+            throw new Error(
+              "Dit materiaal is al als vlak toegevoegd \u2014 hetzelfde materiaal mag niet meerdere keren"
+            );
+          }
+        }
       }
     }
     const isLen = (opt?.dataset.quantityKind || vlakAreaEl.dataset.quantityKind) === "length";

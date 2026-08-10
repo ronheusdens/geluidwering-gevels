@@ -58,7 +58,7 @@ flowchart LR
 
 - Engineer/admin UI: tekeningen, plattegrond, gevels, materialencatalogus, GA-model  
 - VG / VR / vlakken, schaal + oppervlakten, **compositie (+/−)** van gevelcomponenten  
-- Materialen: DGMR-catalogus (`catalogusGG.pdf`) + **eigen materialen** (`source = eigen`)  
+- Materialen: één gedeelde catalogus (`app_gevelwering.material`); eenmalige DGMR-seed (`catalogusGG.pdf`), daarna app-owned onderhoud; projectfavorieten («meest gebruikt») + benoemde presets  
 - Berekening gevelwering (NPR/NEN-route zoals geïmplementeerd); toets Lbi;k ≤ grens per gebruiksfunctie (Woonfunctie 33 dB)  
 - Meerdere **berekeningsvarianten** per project (deep clone + vergelijking op `/ga.html`)  
 - Consumeren van `NoiseLoad[]` (of import)
@@ -68,7 +68,7 @@ flowchart LR
 - Wegselectie, verkeersintensiteiten, Laeq-motor (→ zusterapp)  
 - Automatisch “lezen” van PDF/CAD voor afmetingen (v1: consultant + tekeningtools)  
 - Coding-agent / LLM-tooling  
-- Aparte taxonomie-rubriek “custom” — eigen materialen horen in de bestaande GG-rubriek/subrubriek
+- Aparte taxonomie-rubriek “custom” — nieuwe materialen horen in de bestaande GG-rubriek/subrubriek
 
 ---
 
@@ -109,21 +109,22 @@ Procesdiagram: [`docs/workflow gevelweringgevels-app.drawio`](../workflow%20geve
 Rapport-API (UI-server): `POST /api/reports/generate|publish|cleanup-project-folder`, `GET /api/reports/list|download|inbox`, `POST /api/reports/inbox/read|email-request`. Root override: `GEVELWERING_PROJECTS_ROOT`. Spec: [rapport-gevelwering-pdf.md](rapport-gevelwering-pdf.md).
 
 Detailontwerp (historisch + invokes): [facade-sound-insulation-app.md](facade-sound-insulation-app.md).  
-Schema / multi-variant: [app-gevelwering-postgres-schema.md](app-gevelwering-postgres-schema.md) (DDL **0.2.27+**).
+Schema / multi-variant: [app-gevelwering-postgres-schema.md](app-gevelwering-postgres-schema.md) (DDL **0.2.28+**).
 
 ### 5.1 Materiaaltoekenning (gevel)
 
 | Stap | Waar | Wat |
 |------|------|-----|
-| Catalogus beheren | `/materials.html` (admin) of via **Materiaalcatalogus…** op de gevel | CRUD op `app_gevelwering.material`; filter **Bron → Eigen materialen** |
-| Eigen materiaal | `/floormap.html` (gevel) → **Eigen materiaal…** | `POST /api/floormap/materials` → `source = eigen`, catalog-id `E#####`; selectie in de materiaalkiezer |
-| Toekennen op component | `/floormap.html` (gevel) | Rubriek → subrubriek → materiaal; filter «Alleen eigen materialen» optioneel |
+| Catalogus beheren | `/materials.html` (admin) of via **Materiaalcatalogus…** op de gevel | CRUD op gedeelde `app_gevelwering.material`; rubriek → subrubriek; optioneel favoriet bij `building_id` |
+| Nieuw materiaal | `/floormap.html` (gevel) → **Nieuw materiaal…** of catalogus-editor | `POST /api/floormap/materials` → `source = app`, catalog-id `A#####`; zelfde tabel |
+| Meest gebruikt | Componentformulier (project) | Dropdown uit `building_material_favorite`; presets opslaan/laden |
+| Toekennen op component | `/floormap.html` (gevel) | Favoriet óf rubriek → subrubriek → materiaal |
 | Opslaan enkele contour | **Component opslaan** | Geometrie (+ optioneel materiaal). Zonder materiaal: oranje led; met materiaal: groen. Incomplete componenten niet kiesbaar bij GA-vlakdelen |
 | GA vlakkentoekenning | `/ga.html` | Alleen **complete** gevelcomponenten (met materiaal); materiaal alleen lezen, geen catalogus hier |
 
 **Belangrijk:** materiaal hoort bij de **componentdefinitie**, niet bij de GA-vlakstap. De materiaalkiezer is gedeeld op de geveltekening. **Component opslaan** koppelt materiaal aan het contour dat je bewerkt — niet automatisch aan de compositie. Voor een compositieresultaat: materiaal kiezen → **Toepassen & opslaan** (zie §5.2).
 
-Catalogusrijen hebben `source = catalogusGG.pdf` (of legacy `GL.cat`). Eigen rijen: `source = eigen` (ook bij handmatige ids zoals `P00002`). Bij `./start.sh` wist de catalogus-seed **alleen** `catalogusGG.pdf` / `GL.cat`; rubriek-assign slaat eigen rijen over.
+Catalogusrijen hebben herkomst-metadata `source` (`catalogusGG.pdf`, legacy `GL.cat`, of `app`). Seed via `./start.sh` draait **eenmalig** als `material` leeg is (`app_meta.material_catalog_seeded`); daarna geen DROP/re-seed. Favorieten zijn per `building_id`, niet globaal op `material`.
 
 ### 5.2 Compositie (+/−) op de gevel
 

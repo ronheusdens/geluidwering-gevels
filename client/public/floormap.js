@@ -2914,6 +2914,11 @@ function initPasswordToggles(root = document) {
   root.querySelectorAll('input[type="password"]').forEach(enhancePasswordInput);
 }
 
+// src/app-version.ts
+var APP_VERSION = "0.1.0";
+var APP_NAME = "Geluidwering Gevels";
+var USER_DOCS_HREF = "/handleiding.html";
+
 // src/project-menu.ts
 var RECENT_KEY = "app-gevelwering-recent-projects";
 var RECENT_MAX = 8;
@@ -2972,6 +2977,7 @@ async function cleanupProjectFolder(buildingId2, headers) {
 }
 function mountProjectMenu(root, host) {
   root.classList.add("file-menu");
+  root.setAttribute("aria-label", "Bestand en Over");
   root.innerHTML = `
     <div class="file-menu-bar">
       <details class="file-menu-details" id="pm-root">
@@ -2989,6 +2995,16 @@ function mountProjectMenu(root, host) {
           <li><button type="button" role="menuitem" data-act="delete" class="danger">Verwijderen\u2026</button></li>
         </ul>
       </details>
+      <details class="file-menu-details" id="pm-about">
+        <summary class="file-menu-summary">Over</summary>
+        <ul class="file-menu-list" role="menu">
+          <li class="file-menu-about-version" role="menuitem">${APP_NAME}</li>
+          <li class="file-menu-about-version" role="menuitem">Versie ${APP_VERSION}</li>
+          <li>
+            <a class="file-menu-about-link" href="${USER_DOCS_HREF}" role="menuitem">Gebruikershandleiding</a>
+          </li>
+        </ul>
+      </details>
       <span class="file-menu-project-title" id="pm-title" aria-live="polite">Geen project</span>
     </div>
     <dialog class="file-menu-dialog" id="pm-open-dialog">
@@ -3004,6 +3020,7 @@ function mountProjectMenu(root, host) {
     </dialog>
   `;
   const detailsEl = root.querySelector("#pm-root");
+  const aboutEl = root.querySelector("#pm-about");
   const titleEl = root.querySelector("#pm-title");
   const recentEl = root.querySelector("#pm-recent");
   const dialogEl = root.querySelector("#pm-open-dialog");
@@ -3033,6 +3050,7 @@ function mountProjectMenu(root, host) {
   }
   function closeMenu() {
     detailsEl.open = false;
+    aboutEl.open = false;
     const recent = root.querySelector(".file-menu-recent");
     if (recent) recent.open = false;
   }
@@ -3188,6 +3206,12 @@ Dit wist berekeningen, tekeningen en rapportmappen. Dit kan niet ongedaan worden
       status("err", err instanceof Error ? err.message : String(err));
     }
   }
+  detailsEl.addEventListener("toggle", () => {
+    if (detailsEl.open) aboutEl.open = false;
+  });
+  aboutEl.addEventListener("toggle", () => {
+    if (aboutEl.open) detailsEl.open = false;
+  });
   root.addEventListener("click", (ev) => {
     const btn = ev.target.closest("button[data-act]");
     if (!btn || !root.contains(btn)) return;
@@ -3198,7 +3222,7 @@ Dit wist berekeningen, tekeningen en rapportmappen. Dit kan niet ongedaan worden
     else if (act === "delete") void deleteProject();
   });
   document.addEventListener("click", (ev) => {
-    if (!detailsEl.open) return;
+    if (!detailsEl.open && !aboutEl.open) return;
     if (root.contains(ev.target)) return;
     closeMenu();
   });
@@ -3294,18 +3318,14 @@ var materialSubcategoryEl = document.getElementById(
   "fm-material-subcategory"
 );
 var materialFilterEl = document.getElementById("fm-material-filter");
-var materialEigenOnlyEl = document.getElementById("fm-material-eigen-only");
-var materialEigenFilterLabelEl = document.getElementById("fm-eigen-filter-label");
-var materialEigenFilterStateEl = document.getElementById("fm-eigen-filter-state");
+var materialFavoriteEl = document.getElementById("fm-material-favorite");
+var favoriteAddBtn = document.getElementById("fm-favorite-add-btn");
+var favoriteRemoveBtn = document.getElementById("fm-favorite-remove-btn");
+var presetSaveBtn = document.getElementById("fm-preset-save-btn");
+var presetApplyBtn = document.getElementById("fm-preset-apply-btn");
 var materialIdEl = document.getElementById("fm-material-id");
 var openMatCatalogBtn = document.getElementById("fm-open-mat-btn");
 var customMatToggleBtn = document.getElementById("fm-custom-mat-toggle");
-var customMatPanelEl = document.getElementById("fm-custom-mat-panel");
-var customMatForm = document.getElementById("fm-custom-mat-form");
-var customMatRubriekEl = document.getElementById("fm-custom-mat-rubriek");
-var customMatNameEl = document.getElementById("fm-custom-mat-name");
-var customMatRaEl = document.getElementById("fm-custom-mat-ra");
-var customMatCancelBtn = document.getElementById("fm-custom-mat-cancel");
 var materialSpectrumEl = document.getElementById("fm-material-spectrum");
 var materialR125El = document.getElementById("fm-r125");
 var materialR250El = document.getElementById("fm-r250");
@@ -3539,6 +3559,7 @@ var booleanPreview = null;
 var materialCategoriesLoaded = false;
 var materialCategoryMeta = [];
 var catalogMaterials = [];
+var favoriteMaterials = [];
 var materialFilterTimer = null;
 var linkedRooms = /* @__PURE__ */ new Map();
 var TOUCHED_ROOMS_KEY = "app-gevelwering-touched-rooms";
@@ -3981,35 +4002,40 @@ function roomMetricsLabel(r) {
   const pts = live ? live.points : r.points;
   const holes = live ? live.holes || [] : Array.isArray(r.analysis?.holes) ? r.analysis.holes : [];
   const closed = live ? live.closed : true;
-  if (componentIsLengthQuantity(r) || live && !closed && selectedIsKierdichting()) {
-    let len = null;
-    if (pts?.length >= 2 && mpu) {
-      len = `${scaledPathLength(pts, mpu, aspect, closed).toFixed(2)} m`;
-    } else if (r.analysis?.length_m != null && Number.isFinite(r.analysis.length_m) && !live) {
-      len = `${Number(r.analysis.length_m).toFixed(2)} m`;
-    } else if (r.perimeter_m != null && Number.isFinite(r.perimeter_m) && !live) {
-      len = `${r.perimeter_m.toFixed(2)} m`;
+  try {
+    if (componentIsLengthQuantity(r) || live && !closed && selectedIsKierdichting()) {
+      let len = null;
+      if (pts?.length >= 2 && mpu) {
+        len = `${scaledPathLength(pts, mpu, aspect, closed).toFixed(2)} m`;
+      } else if (r.analysis?.length_m != null && Number.isFinite(r.analysis.length_m) && !live) {
+        len = `${Number(r.analysis.length_m).toFixed(2)} m`;
+      } else if (r.perimeter_m != null && Number.isFinite(r.perimeter_m) && !live) {
+        len = `${r.perimeter_m.toFixed(2)} m`;
+      }
+      return len ? `lengte ${len}` : "lengte \u2014";
     }
-    return len ? `lengte ${len}` : "lengte \u2014";
-  }
-  let area = "\u2014";
-  let circ = "\u2014";
-  if (pts?.length >= 3 && mpu) {
-    const holesSum = holes.reduce((s, h) => s + shoelaceArea(h), 0);
-    const areaNorm = Math.max(0, shoelaceArea(pts) - holesSum);
-    area = `${scaledAreaM2(areaNorm, mpu, aspect).toFixed(2)} m\xB2`;
-    circ = `${scaledPathLength(pts, mpu, aspect, true).toFixed(2)} m`;
-  } else if (r.area_m2 != null && Number.isFinite(r.area_m2)) {
-    area = `${r.area_m2.toFixed(2)} m\xB2`;
-    if (r.perimeter_m != null && Number.isFinite(r.perimeter_m)) {
-      circ = `${r.perimeter_m.toFixed(2)} m`;
+    let area = "\u2014";
+    let circ = "\u2014";
+    if (pts?.length >= 3 && mpu) {
+      const safeHoles = holes.filter((h) => Array.isArray(h) && h.length >= 3);
+      const holesSum = safeHoles.reduce((s, h) => s + shoelaceArea(h), 0);
+      const areaNorm = Math.max(0, shoelaceArea(pts) - holesSum);
+      area = `${scaledAreaM2(areaNorm, mpu, aspect).toFixed(2)} m\xB2`;
+      circ = `${scaledPathLength(pts, mpu, aspect, true).toFixed(2)} m`;
+    } else if (r.area_m2 != null && Number.isFinite(r.area_m2)) {
+      area = `${r.area_m2.toFixed(2)} m\xB2`;
+      if (r.perimeter_m != null && Number.isFinite(r.perimeter_m)) {
+        circ = `${r.perimeter_m.toFixed(2)} m`;
+      }
+    } else if (r.area_norm != null && mpu) {
+      area = `${scaledAreaM2(r.area_norm, mpu, aspect).toFixed(2)} m\xB2`;
+    } else if (r.area_norm != null) {
+      area = `${r.area_norm.toFixed(4)} (no scale)`;
     }
-  } else if (r.area_norm != null && mpu) {
-    area = `${scaledAreaM2(r.area_norm, mpu, aspect).toFixed(2)} m\xB2`;
-  } else if (r.area_norm != null) {
-    area = `${r.area_norm.toFixed(4)} (no scale)`;
+    return `${area} \xB7 circ ${circ}`;
+  } catch {
+    return "\u2014";
   }
-  return `${area} \xB7 circ ${circ}`;
 }
 var roomListRefreshTimer = null;
 function scheduleRoomListRefresh() {
@@ -4157,7 +4183,7 @@ function buildComposeParts(selected) {
     if (r.id === outer.id) continue;
     if (!ringFullyContained(r.points, outer.points)) {
       throw new Error(
-        `\u201C${r.label || r.id}\u201D past niet volledig binnen de buitencontour \u201C${outer.label || outer.id}\u201D`
+        `\u201C${r.label || r.id}\u201D past niet volledig binnen de buitencontour \u201C${outer.label || outer.id}\u201D (grootste). Overige delen moeten volledig in de buitencontour passen.`
       );
     }
   }
@@ -4167,6 +4193,25 @@ function buildComposeParts(selected) {
   }));
   if (!parts.some((p) => p.sign === "+")) {
     throw new Error("Minstens \xE9\xE9n deel met + is verplicht");
+  }
+  const plusParts = parts.filter((p) => p.sign === "+");
+  const minusParts = parts.filter((p) => p.sign === "-");
+  const plusArea = plusParts.reduce((s, p) => s + subsectionAreaNorm(p.room), 0);
+  for (const m of minusParts) {
+    const mArea = subsectionAreaNorm(m.room);
+    const mLabel = m.room.label || m.room.id;
+    if (mArea >= plusArea - 1e-12) {
+      const plusLabels = plusParts.map((p) => `\u201C${p.room.label || p.room.id}\u201D`).join(", ");
+      throw new Error(
+        `Kan \u201C${mLabel}\u201D niet aftrekken van kleinere + deel(en) (${plusLabels}). Trek alleen kleinere objecten af die volledig binnen de + contour(en) liggen.`
+      );
+    }
+    const fitsInPlus = plusParts.some((p) => ringFullyContained(m.room.points, p.room.points));
+    if (!fitsInPlus) {
+      throw new Error(
+        `\u201C${mLabel}\u201D past niet volledig binnen de + deel(en) \u2014 grotere of buitenliggende objecten kunnen niet worden afgetrokken.`
+      );
+    }
   }
   const signs = {};
   for (const p of parts) signs[p.room.id] = p.sign;
@@ -4757,8 +4802,6 @@ function editRoom(room) {
   updateMeasureReadouts();
   updateToolHint();
   renderRoomList();
-  const selectedLi = document.querySelector("#fm-room-list .drawing-list-item.selected");
-  selectedLi?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   scrollToRing(pendingRoom.points);
   setStatus(
     `Bewerken: ${room.label} \u2014 sleep het vlak of witte ankers; pijltjes om te schuiven; daarna \xAB${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} opslaan\xBB`,
@@ -4842,8 +4885,13 @@ function updateBooleanPreview() {
     const selected = rooms.filter((r) => selectedSetIds.has(r.id));
     const { parts } = buildComposeParts(selected);
     booleanPreview = composeSigned(parts.map((p) => ({ ring: p.room.points, sign: p.sign })));
-  } catch {
+    if (composeFeedbackEl?.classList.contains("is-err")) {
+      setComposeFeedback("", "clear");
+    }
+  } catch (err) {
     booleanPreview = null;
+    const msg = err instanceof Error ? err.message : String(err);
+    setComposeFeedback(msg, "err");
   }
   renderComposeParts();
   drawOverlay();
@@ -4948,8 +4996,8 @@ function renderMaterialNameOptions(materials, selectedId) {
     const code = (m.catalog_id || "").trim();
     const ra = m.ra_dba != null ? ` \xB7 RA ${m.ra_dba}` : "";
     const sub = m.category ? ` \xB7 ${m.category}` : "";
-    const eigen = (m.source || "").trim().toLowerCase() === "eigen" ? " \xB7 eigen" : "";
-    opt.textContent = code ? `${code} \xB7 ${m.name}${sub}${ra}${eigen}` : `${m.name}${sub}${ra}${eigen}`;
+    const appBit = (m.source || "").trim().toLowerCase() === "app" || (m.source || "").trim().toLowerCase() === "eigen" ? " \xB7 app" : "";
+    opt.textContent = code ? `${code} \xB7 ${m.name}${sub}${ra}${appBit}` : `${m.name}${sub}${ra}${appBit}`;
     opt.title = code ? `${code} \xB7 ${m.name}` : m.name;
     materialIdEl.appendChild(opt);
   }
@@ -4957,6 +5005,112 @@ function renderMaterialNameOptions(materials, selectedId) {
   if (selectedId && materials.some((m) => m.material_id === selectedId)) {
     materialIdEl.value = selectedId;
   }
+  syncFavoriteButtons();
+}
+function renderFavoriteOptions(selectedId) {
+  if (!materialFavoriteEl) return;
+  const keep = selectedId ?? materialFavoriteEl.value;
+  materialFavoriteEl.replaceChildren();
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = favoriteMaterials.length ? "\u2014 kies uit meest gebruikt \u2014" : "\u2014 geen favorieten voor dit project \u2014";
+  materialFavoriteEl.appendChild(ph);
+  for (const m of favoriteMaterials) {
+    const opt = document.createElement("option");
+    opt.value = m.material_id;
+    const code = (m.catalog_id || "").trim();
+    const ra = m.ra_dba != null ? ` \xB7 RA ${m.ra_dba}` : "";
+    opt.textContent = code ? `${code} \xB7 ${m.name}${ra}` : `${m.name}${ra}`;
+    materialFavoriteEl.appendChild(opt);
+  }
+  materialFavoriteEl.disabled = favoriteMaterials.length === 0;
+  if (keep && favoriteMaterials.some((m) => m.material_id === keep)) {
+    materialFavoriteEl.value = keep;
+  }
+  syncFavoriteButtons();
+}
+function syncFavoriteButtons() {
+  const hasBuilding = Boolean(buildingId);
+  const mid = (materialIdEl?.value || materialFavoriteEl?.value || "").trim();
+  const isFav = Boolean(mid && favoriteMaterials.some((m) => m.material_id === mid));
+  if (favoriteAddBtn) favoriteAddBtn.disabled = !hasBuilding || !mid || isFav;
+  if (favoriteRemoveBtn) favoriteRemoveBtn.disabled = !hasBuilding || !isFav;
+  if (presetSaveBtn) presetSaveBtn.disabled = !hasBuilding || favoriteMaterials.length === 0;
+  if (presetApplyBtn) presetApplyBtn.disabled = !hasBuilding;
+}
+async function loadFavoriteMaterials() {
+  if (!auth?.token || !buildingId) {
+    favoriteMaterials = [];
+    renderFavoriteOptions();
+    return;
+  }
+  try {
+    const data = await apiGet(
+      `/api/floormap/material-favorites?building_id=${encodeURIComponent(buildingId)}`
+    );
+    favoriteMaterials = data.materials || [];
+    renderFavoriteOptions(materialIdEl?.value || null);
+  } catch (err) {
+    favoriteMaterials = [];
+    renderFavoriteOptions();
+    console.warn("load favorites failed", err);
+  }
+}
+async function addMaterialFavorite(materialId) {
+  if (!auth?.token || !buildingId || !materialId) return;
+  await apiPost("/api/floormap/material-favorites", {
+    building_id: buildingId,
+    material_id: materialId
+  });
+  await loadFavoriteMaterials();
+  setStatus("Toegevoegd aan meest gebruikt", "ok");
+}
+async function removeMaterialFavorite(materialId) {
+  if (!auth?.token || !buildingId || !materialId) return;
+  await apiDelete(
+    `/api/floormap/material-favorites?building_id=${encodeURIComponent(buildingId)}&material_id=${encodeURIComponent(materialId)}`
+  );
+  await loadFavoriteMaterials();
+  setStatus("Verwijderd uit meest gebruikt", "ok");
+}
+async function selectMaterialById(materialId, fromFavorite = false) {
+  const fromFav = favoriteMaterials.find((m) => m.material_id === materialId);
+  const fromCat = catalogMaterials.find((m) => m.material_id === materialId);
+  const mat = fromFav || fromCat;
+  if (!mat) return;
+  if (mat.master_category && materialCategoryEl) {
+    await ensureMaterialCategories();
+    if (![...materialCategoryEl.options].some((o) => o.value === mat.master_category)) {
+      const opt = document.createElement("option");
+      opt.value = mat.master_category;
+      opt.textContent = mat.master_category;
+      materialCategoryEl.appendChild(opt);
+    }
+    materialCategoryEl.value = mat.master_category;
+    renderMaterialSubcategoryOptions();
+    if (mat.category && materialSubcategoryEl) {
+      if (![...materialSubcategoryEl.options].some((o) => o.value === mat.category)) {
+        const opt = document.createElement("option");
+        opt.value = mat.category;
+        opt.textContent = mat.category;
+        materialSubcategoryEl.appendChild(opt);
+      }
+      materialSubcategoryEl.value = mat.category;
+    }
+    if (!fromCat) {
+      await loadMaterialsForCategory(mat.master_category, "");
+    }
+  }
+  if (!catalogMaterials.some((m) => m.material_id === mat.material_id)) {
+    catalogMaterials = [mat, ...catalogMaterials];
+    renderMaterialNameOptions(catalogMaterials, mat.material_id);
+  } else if (materialIdEl) {
+    materialIdEl.value = mat.material_id;
+  }
+  if (fromFavorite && materialFavoriteEl) materialFavoriteEl.value = materialId;
+  updateMaterialSpectrumPreview(mat);
+  syncFavoriteButtons();
+  syncPendingRoomButtons();
 }
 async function ensureMaterialCategories() {
   if (!auth?.token || !materialCategoryEl) return;
@@ -4972,8 +5126,7 @@ async function ensureMaterialCategories() {
 async function loadMaterialsForCategory(category, q = "") {
   if (!auth?.token || !materialIdEl) return;
   const keep = materialIdEl.value;
-  const eigenOnly = Boolean(materialEigenOnlyEl?.checked);
-  if (!category && !eigenOnly) {
+  if (!category) {
     catalogMaterials = [];
     renderMaterialNameOptions([]);
     materialIdEl.disabled = true;
@@ -4983,12 +5136,11 @@ async function loadMaterialsForCategory(category, q = "") {
   materialIdEl.disabled = true;
   try {
     const params2 = new URLSearchParams({
-      limit: "1000"
+      limit: "1000",
+      master_category: category
     });
-    if (category) params2.set("master_category", category);
-    if (eigenOnly) params2.set("source", "eigen");
     const sub = (materialSubcategoryEl?.value || "").trim();
-    if (sub && category) params2.set("category", sub);
+    if (sub) params2.set("category", sub);
     if (q.trim()) params2.set("q", q.trim());
     const data = await apiGet(
       `/api/floormap/materials?${params2.toString()}`
@@ -5138,173 +5290,232 @@ function coerceRingPoints(raw) {
   }
   return out;
 }
+function resolveRoomListEl() {
+  const live = document.getElementById("fm-room-list");
+  if (live) return live;
+  return roomListEl && document.body.contains(roomListEl) ? roomListEl : null;
+}
+function resolveRoomCountEl() {
+  const live = document.getElementById("fm-room-count");
+  if (live) return live;
+  return roomCountEl && document.body.contains(roomCountEl) ? roomCountEl : null;
+}
 function renderRoomList() {
-  const listEl = roomListEl || document.getElementById("fm-room-list");
-  const countEl = (roomCountEl && document.body.contains(roomCountEl) ? roomCountEl : null) || document.getElementById("fm-room-count");
+  const listEl = resolveRoomListEl();
+  const countEl = resolveRoomCountEl();
   if (!listEl) return;
+  const scrollTop = listEl.scrollTop;
+  const items = rooms.filter((r) => Boolean(r?.id));
+  if (items.length !== rooms.length) {
+    rooms = items;
+  }
   listEl.replaceChildren();
-  if (countEl) countEl.textContent = String(rooms.length);
-  if (rooms.length === 0) {
+  if (countEl) countEl.textContent = String(items.length);
+  if (items.length === 0) {
     const li = document.createElement("li");
     li.className = "hint drawing-list-empty";
     li.textContent = `Nog geen ${activePartNoun().plural} \u2014 Teken ${activePartNoun().singular} of Ontdek.`;
     listEl.appendChild(li);
     return;
   }
+  let booleanSourceIds = /* @__PURE__ */ new Set();
+  let supersededIds = /* @__PURE__ */ new Set();
+  let boolGroups = /* @__PURE__ */ new Map();
   const allowSetSelect = !isFloormapKind();
-  const booleanSourceIds = allowSetSelect ? collectBooleanSourceIds(rooms) : /* @__PURE__ */ new Set();
-  const supersededIds = allowSetSelect ? collectSupersededSourceIds(rooms) : /* @__PURE__ */ new Set();
-  const boolGroups = allowSetSelect ? assignBooleanListGroups(rooms) : /* @__PURE__ */ new Map();
-  rooms.forEach((r, index) => {
-    const li = document.createElement("li");
-    li.className = "drawing-list-item";
-    if (allowSetSelect) li.classList.add("drawing-list-item--set");
-    if (pendingRoom?.editingId === r.id) li.classList.add("selected");
-    if (touchedRoomIds.has(r.id)) li.classList.add("drawing-list-item--touched");
-    if (allowSetSelect && selectedSetIds.has(r.id)) li.classList.add("set-selected");
-    if (allowSetSelect && booleanSourceIds.has(r.id)) li.classList.add("drawing-list-item--ga-source");
-    const boolRole = boolGroups.get(r.id);
-    if (boolRole) applyBooleanListColors(li, boolRole);
+  try {
     if (allowSetSelect) {
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.className = "set-select-cb";
-      cb.checked = selectedSetIds.has(r.id);
-      cb.title = "Selecteer voor +/\u2212 compositie";
-      cb.addEventListener("change", () => {
-        if (cb.checked) selectedSetIds.add(r.id);
-        else {
-          selectedSetIds.delete(r.id);
-          constituentSigns.delete(r.id);
-        }
-        updateBooleanPreview();
-        void defaultMaterialFromDifferenceSubject();
-        renderRoomList();
+      booleanSourceIds = collectBooleanSourceIds(items);
+      supersededIds = collectSupersededSourceIds(items);
+      boolGroups = assignBooleanListGroups(items);
+    }
+  } catch (err) {
+    console.warn("renderRoomList: boolean metadata failed", err);
+  }
+  items.forEach((r, index) => {
+    try {
+      renderRoomListItem(listEl, r, index, items.length, {
+        allowSetSelect,
+        booleanSourceIds,
+        supersededIds,
+        boolGroups
       });
-      li.appendChild(cb);
+    } catch (err) {
+      console.warn("renderRoomList: item failed", r.id, err);
+      const fallback = document.createElement("li");
+      fallback.className = "drawing-list-item";
+      fallback.textContent = r.label || r.id;
+      listEl.appendChild(fallback);
     }
-    const info = document.createElement("button");
-    info.type = "button";
-    info.className = "drawing-list-select";
-    const linked = linkedRooms.get(r.id);
-    const hasMaterial = Boolean((r.analysis?.material_id || "").trim());
-    const nrBit = r.vg_nr != null && r.vr_nr != null ? `VG ${r.vg_nr} \xB7 VR ${r.vr_nr}` : "geen VG/VR";
-    const matBit = materialAnalysisLabel(r.analysis);
-    let gaBit = "";
-    if (allowSetSelect) {
-      if (supersededIds.has(r.id)) {
-        gaBit = " \xB7 bron (vervangen in berekening)";
-      } else if (booleanSourceIds.has(r.id)) {
-        gaBit = " \xB7 bron (blijft in berekening)";
-      } else if (r.vr_nr && hasMaterial) {
-        gaBit = " \xB7 in berekening";
-      } else if (r.vr_nr) {
-        gaBit = " \xB7 berekening: nog materiaal toevoegen";
-      }
-    }
-    const linkBit = activeSection?.region_kind === "FLOORMAP" && linked ? ` \xB7 berekening: ${linked}` : activeSection?.region_kind === "FLOORMAP" ? " \xB7 niet in berekening" : "";
-    const parts = [r.label || "(zonder label)", matBit, nrBit, levelLabel(r.level_hint), roomMetricsLabel(r)].filter(
-      Boolean
-    );
-    if (allowSetSelect) {
-      const led = document.createElement("span");
-      led.className = "scale-calibrated-led";
-      led.setAttribute("role", "status");
-      if (hasMaterial) {
-        led.classList.add("is-on");
-        led.title = "Materiaal gekoppeld";
-        led.setAttribute("aria-label", "Materiaal gekoppeld");
-      } else {
-        led.classList.add("is-warn");
-        led.title = "Nog geen materiaal \u2014 koppel later voor vlakdelen";
-        led.setAttribute("aria-label", "Nog geen materiaal");
-      }
-      info.appendChild(led);
-    }
-    const labelSpan = document.createElement("span");
-    labelSpan.className = "drawing-list-select-label";
-    labelSpan.textContent = `${parts.join(" \xB7 ")}${gaBit}${linkBit}`;
-    info.appendChild(labelSpan);
-    info.title = supersededIds.has(r.id) ? "Bron van een setbewerking met hetzelfde materiaal \u2014 vervangen door het netto-component" : booleanSourceIds.has(r.id) ? "Bron van een setbewerking met ander materiaal \u2014 blijft beschikbaar in de berekening (bijv. glas)" : allowSetSelect && !hasMaterial ? "Nog geen materiaal (oranje) \u2014 klik om te bewerken of materiaal te koppelen" : "Klik om geometrie te bewerken";
-    info.addEventListener("click", () => editRoom(r));
-    li.appendChild(info);
-    const actions = document.createElement("span");
-    actions.className = "drawing-list-actions";
-    const upBtn = document.createElement("button");
-    upBtn.type = "button";
-    upBtn.className = "secondary drawing-list-move drawing-list-move-icon";
-    upBtn.textContent = "\u25B2";
-    upBtn.setAttribute("aria-label", "Verplaats omhoog in de lijst");
-    upBtn.title = "Omhoog";
-    upBtn.disabled = index === 0;
-    upBtn.addEventListener("click", () => {
-      void moveRoom(index, -1);
-    });
-    actions.appendChild(upBtn);
-    const downBtn = document.createElement("button");
-    downBtn.type = "button";
-    downBtn.className = "secondary drawing-list-move drawing-list-move-icon";
-    downBtn.textContent = "\u25BC";
-    downBtn.setAttribute("aria-label", "Verplaats omlaag in de lijst");
-    downBtn.title = "Omlaag";
-    downBtn.disabled = index >= rooms.length - 1;
-    downBtn.addEventListener("click", () => {
-      void moveRoom(index, 1);
-    });
-    actions.appendChild(downBtn);
-    if (activeSection?.region_kind === "FLOORMAP" && buildingId) {
-      const ga = document.createElement("a");
-      ga.className = "secondary-link";
-      const q = new URLSearchParams({ building_id: buildingId, subsection_id: r.id });
-      if (r.vg_nr != null) q.set("vg_nr", String(r.vg_nr));
-      if (r.vr_nr != null && String(r.vr_nr).trim()) q.set("vr_nr", String(r.vr_nr).trim());
-      ga.href = `/ga.html?${q.toString()}`;
-      ga.textContent = linked ? "Open berekening gevelwering" : "Koppel aan berekening gevelwering";
-      ga.title = linked ? "Open dit VG/VR in de berekening gevelwering" : "Neem VG/VR over in de berekening gevelwering";
-      actions.appendChild(ga);
-    }
-    const isClosedArea = !(r.analysis?.quantity_kind === "length" && r.analysis?.open_path) && Array.isArray(r.points) && r.points.length >= 3;
-    if (isClosedArea) {
-      const dup = document.createElement("button");
-      dup.type = "button";
-      dup.className = "secondary";
-      dup.textContent = "Kopie";
-      dup.title = "Dupliceer rond dit component (Shift+klik: vraag aantal)";
-      dup.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        void duplicateFromRoom(r, ev.shiftKey ? void 0 : 1);
-      });
-      actions.appendChild(dup);
-    }
-    const saveBtn = document.createElement("button");
-    saveBtn.type = "button";
-    saveBtn.textContent = "Opslaan";
-    const editingThis = pendingRoom?.editingId === r.id;
-    const kier = !isFloormapKind() && selectedIsKierdichting();
-    const canSaveThis = Boolean(
-      editingThis && pendingRoom && (pendingRoom.closed && pendingRoom.points.length >= 3 || kier && !pendingRoom.closed && pendingRoom.points.length >= 2)
-    );
-    saveBtn.disabled = !canSaveThis;
-    saveBtn.className = canSaveThis ? "" : "secondary";
-    saveBtn.title = editingThis ? canSaveThis ? "Sla de huidige bewerking op" : "Nog niet opslaanbaar \u2014 sluit de polygoon of teken verder" : "Open dit component (klik de regel) om te bewerken, daarna Opslaan";
-    saveBtn.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      if (!canSaveThis) return;
-      void savePendingRoom();
-    });
-    actions.appendChild(saveBtn);
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "secondary";
-    btn.textContent = "Verwijderen";
-    btn.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      void deleteRoom(r.id);
-    });
-    actions.appendChild(btn);
-    li.appendChild(actions);
-    listEl.appendChild(li);
   });
+  if (pendingRoom?.editingId) {
+    scrollActiveRoomListItemIntoView(listEl, pendingRoom.editingId);
+  } else {
+    listEl.scrollTop = scrollTop;
+  }
+}
+function scrollActiveRoomListItemIntoView(listEl, roomId) {
+  const run = () => {
+    const li = listEl.querySelector(
+      `.drawing-list-item[data-room-id="${CSS.escape(roomId)}"]`
+    ) || listEl.querySelector(".drawing-list-item.selected");
+    if (!li) return;
+    li.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
+  };
+  requestAnimationFrame(() => requestAnimationFrame(run));
+}
+function renderRoomListItem(listEl, r, index, total, meta) {
+  const { allowSetSelect, booleanSourceIds, supersededIds, boolGroups } = meta;
+  const li = document.createElement("li");
+  li.className = "drawing-list-item";
+  li.dataset.roomId = r.id;
+  if (allowSetSelect) li.classList.add("drawing-list-item--set");
+  if (pendingRoom?.editingId === r.id) li.classList.add("selected");
+  if (touchedRoomIds.has(r.id)) li.classList.add("drawing-list-item--touched");
+  if (allowSetSelect && selectedSetIds.has(r.id)) li.classList.add("set-selected");
+  if (allowSetSelect && booleanSourceIds.has(r.id)) li.classList.add("drawing-list-item--ga-source");
+  const boolRole = boolGroups.get(r.id);
+  if (boolRole) applyBooleanListColors(li, boolRole);
+  if (allowSetSelect) {
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.className = "set-select-cb";
+    cb.checked = selectedSetIds.has(r.id);
+    cb.title = "Selecteer voor +/\u2212 compositie";
+    cb.addEventListener("change", () => {
+      if (cb.checked) selectedSetIds.add(r.id);
+      else {
+        selectedSetIds.delete(r.id);
+        constituentSigns.delete(r.id);
+      }
+      updateBooleanPreview();
+      void defaultMaterialFromDifferenceSubject();
+      renderRoomList();
+    });
+    li.appendChild(cb);
+  }
+  const info = document.createElement("button");
+  info.type = "button";
+  info.className = "drawing-list-select";
+  const linked = linkedRooms.get(r.id);
+  const hasMaterial = Boolean((r.analysis?.material_id || "").trim());
+  const nrBit = r.vg_nr != null && r.vr_nr != null ? `VG ${r.vg_nr} \xB7 VR ${r.vr_nr}` : "geen VG/VR";
+  const matBit = materialAnalysisLabel(r.analysis);
+  let gaBit = "";
+  if (allowSetSelect) {
+    if (supersededIds.has(r.id)) {
+      gaBit = " \xB7 bron (vervangen in berekening)";
+    } else if (booleanSourceIds.has(r.id)) {
+      gaBit = " \xB7 bron (blijft in berekening)";
+    } else if (r.vr_nr && hasMaterial) {
+      gaBit = " \xB7 in berekening";
+    } else if (r.vr_nr) {
+      gaBit = " \xB7 berekening: nog materiaal toevoegen";
+    }
+  }
+  const linkBit = activeSection?.region_kind === "FLOORMAP" && linked ? ` \xB7 berekening: ${linked}` : activeSection?.region_kind === "FLOORMAP" ? " \xB7 niet in berekening" : "";
+  const parts = [r.label || "(zonder label)", matBit, nrBit, levelLabel(r.level_hint), roomMetricsLabel(r)].filter(
+    Boolean
+  );
+  if (allowSetSelect) {
+    const led = document.createElement("span");
+    led.className = "scale-calibrated-led";
+    led.setAttribute("role", "status");
+    if (hasMaterial) {
+      led.classList.add("is-on");
+      led.title = "Materiaal gekoppeld";
+      led.setAttribute("aria-label", "Materiaal gekoppeld");
+    } else {
+      led.classList.add("is-warn");
+      led.title = "Nog geen materiaal \u2014 koppel later voor vlakdelen";
+      led.setAttribute("aria-label", "Nog geen materiaal");
+    }
+    info.appendChild(led);
+  }
+  const labelSpan = document.createElement("span");
+  labelSpan.className = "drawing-list-select-label";
+  labelSpan.textContent = `${parts.join(" \xB7 ")}${gaBit}${linkBit}`;
+  info.appendChild(labelSpan);
+  info.title = supersededIds.has(r.id) ? "Bron van een setbewerking met hetzelfde materiaal \u2014 vervangen door het netto-component" : booleanSourceIds.has(r.id) ? "Bron van een setbewerking met ander materiaal \u2014 blijft beschikbaar in de berekening (bijv. glas)" : allowSetSelect && !hasMaterial ? "Nog geen materiaal (oranje) \u2014 klik om te bewerken of materiaal te koppelen" : "Klik om geometrie te bewerken";
+  info.addEventListener("click", () => editRoom(r));
+  li.appendChild(info);
+  const actions = document.createElement("span");
+  actions.className = "drawing-list-actions";
+  const upBtn = document.createElement("button");
+  upBtn.type = "button";
+  upBtn.className = "secondary drawing-list-move drawing-list-move-icon";
+  upBtn.textContent = "\u25B2";
+  upBtn.setAttribute("aria-label", "Verplaats omhoog in de lijst");
+  upBtn.title = "Omhoog";
+  upBtn.disabled = index === 0;
+  upBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    void moveRoom(index, -1);
+  });
+  actions.appendChild(upBtn);
+  const downBtn = document.createElement("button");
+  downBtn.type = "button";
+  downBtn.className = "secondary drawing-list-move drawing-list-move-icon";
+  downBtn.textContent = "\u25BC";
+  downBtn.setAttribute("aria-label", "Verplaats omlaag in de lijst");
+  downBtn.title = "Omlaag";
+  downBtn.disabled = index >= total - 1;
+  downBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    void moveRoom(index, 1);
+  });
+  actions.appendChild(downBtn);
+  if (activeSection?.region_kind === "FLOORMAP" && buildingId) {
+    const ga = document.createElement("a");
+    ga.className = "secondary-link";
+    const q = new URLSearchParams({ building_id: buildingId, subsection_id: r.id });
+    if (r.vg_nr != null) q.set("vg_nr", String(r.vg_nr));
+    if (r.vr_nr != null && String(r.vr_nr).trim()) q.set("vr_nr", String(r.vr_nr).trim());
+    ga.href = `/ga.html?${q.toString()}`;
+    ga.textContent = linked ? "Open berekening gevelwering" : "Koppel aan berekening gevelwering";
+    ga.title = linked ? "Open dit VG/VR in de berekening gevelwering" : "Neem VG/VR over in de berekening gevelwering";
+    actions.appendChild(ga);
+  }
+  const isClosedArea = !(r.analysis?.quantity_kind === "length" && r.analysis?.open_path) && Array.isArray(r.points) && r.points.length >= 3;
+  if (isClosedArea) {
+    const dup = document.createElement("button");
+    dup.type = "button";
+    dup.className = "secondary";
+    dup.textContent = "Kopie";
+    dup.title = "Dupliceer rond dit component (Shift+klik: vraag aantal)";
+    dup.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      void duplicateFromRoom(r, ev.shiftKey ? void 0 : 1);
+    });
+    actions.appendChild(dup);
+  }
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.textContent = "Opslaan";
+  const editingThis = pendingRoom?.editingId === r.id;
+  const kier = !isFloormapKind() && selectedIsKierdichting();
+  const canSaveThis = Boolean(
+    editingThis && pendingRoom && (pendingRoom.closed && pendingRoom.points.length >= 3 || kier && !pendingRoom.closed && pendingRoom.points.length >= 2)
+  );
+  saveBtn.disabled = !canSaveThis;
+  saveBtn.className = canSaveThis ? "" : "secondary";
+  saveBtn.title = editingThis ? canSaveThis ? "Sla de huidige bewerking op" : "Nog niet opslaanbaar \u2014 sluit de polygoon of teken verder" : "Open dit component (klik de regel) om te bewerken, daarna Opslaan";
+  saveBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    if (!canSaveThis) return;
+    void savePendingRoom();
+  });
+  actions.appendChild(saveBtn);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "secondary";
+  btn.textContent = "Verwijderen";
+  btn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    void deleteRoom(r.id);
+  });
+  actions.appendChild(btn);
+  li.appendChild(actions);
+  listEl.appendChild(li);
 }
 async function refreshLinkedRooms() {
   linkedRooms = /* @__PURE__ */ new Map();
@@ -5383,6 +5594,7 @@ async function loadFloormapSections(bid) {
     history.replaceState(null, "", url.toString());
     projectMenu?.rememberCurrent();
     projectMenu?.refreshTitle();
+    void loadFavoriteMaterials();
     setStatus(`${sections.length} section(s)`, "ok");
     if (URL_SECTION && sections.some((s) => s.id === URL_SECTION)) {
       await openSection(URL_SECTION);
@@ -5424,8 +5636,6 @@ async function loadRooms() {
     }
     renderRoomList();
   } catch (err) {
-    rooms = [];
-    renderRoomList();
     throw err;
   }
   try {
@@ -6372,27 +6582,38 @@ async function moveRoom(index, delta) {
   if (!auth?.token || !activeSection) return;
   const j = index + delta;
   if (index < 0 || j < 0 || index >= rooms.length || j >= rooms.length) return;
-  const prev = rooms.slice();
+  const prevOrder = rooms.map((r) => ({ room: r, sort_order: r.sort_order }));
   const next = rooms.slice();
   const tmp = next[index];
+  if (!tmp || !next[j]) return;
   next[index] = next[j];
   next[j] = tmp;
   next.forEach((r, i) => {
     r.sort_order = i;
   });
   rooms = next;
-  renderRoomList();
-  drawOverlay();
+  try {
+    renderRoomList();
+    drawOverlay();
+  } catch (err) {
+    console.warn("moveRoom: local render failed", err);
+  }
   try {
     await apiPost("/api/floormap/subsections/reorder", {
       section_id: activeSection.id,
-      ordered_ids: rooms.map((r) => r.id)
+      ordered_ids: rooms.map((r) => r.id).filter(Boolean)
     });
     setStatus("Volgorde opgeslagen", "ok");
   } catch (err) {
-    rooms = prev;
-    renderRoomList();
-    drawOverlay();
+    rooms = prevOrder.map((p) => {
+      p.room.sort_order = p.sort_order;
+      return p.room;
+    });
+    try {
+      renderRoomList();
+      drawOverlay();
+    } catch {
+    }
     setStatus(err instanceof Error ? err.message : String(err), "err");
     try {
       await loadRooms();
@@ -6700,34 +6921,92 @@ materialSubcategoryEl?.addEventListener("change", () => {
 materialFilterEl?.addEventListener("input", () => {
   scheduleMaterialFilterReload();
 });
-materialEigenOnlyEl?.addEventListener("change", () => {
-  syncEigenOnlyFilterUi();
-  if (!materialEigenOnlyEl.checked && materialFilterEl?.value.trim()) {
-    materialFilterEl.value = "";
+materialFavoriteEl?.addEventListener("change", () => {
+  const id = (materialFavoriteEl.value || "").trim();
+  if (!id) {
+    syncFavoriteButtons();
+    return;
   }
-  void loadMaterialsForCategory(
-    (materialCategoryEl?.value || "").trim(),
-    (materialFilterEl?.value || "").trim()
+  void selectMaterialById(id, true);
+});
+favoriteAddBtn?.addEventListener("click", () => {
+  const id = (materialIdEl?.value || "").trim();
+  if (!id) return;
+  void addMaterialFavorite(id).catch(
+    (err) => setStatus(err instanceof Error ? err.message : String(err), "err")
   );
 });
-function syncEigenOnlyFilterUi() {
-  const on = Boolean(materialEigenOnlyEl?.checked);
-  materialEigenFilterLabelEl?.classList.toggle("is-on", on);
-  if (materialEigenFilterStateEl) materialEigenFilterStateEl.textContent = on ? "aan" : "uit";
-  if (materialEigenOnlyEl) {
-    materialEigenOnlyEl.setAttribute("aria-checked", on ? "true" : "false");
-  }
-}
+favoriteRemoveBtn?.addEventListener("click", () => {
+  const id = (materialIdEl?.value || materialFavoriteEl?.value || "").trim();
+  if (!id) return;
+  void removeMaterialFavorite(id).catch(
+    (err) => setStatus(err instanceof Error ? err.message : String(err), "err")
+  );
+});
+presetSaveBtn?.addEventListener("click", () => {
+  if (!buildingId) return;
+  const name = window.prompt("Naam voor deze favorieten-preset:");
+  if (!name?.trim()) return;
+  void apiPost("/api/floormap/material-favorite-presets", {
+    action: "save",
+    name: name.trim(),
+    building_id: buildingId
+  }).then((data) => {
+    setStatus(`Preset opgeslagen (${data.material_count ?? "?"} materialen)`, "ok");
+  }).catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
+});
+presetApplyBtn?.addEventListener("click", () => {
+  if (!buildingId) return;
+  void (async () => {
+    const data = await apiGet("/api/floormap/material-favorite-presets");
+    const presets = data.presets || [];
+    if (!presets.length) {
+      setStatus("Geen presets beschikbaar", "err");
+      return;
+    }
+    const lines = presets.map((p, i) => `${i + 1}. ${p.name} (${p.material_count})`).join("\n");
+    const pick = window.prompt(`Kies preset-nummer:
+${lines}`);
+    const idx = Number(pick) - 1;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= presets.length) return;
+    const preset = presets[idx];
+    if (!window.confirm(
+      `Favorieten van dit project vervangen door \xAB${preset.name}\xBB (${preset.material_count} materialen)?`
+    )) {
+      return;
+    }
+    await apiPost("/api/floormap/material-favorite-presets", {
+      action: "apply",
+      preset_id: preset.preset_id,
+      building_id: buildingId
+    });
+    await loadFavoriteMaterials();
+    setStatus(`Preset \xAB${preset.name}\xBB toegepast`, "ok");
+  })().catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
+});
 materialIdEl?.addEventListener("change", () => {
   syncPendingRoomButtons();
   updateMaterialQuantityHint();
   updateMaterialSpectrumPreview();
+  if (materialFavoriteEl && materialIdEl.value) {
+    if (favoriteMaterials.some((m) => m.material_id === materialIdEl.value)) {
+      materialFavoriteEl.value = materialIdEl.value;
+    } else {
+      materialFavoriteEl.value = "";
+    }
+  }
+  syncFavoriteButtons();
 });
-function openMaterialCatalogEditor() {
-  const mat = selectedCatalogMaterial();
+function openMaterialCatalogEditor(opts) {
   const matUrl = new URL("/materials.html", location.origin);
-  if (mat?.material_id) matUrl.searchParams.set("material_id", mat.material_id);
-  if (mat?.catalog_id) matUrl.searchParams.set("q", mat.catalog_id);
+  if (opts?.newMaterial) {
+    matUrl.searchParams.set("new", "1");
+  } else {
+    const mat = selectedCatalogMaterial();
+    if (mat?.material_id) matUrl.searchParams.set("material_id", mat.material_id);
+    if (mat?.catalog_id) matUrl.searchParams.set("q", mat.catalog_id);
+  }
+  if (buildingId) matUrl.searchParams.set("building_id", buildingId);
   stashComponentDraftForCatalog();
   matUrl.searchParams.set("return", componentReturnPath());
   matUrl.searchParams.set("return_label", "Terug naar gevelcomponent");
@@ -6909,115 +7188,11 @@ async function restoreViewStateFromDraft(draft) {
     });
   }
 }
-function setCustomMatPanelOpen(open) {
-  if (!customMatPanelEl) return;
-  customMatPanelEl.classList.toggle("hidden", !open);
-  if (open) void ensureCustomMatRubrieken();
-}
-async function ensureCustomMatRubrieken() {
-  if (!customMatRubriekEl || !auth) return;
-  await ensureMaterialCategories();
-  if (customMatRubriekEl.options.length > 1) return;
-  customMatRubriekEl.replaceChildren();
-  const ph = document.createElement("option");
-  ph.value = "";
-  ph.textContent = "\u2014 kies rubriek \u2014";
-  customMatRubriekEl.appendChild(ph);
-  for (const c of materialCategoryMeta) {
-    if (c.rubriek_nr == null) continue;
-    const o = document.createElement("option");
-    o.value = String(c.rubriek_nr);
-    o.textContent = c.label || c.master_category;
-    customMatRubriekEl.appendChild(o);
-  }
-  const current = materialCategoryMeta.find((c) => c.master_category === (materialCategoryEl?.value || "").trim());
-  if (current?.rubriek_nr != null) customMatRubriekEl.value = String(current.rubriek_nr);
-}
 openMatCatalogBtn?.addEventListener("click", () => {
   openMaterialCatalogEditor();
 });
 customMatToggleBtn?.addEventListener("click", () => {
-  setCustomMatPanelOpen(true);
-  if (customMatNameEl && !customMatNameEl.value.trim()) {
-    customMatNameEl.value = (roomLabelInput?.value || "").trim();
-  }
-});
-customMatCancelBtn?.addEventListener("click", () => {
-  setCustomMatPanelOpen(false);
-});
-customMatForm?.addEventListener("submit", (ev) => {
-  ev.preventDefault();
-  void (async () => {
-    if (!auth?.token) throw new Error("Niet ingelogd");
-    const rubriek = Number(customMatRubriekEl?.value || "");
-    const name = (customMatNameEl?.value || "").trim();
-    const ra = Number(customMatRaEl?.value);
-    if (!Number.isInteger(rubriek) || rubriek < 1) throw new Error("Kies een rubriek");
-    if (!name) throw new Error("Naam is verplicht");
-    if (!Number.isFinite(ra) || ra < 0 || ra > 100) throw new Error("RA moet tussen 0 en 100 liggen");
-    const subsectionId = pendingRoom?.editingId || "";
-    setStatus("Eigen materiaal opslaan\u2026", "busy");
-    const data = await apiPost("/api/floormap/materials", {
-      name,
-      ra_dba: ra,
-      rubriek_nr: rubriek,
-      subsection_id: subsectionId || void 0
-    });
-    const master = data.material.master_category || materialCategoryMeta.find((c) => c.rubriek_nr === rubriek)?.master_category || "";
-    await ensureMaterialCategories();
-    if (materialCategoryEl && master) {
-      if (![...materialCategoryEl.options].some((o) => o.value === master)) {
-        const opt = document.createElement("option");
-        opt.value = master;
-        opt.textContent = master;
-        materialCategoryEl.appendChild(opt);
-      }
-      materialCategoryEl.value = master;
-      renderMaterialSubcategoryOptions();
-    }
-    if (materialEigenOnlyEl) {
-      materialEigenOnlyEl.checked = false;
-      syncEigenOnlyFilterUi();
-    }
-    if (materialFilterEl) materialFilterEl.value = "";
-    await loadMaterialsForCategory(master, "");
-    if (materialIdEl) {
-      if (![...materialIdEl.options].some((o) => o.value === data.material.material_id)) {
-        const opt = document.createElement("option");
-        opt.value = data.material.material_id;
-        opt.textContent = `${data.material.catalog_id} \xB7 ${data.material.name} \xB7 eigen`;
-        materialIdEl.appendChild(opt);
-        if (!catalogMaterials.some((m) => m.material_id === data.material.material_id)) {
-          catalogMaterials.push({
-            material_id: data.material.material_id,
-            catalog_id: data.material.catalog_id,
-            material_no: 0,
-            master_category: master,
-            name: data.material.name,
-            category: "",
-            thickness_mm: null,
-            ra_dba: data.material.ra_dba
-          });
-        }
-      }
-      materialIdEl.value = data.material.material_id;
-      materialIdEl.disabled = false;
-    }
-    updateMaterialSpectrumPreview();
-    syncPendingRoomButtons();
-    setCustomMatPanelOpen(false);
-    if (customMatNameEl) customMatNameEl.value = "";
-    if (data.assigned && subsectionId) {
-      markRoomTouched(subsectionId);
-      await loadRooms();
-      setStatus(`Materiaal \xAB${data.material.name}\xBB opgeslagen en gekoppeld aan component`, "ok");
-    } else {
-      setStatus(
-        `Materiaal \xAB${data.material.name}\xBB opgeslagen \u2014 kies Component opslaan om te koppelen`,
-        "ok"
-      );
-    }
-  })().catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
+  openMaterialCatalogEditor({ newMaterial: true });
 });
 function updateMaterialQuantityHint() {
   const hint = materialBlockEl?.querySelector(".hint:last-of-type") || materialBlockEl?.querySelector(".hint");
@@ -7179,7 +7354,7 @@ editNudgeRightBtn?.addEventListener("click", () => nudgeCurrent(0.01, 0));
 editNudgeUpBtn?.addEventListener("click", () => nudgeCurrent(0, -0.01));
 editNudgeDownBtn?.addEventListener("click", () => nudgeCurrent(0, 0.01));
 syncPendingRoomButtons();
-syncEigenOnlyFilterUi();
+syncFavoriteButtons();
 function connect() {
   setStatus("Connecting\u2026", "busy");
   setConnLed(false);

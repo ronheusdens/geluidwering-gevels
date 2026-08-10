@@ -107,6 +107,7 @@ var accountActiveEl = document.getElementById("admin-account-active");
 var accountMetaEl = document.getElementById("admin-account-meta");
 var accountEditTitleEl = document.getElementById("admin-account-edit-title");
 var accountResetPwBtn = document.getElementById("admin-account-reset-pw-btn");
+var accountDeleteBtn = document.getElementById("admin-account-delete-btn");
 var accountCancelBtn = document.getElementById("admin-account-cancel-btn");
 var accountResetOutEl = document.getElementById("admin-account-reset-out");
 var ws = null;
@@ -242,10 +243,16 @@ function fillAccountEdit(a) {
   if (accountEmailEl) accountEmailEl.value = a.email || "";
   if (accountActiveEl) accountActiveEl.checked = Boolean(a.is_active);
   if (accountEditTitleEl) accountEditTitleEl.textContent = `Account: ${a.username}`;
+  const projectCount = Number(a.project_count) || 0;
   if (accountMetaEl) {
     const cust = a.customer_name ? `Klantprofiel: ${a.customer_name}` : "Nog geen klantprofiel (alleen login)";
     const must = a.must_change_password ? " \xB7 moet wachtwoord wijzigen" : "";
-    accountMetaEl.textContent = `${cust} \xB7 aangemaakt ${a.created_at || "\u2014"}${must}`;
+    const proj = projectCount === 0 ? " \xB7 geen projecten (mag verwijderd)" : ` \xB7 ${projectCount} project${projectCount === 1 ? "" : "en"} (verwijderen geblokkeerd)`;
+    accountMetaEl.textContent = `${cust} \xB7 aangemaakt ${a.created_at || "\u2014"}${must}${proj}`;
+  }
+  if (accountDeleteBtn) {
+    accountDeleteBtn.disabled = projectCount > 0;
+    accountDeleteBtn.title = projectCount > 0 ? `Verwijderen niet mogelijk: ${projectCount} project(en)` : "Account en eventueel leeg klantprofiel verwijderen";
   }
   if (accountResetOutEl) {
     accountResetOutEl.hidden = true;
@@ -272,10 +279,12 @@ async function loadAccounts() {
     const activeBit = a.is_active ? "actief" : "geblokkeerd";
     const cust = a.customer_name || "\u2014";
     const must = a.must_change_password ? " \xB7 wachtwoord wijzigen" : "";
+    const projectCount = Number(a.project_count) || 0;
+    const projBit = projectCount === 0 ? " \xB7 geen projecten" : ` \xB7 ${projectCount} project${projectCount === 1 ? "" : "en"}`;
     return `
         <article class="panel admin-project-card${a.is_active ? "" : " admin-project-finished"}" data-user-id="${esc(a.user_id)}">
           <h3>${esc(a.display_name || a.username)} <span class="hint">(@${esc(a.username)})</span></h3>
-          <p class="hint">${esc(a.email || "geen e-mail")} \xB7 ${activeBit}${must}</p>
+          <p class="hint">${esc(a.email || "geen e-mail")} \xB7 ${activeBit}${must}${projBit}</p>
           <p class="hint">Klant: ${esc(cust)}</p>
           <div class="actions">
             <button type="button" class="admin-account-edit">Bewerken</button>
@@ -545,6 +554,31 @@ accountResetPwBtn?.addEventListener("click", () => {
     }
     setStatus("Wachtwoord gereset", "ok");
     await loadAccounts();
+  })().catch((e) => setStatus(String(e), "err"));
+});
+accountDeleteBtn?.addEventListener("click", () => {
+  void (async () => {
+    if (!auth?.token || !accountUserIdEl) return;
+    const uid = accountUserIdEl.value.trim();
+    const uname = accountUsernameEl?.value.trim() || "dit account";
+    if (!uid) return;
+    if (!confirm(
+      `Account \xAB${uname}\xBB definitief verwijderen?
+
+Alleen toegestaan als er nog geen projecten zijn. Dit kan niet ongedaan worden gemaakt.`
+    )) {
+      return;
+    }
+    setStatus("Account verwijderen\u2026", "busy");
+    const ret = await invokeString("API_AdminDeleteAccount", [auth.token, uid]);
+    if (ret.startsWith("ERROR")) {
+      setStatus(ret, "err");
+      return;
+    }
+    closeAccountEdit();
+    await loadAccounts();
+    await loadCustomers();
+    setStatus(`Account \xAB${uname}\xBB verwijderd`, "ok");
   })().catch((e) => setStatus(String(e), "err"));
 });
 bootstrapSession().catch((err) => {

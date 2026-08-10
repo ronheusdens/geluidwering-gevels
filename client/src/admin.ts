@@ -50,6 +50,7 @@ type AdminAccount = {
   must_change_password: boolean;
   customer_id: string | null;
   customer_name: string;
+  project_count: number | string;
   created_at: string;
 };
 
@@ -82,6 +83,7 @@ const accountActiveEl = document.getElementById("admin-account-active") as HTMLI
 const accountMetaEl = document.getElementById("admin-account-meta") as HTMLElement | null;
 const accountEditTitleEl = document.getElementById("admin-account-edit-title") as HTMLElement | null;
 const accountResetPwBtn = document.getElementById("admin-account-reset-pw-btn") as HTMLButtonElement | null;
+const accountDeleteBtn = document.getElementById("admin-account-delete-btn") as HTMLButtonElement | null;
 const accountCancelBtn = document.getElementById("admin-account-cancel-btn") as HTMLButtonElement | null;
 const accountResetOutEl = document.getElementById("admin-account-reset-out") as HTMLElement | null;
 
@@ -242,12 +244,24 @@ function fillAccountEdit(a: AdminAccount): void {
   if (accountEmailEl) accountEmailEl.value = a.email || "";
   if (accountActiveEl) accountActiveEl.checked = Boolean(a.is_active);
   if (accountEditTitleEl) accountEditTitleEl.textContent = `Account: ${a.username}`;
+  const projectCount = Number(a.project_count) || 0;
   if (accountMetaEl) {
     const cust = a.customer_name
       ? `Klantprofiel: ${a.customer_name}`
       : "Nog geen klantprofiel (alleen login)";
     const must = a.must_change_password ? " · moet wachtwoord wijzigen" : "";
-    accountMetaEl.textContent = `${cust} · aangemaakt ${a.created_at || "—"}${must}`;
+    const proj =
+      projectCount === 0
+        ? " · geen projecten (mag verwijderd)"
+        : ` · ${projectCount} project${projectCount === 1 ? "" : "en"} (verwijderen geblokkeerd)`;
+    accountMetaEl.textContent = `${cust} · aangemaakt ${a.created_at || "—"}${must}${proj}`;
+  }
+  if (accountDeleteBtn) {
+    accountDeleteBtn.disabled = projectCount > 0;
+    accountDeleteBtn.title =
+      projectCount > 0
+        ? `Verwijderen niet mogelijk: ${projectCount} project(en)`
+        : "Account en eventueel leeg klantprofiel verwijderen";
   }
   if (accountResetOutEl) {
     accountResetOutEl.hidden = true;
@@ -276,10 +290,15 @@ async function loadAccounts(): Promise<void> {
       const activeBit = a.is_active ? "actief" : "geblokkeerd";
       const cust = a.customer_name || "—";
       const must = a.must_change_password ? " · wachtwoord wijzigen" : "";
+      const projectCount = Number(a.project_count) || 0;
+      const projBit =
+        projectCount === 0
+          ? " · geen projecten"
+          : ` · ${projectCount} project${projectCount === 1 ? "" : "en"}`;
       return `
         <article class="panel admin-project-card${a.is_active ? "" : " admin-project-finished"}" data-user-id="${esc(a.user_id)}">
           <h3>${esc(a.display_name || a.username)} <span class="hint">(@${esc(a.username)})</span></h3>
-          <p class="hint">${esc(a.email || "geen e-mail")} · ${activeBit}${must}</p>
+          <p class="hint">${esc(a.email || "geen e-mail")} · ${activeBit}${must}${projBit}</p>
           <p class="hint">Klant: ${esc(cust)}</p>
           <div class="actions">
             <button type="button" class="admin-account-edit">Bewerken</button>
@@ -588,6 +607,32 @@ accountResetPwBtn?.addEventListener("click", () => {
     }
     setStatus("Wachtwoord gereset", "ok");
     await loadAccounts();
+  })().catch((e) => setStatus(String(e), "err"));
+});
+
+accountDeleteBtn?.addEventListener("click", () => {
+  void (async () => {
+    if (!auth?.token || !accountUserIdEl) return;
+    const uid = accountUserIdEl.value.trim();
+    const uname = accountUsernameEl?.value.trim() || "dit account";
+    if (!uid) return;
+    if (
+      !confirm(
+        `Account «${uname}» definitief verwijderen?\n\nAlleen toegestaan als er nog geen projecten zijn. Dit kan niet ongedaan worden gemaakt.`,
+      )
+    ) {
+      return;
+    }
+    setStatus("Account verwijderen…", "busy");
+    const ret = await invokeString("API_AdminDeleteAccount", [auth.token, uid]);
+    if (ret.startsWith("ERROR")) {
+      setStatus(ret, "err");
+      return;
+    }
+    closeAccountEdit();
+    await loadAccounts();
+    await loadCustomers();
+    setStatus(`Account «${uname}» verwijderd`, "ok");
   })().catch((e) => setStatus(String(e), "err"));
 });
 

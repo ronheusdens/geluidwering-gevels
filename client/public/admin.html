@@ -45,7 +45,7 @@
 
       <section class="panel">
         <h2>Opdrachtgever-accounts</h2>
-        <p class="hint">Inzien en aanpassen van login-accounts (niet engineer/admin). Wachtwoord reset geeft een tijdelijk wachtwoord.</p>
+        <p class="hint">Inzien en aanpassen van login-accounts (niet engineer/admin). Wachtwoord reset geeft een tijdelijk wachtwoord. Accounts zonder projecten kunnen worden verwijderd.</p>
         <div class="actions">
           <button type="button" id="admin-accounts-refresh-btn" class="secondary">Accounts vernieuwen</button>
         </div>
@@ -62,6 +62,7 @@
             <div class="actions">
               <button type="submit" id="admin-account-save-btn">Opslaan</button>
               <button type="button" id="admin-account-reset-pw-btn" class="secondary">Wachtwoord resetten</button>
+              <button type="button" id="admin-account-delete-btn" class="danger" disabled title="Alleen mogelijk als dit account nog geen projecten heeft">Verwijderen</button>
               <button type="button" id="admin-account-cancel-btn" class="secondary">Sluiten</button>
             </div>
             <p class="hint" id="admin-account-reset-out" hidden></p>
@@ -88,6 +89,6 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/admin.js?v=accounts-1"></script>
+  <script type="module" src="/admin.js?v=accounts-2"></script>
 </body>
 </html>

@@ -87,20 +87,22 @@ HTTP: `/api/floormap/sections`, `/api/floormap/subsection` (save), `/api/floorma
 
 ### Step 5 — Consultant: material assignment (implemented)
 
-**Catalog:** `app_gevelwering.material` — primarily `catalogusGG.pdf` seed (`source = catalogusGG.pdf`), plus engineer **eigen** rows (`source = eigen`, ids `E#####`).
+**Catalog:** `app_gevelwering.material` — one shared catalog; one-time `catalogusGG.pdf` seed, then app-owned (`source = app` for new rows, ids `A#####`).
 
 | Action | Path |
 |--------|------|
-| Admin CRUD + filter «Eigen materialen» | `/materials.html` → `API_AdminListMaterials(…, source_filter$)` |
-| Create eigen from façade component | `/floormap.html` → `POST /api/floormap/materials` `{ name, ra_dba, rubriek_nr, subsection_id? }` |
-| Pick list on façade | `GET /api/floormap/materials?master_category=&category=&q=&source=eigen` |
+| Admin CRUD | `/materials.html` → `API_AdminListMaterials` (rubriek/subrubriek; no eigen/catalog UX split) |
+| Create from façade | `/floormap.html` → `POST /api/floormap/materials` `{ name, ra_dba, rubriek_nr, subrubriek_nr?, subsection_id? }` |
+| Pick list on façade | `GET /api/floormap/materials?master_category=&category=&q=` + favorites dropdown |
+| Project favorites | `GET/POST/DELETE /api/floormap/material-favorites?building_id=` |
+| Named presets | `/api/floormap/material-favorite-presets` (save / apply / rename / delete) |
 | Bind to one contour | **Component opslaan** (active subsection `analysis.material_id`) |
 | Bind to compose result | Choose material → **Toepassen & opslaan** |
 | GA vlak step | Read-only material from façade component; no catalog/create UI |
 
-Do **not** invent a separate “custom” rubriek: place eigen materials in the existing GG rubriek/subrubriek (or Diversen). Seed on `./start.sh` deletes only non-`eigen` catalog rows.
+Do **not** invent a separate “custom” rubriek: place new materials in the existing GG rubriek/subrubriek (or Diversen). `./start.sh` seeds only when the catalog is empty.
 
-Deep-link from façade: `/materials.html?material_id=…&return=…` (**Materiaalcatalogus…** on floormap).
+Deep-link from façade: `/materials.html?material_id=…&building_id=…&return=…` (**Materiaalcatalogus…** on floormap).
 
 ---
 

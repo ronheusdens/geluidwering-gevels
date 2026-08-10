@@ -1,4 +1,4 @@
-import { loadAuth, storeAuth as persistAuth, syncSessionCookie } from "./auth-store";
+import { loadAuth, storeAuth as persistAuth, syncSessionCookie, apiAuthHeaders } from "./auth-store";
 import { resolveBppWsUrl } from "./ws-url";
 import { initPasswordToggles } from "./password-toggle";
 import {
@@ -57,6 +57,10 @@ const AUTH_KEY = "app_gevelwering_admin_auth";
 const bootParams = new URLSearchParams(location.search);
 const deepMaterialId = (bootParams.get("material_id") || bootParams.get("id") || "").trim();
 const deepQ = (bootParams.get("q") || "").trim();
+const deepNew =
+  bootParams.get("new") === "1" ||
+  bootParams.get("new") === "true" ||
+  bootParams.get("mode") === "new";
 const returnHref = safeSameOriginPath(bootParams.get("return"));
 const returnLabel = (bootParams.get("return_label") || "Terug naar toekennen vlak (gevel)").trim();
 const returnLinkEl = document.getElementById("mat-return-link") as HTMLAnchorElement | null;
@@ -65,6 +69,19 @@ const pickBtnEl = document.getElementById("mat-pick-btn") as HTMLButtonElement |
 const pickBtnEditorEl = document.getElementById("mat-pick-btn-editor") as HTMLButtonElement | null;
 const pickHintEl = document.getElementById("mat-pick-hint") as HTMLElement | null;
 const PICK_STORAGE_KEY = "app-gevelwering-material-pick";
+
+function buildingIdFromContext(): string {
+  const direct = (bootParams.get("building_id") || "").trim();
+  if (direct) return direct;
+  if (!returnHref) return "";
+  try {
+    return new URL(returnHref, location.origin).searchParams.get("building_id")?.trim() || "";
+  } catch {
+    return "";
+  }
+}
+
+const contextBuildingId = buildingIdFromContext();
 
 function safeSameOriginPath(raw: string | null): string | null {
   if (!raw) return null;
@@ -141,6 +158,117 @@ function pickMaterialForCaller(): void {
   location.assign(returnHref);
 }
 
+async function httpJson<T>(url: string, init?: RequestInit): Promise<T> {
+  if (!auth?.token) throw new Error("Not signed in");
+  const res = await fetch(url, {
+    credentials: "include",
+    ...init,
+    headers: {
+      ...apiAuthHeaders(auth.token, Boolean(init?.body)),
+      ...(init?.headers || {}),
+    },
+  });
+  const body = (await res.json()) as T & { ok?: boolean; error?: string };
+  if (!res.ok || body.ok === false) {
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  return body;
+}
+
+async function syncFavoriteCheckbox(): Promise<void> {
+  if (!favoriteWrapEl || !favoriteEl) return;
+  if (!contextBuildingId) {
+    favoriteWrapEl.classList.add("hidden");
+    favoriteEl.checked = false;
+    return;
+  }
+  favoriteWrapEl.classList.remove("hidden");
+  const mid = (selectedId || idEl.value || "").trim();
+  if (!mid || !auth?.token) {
+    favoriteEl.checked = false;
+    return;
+  }
+  try {
+    const data = await httpJson<{ materials: Array<{ material_id: string }> }>(
+      `/api/floormap/material-favorites?building_id=${encodeURIComponent(contextBuildingId)}`,
+    );
+    favoriteEl.checked = (data.materials || []).some((m) => m.material_id === mid);
+  } catch {
+    favoriteEl.checked = false;
+  }
+}
+
+async function setFavoriteForSelection(on: boolean): Promise<void> {
+  if (!contextBuildingId || !auth?.token) return;
+  const mid = (selectedId || idEl.value || "").trim();
+  if (!mid) return;
+  if (on) {
+    await httpJson("/api/floormap/material-favorites", {
+      method: "POST",
+      body: JSON.stringify({ building_id: contextBuildingId, material_id: mid }),
+    });
+  } else {
+    await httpJson(
+      `/api/floormap/material-favorites?building_id=${encodeURIComponent(contextBuildingId)}&material_id=${encodeURIComponent(mid)}`,
+      { method: "DELETE" },
+    );
+  }
+}
+
+async function loadPresets(): Promise<void> {
+  if (!presetListEl || !presetEmptyEl || !auth?.token) return;
+  try {
+    const data = await httpJson<{
+      presets: Array<{ preset_id: string; name: string; material_count: number }>;
+    }>("/api/floormap/material-favorite-presets");
+    const presets = data.presets || [];
+    presetListEl.replaceChildren();
+    presetEmptyEl.classList.toggle("hidden", presets.length > 0);
+    for (const p of presets) {
+      const li = document.createElement("li");
+      li.className = "mat-preset-item";
+      const label = document.createElement("span");
+      label.textContent = `${p.name} (${p.material_count})`;
+      const renameBtn = document.createElement("button");
+      renameBtn.type = "button";
+      renameBtn.className = "secondary";
+      renameBtn.textContent = "Hernoemen";
+      renameBtn.addEventListener("click", () => {
+        const name = window.prompt("Nieuwe preset-naam:", p.name);
+        if (!name?.trim() || name.trim() === p.name) return;
+        void httpJson("/api/floormap/material-favorite-presets", {
+          method: "POST",
+          body: JSON.stringify({ action: "rename", preset_id: p.preset_id, name: name.trim() }),
+        })
+          .then(() => loadPresets())
+          .then(() => setStatus(`Preset hernoemd naar «${name.trim()}»`, "ok"))
+          .catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
+      });
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "danger secondary";
+      delBtn.textContent = "Verwijderen";
+      delBtn.addEventListener("click", () => {
+        if (!window.confirm(`Preset «${p.name}» verwijderen?`)) return;
+        void httpJson("/api/floormap/material-favorite-presets", {
+          method: "POST",
+          body: JSON.stringify({ action: "delete", preset_id: p.preset_id }),
+        })
+          .then(() => loadPresets())
+          .then(() => setStatus(`Preset «${p.name}» verwijderd`, "ok"))
+          .catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
+      });
+      li.append(label, renameBtn, delBtn);
+      presetListEl.appendChild(li);
+    }
+  } catch (err) {
+    presetListEl.replaceChildren();
+    presetEmptyEl.classList.remove("hidden");
+    presetEmptyEl.textContent =
+      err instanceof Error ? `Presets laden mislukt: ${err.message}` : "Presets laden mislukt";
+  }
+}
+
 const connBarEl = document.getElementById("mat-conn-bar") as HTMLElement;
 const connLedEl = document.getElementById("mat-conn-led") as HTMLElement;
 const connStatusEl = document.getElementById("mat-conn-status") as HTMLElement;
@@ -154,7 +282,6 @@ const filterForm = document.getElementById("mat-filter-form") as HTMLFormElement
 const qEl = document.getElementById("mat-q") as HTMLInputElement;
 const categoryEl = document.getElementById("mat-category") as HTMLSelectElement;
 const subcategoryFilterEl = document.getElementById("mat-subcategory") as HTMLSelectElement;
-const sourceFilterEl = document.getElementById("mat-source-filter") as HTMLSelectElement;
 const pagerLabelEl = document.getElementById("mat-pager-label") as HTMLElement;
 const prevBtn = document.getElementById("mat-prev-btn") as HTMLButtonElement;
 const nextBtn = document.getElementById("mat-next-btn") as HTMLButtonElement;
@@ -172,6 +299,10 @@ const catEl = document.getElementById("mat-cat") as HTMLSelectElement;
 const sourceRefEl = document.getElementById("mat-source-ref") as HTMLInputElement;
 const sourceEl = document.getElementById("mat-source") as HTMLSelectElement | HTMLInputElement;
 const spectrumOkEl = document.getElementById("mat-spectrum-ok") as HTMLInputElement;
+const favoriteWrapEl = document.getElementById("mat-fav-wrap") as HTMLElement | null;
+const favoriteEl = document.getElementById("mat-favorite") as HTMLInputElement | null;
+const presetListEl = document.getElementById("mat-preset-list") as HTMLUListElement | null;
+const presetEmptyEl = document.getElementById("mat-preset-empty") as HTMLElement | null;
 const thickEl = document.getElementById("mat-thick") as HTMLInputElement;
 const weightEl = document.getElementById("mat-weight") as HTMLInputElement;
 const raEl = document.getElementById("mat-ra") as HTMLInputElement;
@@ -241,6 +372,8 @@ function showAdmin(info: AuthInfo): void {
   loginPanelEl.classList.add("hidden");
   panelEl.classList.remove("hidden");
   userLabelEl.textContent = `Signed in as ${info.display_name || info.username}`;
+  if (favoriteWrapEl) favoriteWrapEl.classList.toggle("hidden", !contextBuildingId);
+  void loadPresets();
 }
 
 function send(type: string, payload: Record<string, unknown>, wantType: string): Promise<Envelope> {
@@ -382,28 +515,30 @@ function listCategoryFilter(): string {
 }
 
 function ensureSourceOption(value: string): void {
-  const v = (value || "eigen").trim() || "eigen";
+  const v = (value || "app").trim() || "app";
+  const normalized = v === "eigen" ? "app" : v;
   if (sourceEl instanceof HTMLSelectElement) {
-    if (![...sourceEl.options].some((o) => o.value === v)) {
+    if (![...sourceEl.options].some((o) => o.value === normalized)) {
       const opt = document.createElement("option");
-      opt.value = v;
-      opt.textContent = v;
+      opt.value = normalized;
+      opt.textContent = normalized;
       sourceEl.appendChild(opt);
     }
-    sourceEl.value = v;
+    sourceEl.value = normalized;
   } else {
-    sourceEl.value = v;
+    sourceEl.value = normalized;
   }
 }
 
-/** Custom catalog ids (P…/E…, not DGMR D…) must use source=eigen so ./start.sh seed keeps them. */
+/** App-owned rows use source=app (A#####). DGMR D… stay on catalogusGG.pdf. */
 function resolveSaveSource(): string {
   const cid = catalogIdEl.value.trim().toUpperCase();
   const isNew = !idEl.value.trim();
-  let src = (sourceEl.value || "").trim() || "eigen";
-  if (isNew) src = "eigen";
+  let src = (sourceEl.value || "").trim() || "app";
+  if (src === "eigen") src = "app";
+  if (isNew) src = "app";
   if ((src === "catalogusGG.pdf" || src === "GL.cat") && cid && !cid.startsWith("D")) {
-    src = "eigen";
+    src = "app";
   }
   ensureSourceOption(src);
   return src;
@@ -420,7 +555,7 @@ function clearEditor(): void {
   nameEl.value = "";
   catEl.value = "";
   sourceRefEl.value = "";
-  ensureSourceOption("eigen");
+  ensureSourceOption("app");
   spectrumOkEl.checked = true;
   thickEl.value = "";
   weightEl.value = "";
@@ -441,6 +576,8 @@ function clearEditor(): void {
   editorTitleEl.textContent = "New material";
   deleteBtn.disabled = true;
   syncPickUi();
+  if (favoriteEl) favoriteEl.checked = false;
+  if (favoriteWrapEl) favoriteWrapEl.classList.toggle("hidden", !contextBuildingId);
 }
 
 function fillEditor(m: Material): void {
@@ -467,7 +604,7 @@ function fillEditor(m: Material): void {
     catEl.value = m.category;
   }
   sourceRefEl.value = m.source_ref || "";
-  ensureSourceOption(m.source || "eigen");
+  ensureSourceOption(m.source || "app");
   spectrumOkEl.checked = m.spectrum_ok === "true" || m.spectrum_ok === "t";
   thickEl.value = m.thickness_mm || "";
   weightEl.value = m.weight_kg_m2 || "";
@@ -489,6 +626,7 @@ function fillEditor(m: Material): void {
   deleteBtn.disabled = !m.material_id;
   highlightSelection();
   syncPickUi();
+  void syncFavoriteCheckbox();
 }
 
 function highlightSelection(): void {
@@ -555,7 +693,7 @@ async function loadList(preferId?: string | null): Promise<void> {
     listCategoryFilter(),
     String(lim),
     String(offset),
-    (sourceFilterEl?.value || "").trim(),
+    "",
   ]);
   if (ret.startsWith("ERROR")) {
     setStatus(ret, "err");
@@ -566,17 +704,13 @@ async function loadList(preferId?: string | null): Promise<void> {
   total = Number(parsed.total) || 0;
   listRows = parsed.materials ?? [];
   tbodyEl.innerHTML = listRows
-    .map((m) => {
-      const eigen = (m.source || "").trim().toLowerCase() === "eigen";
-      const nameCell = eigen
-        ? `${esc(m.name)} <span class="mat-eigen-badge">eigen</span>`
-        : esc(m.name);
-      return `
-      <tr data-id="${esc(m.material_id)}" role="option" tabindex="-1" title="Dubbelklik om te bewerken"${eigen ? ' class="mat-row-eigen"' : ""}>
+    .map(
+      (m) => `
+      <tr data-id="${esc(m.material_id)}" role="option" tabindex="-1" title="Dubbelklik om te bewerken">
         <td data-field="mat-catalog-id">${esc(m.catalog_id || "")}</td>
         <td data-field="mat-master">${esc(m.master_category || "")}</td>
         <td data-field="mat-cat">${esc(m.category || "")}</td>
-        <td class="mat-name-cell" data-field="mat-name">${nameCell}</td>
+        <td class="mat-name-cell" data-field="mat-name">${esc(m.name)}</td>
         <td data-field="mat-thick">${esc(m.thickness_mm || "")}</td>
         <td data-field="mat-weight">${esc(m.weight_kg_m2 || "")}</td>
         <td data-field="mat-ra">${esc(m.ra_dba || "")}</td>
@@ -590,8 +724,8 @@ async function loadList(preferId?: string | null): Promise<void> {
         <td data-field="mat-rw">${esc(m.rw_db || "")}</td>
         <td data-field="mat-c">${esc(m.c_db || "")}</td>
         <td data-field="mat-ctr">${esc(m.ctr_db || "")}</td>
-      </tr>`;
-    })
+      </tr>`,
+    )
     .join("");
   updatePager();
 
@@ -607,9 +741,18 @@ async function loadList(preferId?: string | null): Promise<void> {
   }
 }
 
-/** Deep-link from GA: open editor for a specific material_id. */
+/** Deep-link from GA/floormap: open editor for a material, or start a new one. */
 async function applyDeepLink(): Promise<void> {
-  if (!auth?.token || !deepMaterialId) return;
+  if (!auth?.token) return;
+  if (deepNew && !deepMaterialId) {
+    await loadList();
+    clearEditor();
+    editorForm.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    nameEl.focus({ preventScroll: true });
+    setStatus("Nieuw materiaal — vul rubriek, subrubriek, spectra en RA in", "ok");
+    return;
+  }
+  if (!deepMaterialId) return;
   if (deepQ && !qEl.value.trim()) qEl.value = deepQ;
   setStatus("Loading material…", "busy");
   const ret = await invokeString("API_AdminGetMaterial", [auth.token, deepMaterialId]);
@@ -666,7 +809,7 @@ async function bootstrapSession(): Promise<void> {
       const info = JSON.parse(validated) as AuthInfo;
       if (info.username === "admin") {
         showAdmin({ token: stored.token, username: info.username, display_name: info.display_name });
-        if (deepMaterialId) await applyDeepLink();
+        if (deepMaterialId || deepNew) await applyDeepLink();
         else await loadList();
         return;
       }
@@ -695,7 +838,7 @@ loginForm.addEventListener("submit", async (ev) => {
     }
     showAdmin(info);
     offset = 0;
-    if (deepMaterialId) await applyDeepLink();
+    if (deepMaterialId || deepNew) await applyDeepLink();
     else await loadList();
     setStatus("Admin signed in", "ok");
   } catch (err) {
@@ -751,6 +894,26 @@ newBtn.addEventListener("click", () => {
 });
 
 clearBtn.addEventListener("click", () => clearEditor());
+
+favoriteEl?.addEventListener("change", () => {
+  if (!favoriteEl || !contextBuildingId) return;
+  if (!selectedId && !idEl.value.trim()) {
+    favoriteEl.checked = false;
+    setStatus("Sla het materiaal eerst op voordat je favoriet zet", "err");
+    return;
+  }
+  void setFavoriteForSelection(favoriteEl.checked)
+    .then(() =>
+      setStatus(
+        favoriteEl.checked ? "Toegevoegd aan meest gebruikt" : "Verwijderd uit meest gebruikt",
+        "ok",
+      ),
+    )
+    .catch((err) => {
+      favoriteEl.checked = !favoriteEl.checked;
+      setStatus(err instanceof Error ? err.message : String(err), "err");
+    });
+});
 
 pickBtnEl?.addEventListener("click", () => pickMaterialForCaller());
 pickBtnEditorEl?.addEventListener("click", () => pickMaterialForCaller());
@@ -838,8 +1001,26 @@ editorForm.addEventListener("submit", async (ev) => {
       return;
     }
     const saved = JSON.parse(ret) as { material_id: string; created: boolean };
+    const wantFav = Boolean(favoriteEl?.checked && contextBuildingId);
     setStatus(saved.created ? "Material created" : "Material updated", "ok");
     await loadList(saved.material_id || null);
+    if (wantFav && saved.material_id) {
+      try {
+        await httpJson("/api/floormap/material-favorites", {
+          method: "POST",
+          body: JSON.stringify({
+            building_id: contextBuildingId,
+            material_id: saved.material_id,
+          }),
+        });
+        if (favoriteEl) favoriteEl.checked = true;
+      } catch (favErr) {
+        setStatus(
+          `Opgeslagen, maar favoriet mislukt: ${favErr instanceof Error ? favErr.message : String(favErr)}`,
+          "err",
+        );
+      }
+    }
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   } finally {

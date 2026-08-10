@@ -203,10 +203,11 @@ ALTER TABLE app_gevelwering.building
 | `API_AdminListCustomers(token$)` | admin-only customer list with outstanding + drawing counts |
 | `API_AdminListCustomerProjects(token$, customer_id$)` | admin-only all projects for one customer |
 | `API_AdminUpdateProjectStatus(token$, building$, status$)` | admin-only update of `building.project_status` |
-| `API_AdminListAccounts(token$)` | admin-only opdrachtgever logins (`service_user`, niet engineer/admin) + optioneel `customer` |
+| `API_AdminListAccounts(token$)` | admin-only opdrachtgever logins (`service_user`, niet engineer/admin) + optioneel `customer` + `project_count` |
 | `API_AdminUpdateAccount(token$, user_id$, display_name$, email$, is_active$)` | admin-only: weergavenaam, e-mail, actief; geen username/rol |
 | `API_AdminResetAccountPassword(token$, user_id$)` | admin-only: tijdelijk wachtwoord + `must_change_password` |
-| `API_AdminListMaterials(token$, q$, category$, limit$, offset$, source_filter$)` | admin material catalog search (paginated); `source_filter$` = `eigen` \| `catalogus` \| empty |
+| `API_AdminDeleteAccount(token$, user_id$)` | admin-only: verwijder opdrachtgever-login (+ leeg klantprofiel) alleen als `project_count = 0` |
+| `API_AdminListMaterials(token$, q$, category$, limit$, offset$, source_filter$)` | admin material catalog search (paginated); `source_filter$` optional metadata (`app` / `catalogus`); empty = all |
 | `API_AdminGetMaterial(token$, material_id$)` | admin load one material |
 | `API_AdminSaveMaterial(token$, …)` | admin insert/update material + R spectrum |
 | `API_AdminDeleteMaterial(token$, material_id$)` | admin delete material |
@@ -293,23 +294,34 @@ Engineer-only room geometry on committed `FLOORMAP` sections (customer progress 
 
 APIs: Basic++ `API_ListFloormapSections`, `API_SaveFloormapScale`; HTTP `/api/floormap/*` for section list, subsection CRUD (JSON polylines), scale + room recompute, materials list/create, and **`POST /api/floormap/subsections/reorder`** (`section_id` + `ordered_ids`) for persistent list order via `drawing_subsection.sort_order`. UI: `/floormap.html` — rooms on `FLOORMAP`; façade components + **compositie (+/−)** on elevation regions; ▲/▼ in the saved-components list. Material/compose workflow: [overview §5](app-gevelwering-overview.md#5-workflow-huidige-implementatie).
 
-### DDL 0.2.12+ — material catalog (catalogusGG + eigen)
+### DDL 0.2.12+ — material catalog (shared, app-owned after seed)
 
-Shared reference catalog for façade sound reduction. Primary seed: DGMR **catalogusGG.pdf** (`source = 'catalogusGG.pdf'`). Legacy GL.cat seed may still run earlier in `./start.sh`.
+Shared reference catalog for façade sound reduction. One-time seed: DGMR **catalogusGG.pdf** (`source = 'catalogusGG.pdf'`). After first load the table is **app-owned** — `./start.sh` does not DROP/re-seed when rows exist (`app_meta.material_catalog_seeded`).
 
 | Object | Storage | Notes |
 |--------|---------|--------|
-| Material | `app_gevelwering.material` | Catalog + engineer rows |
-| Identity | `(source, catalog_id)` unique; also `catalog_index` / `material_no` | Catalog ids `D#####`; eigen ids `E#####` |
-| Source | `source` | `catalogusGG.pdf` \| `GL.cat` \| **`eigen`** |
+| Material | `app_gevelwering.material` | One shared catalog |
+| Identity | `(source, catalog_id)` unique; also `catalog_index` / `material_no` | Seed ids `D#####`; app-added ids `A#####` |
+| Source | `source` | `catalogusGG.pdf` \| `GL.cat` \| **`app`** (legacy `eigen` treated as app) |
 | Taxonomy | `rubriek_nr` 1–9, `subrubriek_nr`, `master_category`, `category` | GG taxonomy (`material-taxonomy.mjs`); no separate “custom” rubriek |
 | Spectrum | `r_63_hz` … `r_4000_hz`, `ra_dba`, `rw_db` / `c_db` / `ctr_db` | Octave-band R + single-number ratings |
 
-**Seed safety:** `sql/app_gevelwering_0_2_14_catalogus_gg_seed.sql` deletes only `source IN ('catalogusGG.pdf','GL.cat')` — eigen and other non-catalog rows (e.g. `P#####`) are kept. Rubriek assign (`0_2_21_assign_rubriek.py`) skips `source = eigen`. Admin save forces `source = eigen` for new rows and for catalog ids that are not DGMR `D#####`.
+**Seed safety:** catalogusGG seed runs only when `material` is empty and `material_catalog_seeded` is unset. DDL `0_2_14` DROP is skipped when the table already has rows.
 
-**Admin CRUD UI:** `/materials.html` — `API_AdminListMaterials(…, source_filter$)` with `eigen` \| `catalogus` \| empty; badge for eigen rows. New materials default `source = eigen`.
+**Admin CRUD UI:** `/materials.html` — unified list (no eigen/catalog split); editor preselects rubriek/subrubriek; new rows default `source = app`. With `building_id` in query/return-context: checkbox «Meest gebruikt in dit project». Lightweight preset rename/delete.
 
-**Engineer assignment:** façade pick list `GET /api/floormap/materials`; create eigen `POST /api/floormap/materials` from `/floormap.html` (not GA); bind via subsection `analysis.material_id` / compose apply. GA vlak UI shows material read-only. Workflow: [overview §5](app-gevelwering-overview.md#5-workflow-huidige-implementatie).
+**Engineer assignment:** façade pick list `GET /api/floormap/materials`; create `POST /api/floormap/materials` from `/floormap.html`; bind via subsection `analysis.material_id` / compose apply. Favorites: `GET/POST/DELETE /api/floormap/material-favorites`; presets: `/api/floormap/material-favorite-presets`. GA vlak UI shows material read-only. Workflow: [overview §5](app-gevelwering-overview.md#5-workflow-huidige-implementatie).
+
+### DDL 0.2.28 — project favorites + presets
+
+| Object | Storage | Notes |
+|--------|---------|--------|
+| `app_meta` | key/value | e.g. `material_catalog_seeded=1` |
+| `building_material_favorite` | `(building_id, material_id)` PK | Per-project «meest gebruikt»; `sort_order` |
+| `material_favorite_preset` | named template | Unique `name`; optional `created_by` |
+| `material_favorite_preset_item` | `(preset_id, material_id)` | Materials in a preset |
+
+Apply preset replaces the current project's favorites (UI confirms). No boolean on `material` itself.
 
 ### DDL 0.2.25 — multi-variant (clone / compare)
 
@@ -352,3 +364,4 @@ Product workflow: [overview §5.4](app-gevelwering-overview.md#54-varianten-mult
 | **0.2.16** | 2026-07-22 | GA nieuwbouw-model: `variant`, `verblijfsgebied`, `verblijfsruimte` (↔ floormap subsection), `vlak`, `vlak_element`; engineer CRUD APIs |
 | **0.2.25** | 2026-08-01 | Multi-variant: `verblijfsruimte.variant_id`; UNIQUE `(variant_id, subsection_id)`; `API_CloneVariant`, `API_CompareVariants` |
 | **0.2.27** | 2026-08-02 | `vlak.orientatie` (kompascodes); List/Save/Clone + GA-UI + rapport |
+| **0.2.28** | 2026-08-09 | `app_meta`; one-time material seed; `building_material_favorite` + named presets |

@@ -108,7 +108,6 @@ var saveBtn = document.getElementById("save-btn");
 var reloadBtn = document.getElementById("reload-btn");
 var tabSigninBtn = document.getElementById("tab-signin");
 var tabRegisterBtn = document.getElementById("tab-register");
-var userLabel = document.getElementById("user-label");
 var pageTitle = document.getElementById("page-title");
 var pageLede = document.getElementById("page-lede");
 var projectListEl = document.getElementById("project-list");
@@ -140,7 +139,8 @@ var projectProgressStepsEl = document.getElementById("project-progress-steps");
 var projectProgressCaptionEl = document.getElementById("project-progress-caption");
 var projectReportSlotEl = document.getElementById("project-report-slot");
 var projectReportHintEl = document.getElementById("project-report-hint");
-var downloadReportBtn = document.getElementById("download-report-btn");
+var downloadResultsBtn = document.getElementById("download-results-btn");
+var downloadRapportageBtn = document.getElementById("download-rapportage-btn");
 var emailReportBtn = document.getElementById("email-report-btn");
 var inboxPanelEl = document.getElementById("inbox-panel");
 var inboxListEl = document.getElementById("inbox-list");
@@ -242,14 +242,14 @@ function kindLabel(kind) {
 }
 function renderInboxMessage(item) {
   const label = kindLabel(item.report_kind);
-  return `De ${label} rapportage (PDF) is beschikbaar. <a href="#" id="inbox-fetch-link">PDF ophalen</a> (of <a href="#" id="inbox-email-link">laten e-mailen</a>).`;
+  return `De ${label} rekenresultaten zijn beschikbaar. <a href="#" id="inbox-fetch-link">Download rekenresultaten</a> (of <a href="#" id="inbox-email-link">laten e-mailen</a>).`;
 }
 function bindInboxMessageLinks() {
   const fetchLink = document.getElementById("inbox-fetch-link");
   const emailLink = document.getElementById("inbox-email-link");
   fetchLink?.addEventListener("click", (ev) => {
     ev.preventDefault();
-    downloadReportBtn.click();
+    downloadResultsBtn.click();
   });
   emailLink?.addEventListener("click", (ev) => {
     ev.preventDefault();
@@ -296,13 +296,19 @@ async function refreshGlobalInbox() {
     actions.className = "actions";
     const dlBtn = document.createElement("button");
     dlBtn.type = "button";
-    dlBtn.textContent = "PDF ophalen";
+    dlBtn.textContent = "Download rekenresultaten";
     dlBtn.title = item.filename.endsWith(".pdf") ? item.filename : item.filename.replace(/\.html$/i, ".pdf");
     dlBtn.addEventListener("click", () => {
       void downloadInboxItem(item).catch((err) => {
         setStatus(err instanceof Error ? err.message : String(err), "err");
       });
     });
+    const rapportBtn = document.createElement("button");
+    rapportBtn.type = "button";
+    rapportBtn.className = "secondary";
+    rapportBtn.textContent = "Download rapportage";
+    rapportBtn.disabled = true;
+    rapportBtn.title = "Nog niet beschikbaar \u2014 volgt later";
     const emailBtn = document.createElement("button");
     emailBtn.type = "button";
     emailBtn.className = "secondary";
@@ -313,6 +319,7 @@ async function refreshGlobalInbox() {
       });
     });
     actions.appendChild(dlBtn);
+    actions.appendChild(rapportBtn);
     actions.appendChild(emailBtn);
     li.appendChild(actions);
     inboxListEl.appendChild(li);
@@ -324,7 +331,8 @@ function escapeHtml(s) {
 async function refreshProjectInbox() {
   cachedReports = [];
   activeInboxItem = null;
-  downloadReportBtn.disabled = true;
+  downloadResultsBtn.disabled = true;
+  if (downloadRapportageBtn) downloadRapportageBtn.disabled = true;
   if (emailReportBtn) emailReportBtn.disabled = true;
   const projectId = activeProjectId();
   if (!auth?.token || !projectId) {
@@ -363,7 +371,8 @@ async function refreshProjectInbox() {
     return;
   }
   projectReportSlotEl.hidden = false;
-  downloadReportBtn.disabled = false;
+  downloadResultsBtn.disabled = false;
+  if (downloadRapportageBtn) downloadRapportageBtn.disabled = true;
   if (emailReportBtn) emailReportBtn.disabled = false;
   if (projectReportHintEl) {
     projectReportHintEl.innerHTML = renderInboxMessage(activeInboxItem);
@@ -401,11 +410,12 @@ async function refreshProjectReportsLegacy() {
     return;
   }
   projectReportSlotEl.hidden = false;
-  downloadReportBtn.disabled = false;
+  downloadResultsBtn.disabled = false;
+  if (downloadRapportageBtn) downloadRapportageBtn.disabled = true;
   if (emailReportBtn) emailReportBtn.disabled = true;
   if (projectReportHintEl) {
     const label = latest.filename.endsWith(".pdf") ? latest.filename : latest.filename.replace(/\.html$/i, ".pdf");
-    projectReportHintEl.textContent = `PDF-rapport gereed: ${label}`;
+    projectReportHintEl.textContent = `Rekenresultaten gereed: ${label}`;
   }
 }
 async function markInboxRead(inboxId) {
@@ -454,7 +464,7 @@ async function downloadInboxItem(item) {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
-  setStatus(`PDF gedownload: ${downloadName}`, "ok");
+  setStatus(`Rekenresultaten gedownload: ${downloadName}`, "ok");
   await refreshGlobalInbox();
   if (activeProjectId() === item.building_id) await refreshProjectInbox();
 }
@@ -518,14 +528,17 @@ function showLogin() {
   pageLede.textContent = "Log in om uw akoestische projecten te beheren.";
   document.title = "Geluidwering Gevels \u2014 Opdrachtgever";
 }
+function loggedInLabel(info) {
+  const name = info.display_name?.trim();
+  return name ? `Ingelogd als ${name} (${info.username})` : `Ingelogd als ${info.username}`;
+}
 async function showApp(info) {
   auth = info;
   storeAuth2(info);
   loginPanel.classList.add("hidden");
   appPanel.classList.remove("hidden");
   projectDetailPanel.classList.add("hidden");
-  const label = info.display_name || info.username;
-  userLabel.textContent = `Ingelogd als ${label}`;
+  setStatus(loggedInLabel(info), "ok");
   profileServiceEmailEl.textContent = info.email ? `Account-e-mail: ${info.email}` : "Geen account-e-mail ingesteld.";
   const mustChange = !!info.must_change_password;
   profilePwWarningEl.classList.toggle("hidden", !mustChange);
@@ -636,7 +649,6 @@ async function bootstrapSession() {
     }
     const info = JSON.parse(validated);
     await showApp(info);
-    if (!lastProjectId) setStatus(`Ingelogd als ${info.display_name || info.username}`, "ok");
   } else {
     showLogin();
   }
@@ -956,7 +968,6 @@ loginForm.addEventListener("submit", async (ev) => {
     }
     const info = JSON.parse(ret);
     await showApp(info);
-    if (!lastProjectId) setStatus(`Ingelogd als ${info.display_name || info.username}`, "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   } finally {
@@ -1250,7 +1261,7 @@ drawingFileInput.addEventListener("change", async () => {
 submitDrawingsBtn.addEventListener("click", () => {
   void submitDrawingsForReview();
 });
-downloadReportBtn.addEventListener("click", () => {
+downloadResultsBtn.addEventListener("click", () => {
   void (async () => {
     if (!auth?.token) return;
     try {
@@ -1261,7 +1272,7 @@ downloadReportBtn.addEventListener("click", () => {
       const projectId = activeProjectId();
       const latest = cachedReports.find((r) => r.filename.endsWith(".pdf")) || cachedReports.find((r) => r.filename.endsWith(".html")) || cachedReports[0];
       if (!projectId || !latest) {
-        setStatus("Geen rapport beschikbaar om te downloaden", "err");
+        setStatus("Geen rekenresultaten beschikbaar om te downloaden", "err");
         return;
       }
       const res = await fetch(
@@ -1289,11 +1300,14 @@ downloadReportBtn.addEventListener("click", () => {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      setStatus(`PDF gedownload: ${downloadName}`, "ok");
+      setStatus(`Rekenresultaten gedownload: ${downloadName}`, "ok");
     } catch (err) {
       setStatus(err instanceof Error ? err.message : String(err), "err");
     }
   })();
+});
+downloadRapportageBtn?.addEventListener("click", () => {
+  setStatus("Download rapportage volgt later \u2014 nog niet beschikbaar", "err");
 });
 emailReportBtn?.addEventListener("click", () => {
   void (async () => {

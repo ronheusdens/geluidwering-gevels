@@ -238,18 +238,14 @@ const materialSubcategoryEl = document.getElementById(
   "fm-material-subcategory",
 ) as HTMLSelectElement | null;
 const materialFilterEl = document.getElementById("fm-material-filter") as HTMLInputElement | null;
-const materialEigenOnlyEl = document.getElementById("fm-material-eigen-only") as HTMLInputElement | null;
-const materialEigenFilterLabelEl = document.getElementById("fm-eigen-filter-label") as HTMLElement | null;
-const materialEigenFilterStateEl = document.getElementById("fm-eigen-filter-state") as HTMLElement | null;
+const materialFavoriteEl = document.getElementById("fm-material-favorite") as HTMLSelectElement | null;
+const favoriteAddBtn = document.getElementById("fm-favorite-add-btn") as HTMLButtonElement | null;
+const favoriteRemoveBtn = document.getElementById("fm-favorite-remove-btn") as HTMLButtonElement | null;
+const presetSaveBtn = document.getElementById("fm-preset-save-btn") as HTMLButtonElement | null;
+const presetApplyBtn = document.getElementById("fm-preset-apply-btn") as HTMLButtonElement | null;
 const materialIdEl = document.getElementById("fm-material-id") as HTMLSelectElement | null;
 const openMatCatalogBtn = document.getElementById("fm-open-mat-btn") as HTMLButtonElement | null;
 const customMatToggleBtn = document.getElementById("fm-custom-mat-toggle") as HTMLButtonElement | null;
-const customMatPanelEl = document.getElementById("fm-custom-mat-panel") as HTMLElement | null;
-const customMatForm = document.getElementById("fm-custom-mat-form") as HTMLFormElement | null;
-const customMatRubriekEl = document.getElementById("fm-custom-mat-rubriek") as HTMLSelectElement | null;
-const customMatNameEl = document.getElementById("fm-custom-mat-name") as HTMLInputElement | null;
-const customMatRaEl = document.getElementById("fm-custom-mat-ra") as HTMLInputElement | null;
-const customMatCancelBtn = document.getElementById("fm-custom-mat-cancel") as HTMLButtonElement | null;
 const materialSpectrumEl = document.getElementById("fm-material-spectrum") as HTMLElement | null;
 const materialR125El = document.getElementById("fm-r125") as HTMLElement | null;
 const materialR250El = document.getElementById("fm-r250") as HTMLElement | null;
@@ -536,6 +532,8 @@ type MaterialCategoryOpt = {
 let materialCategoriesLoaded = false;
 let materialCategoryMeta: MaterialCategoryOpt[] = [];
 let catalogMaterials: CatalogMaterial[] = [];
+/** Favorites for the current building ("meest gebruikt"). */
+let favoriteMaterials: CatalogMaterial[] = [];
 let materialFilterTimer: ReturnType<typeof setTimeout> | null = null;
 /** subsection_id → VR omschrijving when linked in GA model */
 let linkedRooms = new Map<string, string>();
@@ -1132,37 +1130,42 @@ function roomMetricsLabel(r: RoomSubsection): string {
       : [];
   const closed = live ? live.closed : true;
 
-  if (componentIsLengthQuantity(r) || (live && !closed && selectedIsKierdichting())) {
-    let len: string | null = null;
-    if (pts?.length >= 2 && mpu) {
-      len = `${scaledPathLength(pts, mpu, aspect, closed).toFixed(2)} m`;
-    } else if (r.analysis?.length_m != null && Number.isFinite(r.analysis.length_m) && !live) {
-      len = `${Number(r.analysis.length_m).toFixed(2)} m`;
-    } else if (r.perimeter_m != null && Number.isFinite(r.perimeter_m) && !live) {
-      len = `${r.perimeter_m.toFixed(2)} m`;
+  try {
+    if (componentIsLengthQuantity(r) || (live && !closed && selectedIsKierdichting())) {
+      let len: string | null = null;
+      if (pts?.length >= 2 && mpu) {
+        len = `${scaledPathLength(pts, mpu, aspect, closed).toFixed(2)} m`;
+      } else if (r.analysis?.length_m != null && Number.isFinite(r.analysis.length_m) && !live) {
+        len = `${Number(r.analysis.length_m).toFixed(2)} m`;
+      } else if (r.perimeter_m != null && Number.isFinite(r.perimeter_m) && !live) {
+        len = `${r.perimeter_m.toFixed(2)} m`;
+      }
+      return len ? `lengte ${len}` : "lengte —";
     }
-    return len ? `lengte ${len}` : "lengte —";
-  }
 
-  let area = "—";
-  let circ = "—";
-  if (pts?.length >= 3 && mpu) {
-    const holesSum = holes.reduce((s, h) => s + shoelaceArea(h), 0);
-    const areaNorm = Math.max(0, shoelaceArea(pts) - holesSum);
-    area = `${scaledAreaM2(areaNorm, mpu, aspect).toFixed(2)} m²`;
-    circ = `${scaledPathLength(pts, mpu, aspect, true).toFixed(2)} m`;
-  } else if (r.area_m2 != null && Number.isFinite(r.area_m2)) {
-    area = `${r.area_m2.toFixed(2)} m²`;
-    if (r.perimeter_m != null && Number.isFinite(r.perimeter_m)) {
-      circ = `${r.perimeter_m.toFixed(2)} m`;
+    let area = "—";
+    let circ = "—";
+    if (pts?.length >= 3 && mpu) {
+      const safeHoles = holes.filter((h) => Array.isArray(h) && h.length >= 3);
+      const holesSum = safeHoles.reduce((s, h) => s + shoelaceArea(h), 0);
+      const areaNorm = Math.max(0, shoelaceArea(pts) - holesSum);
+      area = `${scaledAreaM2(areaNorm, mpu, aspect).toFixed(2)} m²`;
+      circ = `${scaledPathLength(pts, mpu, aspect, true).toFixed(2)} m`;
+    } else if (r.area_m2 != null && Number.isFinite(r.area_m2)) {
+      area = `${r.area_m2.toFixed(2)} m²`;
+      if (r.perimeter_m != null && Number.isFinite(r.perimeter_m)) {
+        circ = `${r.perimeter_m.toFixed(2)} m`;
+      }
+    } else if (r.area_norm != null && mpu) {
+      area = `${scaledAreaM2(r.area_norm, mpu, aspect).toFixed(2)} m²`;
+    } else if (r.area_norm != null) {
+      area = `${r.area_norm.toFixed(4)} (no scale)`;
     }
-  } else if (r.area_norm != null && mpu) {
-    area = `${scaledAreaM2(r.area_norm, mpu, aspect).toFixed(2)} m²`;
-  } else if (r.area_norm != null) {
-    area = `${r.area_norm.toFixed(4)} (no scale)`;
-  }
 
-  return `${area} · circ ${circ}`;
+    return `${area} · circ ${circ}`;
+  } catch {
+    return "—";
+  }
 }
 
 let roomListRefreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1335,7 +1338,7 @@ function buildComposeParts(selected: RoomSubsection[]): {
     if (r.id === outer.id) continue;
     if (!ringFullyContained(r.points, outer.points)) {
       throw new Error(
-        `“${r.label || r.id}” past niet volledig binnen de buitencontour “${outer.label || outer.id}”`,
+        `“${r.label || r.id}” past niet volledig binnen de buitencontour “${outer.label || outer.id}” (grootste). Overige delen moeten volledig in de buitencontour passen.`,
       );
     }
   }
@@ -1346,6 +1349,27 @@ function buildComposeParts(selected: RoomSubsection[]): {
   if (!parts.some((p) => p.sign === "+")) {
     throw new Error("Minstens één deel met + is verplicht");
   }
+
+  const plusParts = parts.filter((p) => p.sign === "+");
+  const minusParts = parts.filter((p) => p.sign === "-");
+  const plusArea = plusParts.reduce((s, p) => s + subsectionAreaNorm(p.room), 0);
+  for (const m of minusParts) {
+    const mArea = subsectionAreaNorm(m.room);
+    const mLabel = m.room.label || m.room.id;
+    if (mArea >= plusArea - 1e-12) {
+      const plusLabels = plusParts.map((p) => `“${p.room.label || p.room.id}”`).join(", ");
+      throw new Error(
+        `Kan “${mLabel}” niet aftrekken van kleinere + deel(en) (${plusLabels}). Trek alleen kleinere objecten af die volledig binnen de + contour(en) liggen.`,
+      );
+    }
+    const fitsInPlus = plusParts.some((p) => ringFullyContained(m.room.points, p.room.points));
+    if (!fitsInPlus) {
+      throw new Error(
+        `“${mLabel}” past niet volledig binnen de + deel(en) — grotere of buitenliggende objecten kunnen niet worden afgetrokken.`,
+      );
+    }
+  }
+
   const signs: Record<string, ComposeSign> = {};
   for (const p of parts) signs[p.room.id] = p.sign;
   return { outer, parts, signs };
@@ -2057,8 +2081,6 @@ function editRoom(room: RoomSubsection): void {
   updateMeasureReadouts();
   updateToolHint();
   renderRoomList();
-  const selectedLi = document.querySelector("#fm-room-list .drawing-list-item.selected");
-  selectedLi?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   scrollToRing(pendingRoom.points);
   setStatus(
     `Bewerken: ${room.label} — sleep het vlak of witte ankers; pijltjes om te schuiven; daarna «${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} opslaan»`,
@@ -2156,8 +2178,13 @@ function updateBooleanPreview(): void {
     const selected = rooms.filter((r) => selectedSetIds.has(r.id));
     const { parts } = buildComposeParts(selected);
     booleanPreview = composeSigned(parts.map((p) => ({ ring: p.room.points, sign: p.sign })));
-  } catch {
+    if (composeFeedbackEl?.classList.contains("is-err")) {
+      setComposeFeedback("", "clear");
+    }
+  } catch (err) {
     booleanPreview = null;
+    const msg = err instanceof Error ? err.message : String(err);
+    setComposeFeedback(msg, "err");
   }
   renderComposeParts();
   drawOverlay();
@@ -2269,8 +2296,12 @@ function renderMaterialNameOptions(materials: CatalogMaterial[], selectedId?: st
     const code = (m.catalog_id || "").trim();
     const ra = m.ra_dba != null ? ` · RA ${m.ra_dba}` : "";
     const sub = m.category ? ` · ${m.category}` : "";
-    const eigen = (m.source || "").trim().toLowerCase() === "eigen" ? " · eigen" : "";
-    opt.textContent = code ? `${code} · ${m.name}${sub}${ra}${eigen}` : `${m.name}${sub}${ra}${eigen}`;
+    const appBit =
+      (m.source || "").trim().toLowerCase() === "app" ||
+      (m.source || "").trim().toLowerCase() === "eigen"
+        ? " · app"
+        : "";
+    opt.textContent = code ? `${code} · ${m.name}${sub}${ra}${appBit}` : `${m.name}${sub}${ra}${appBit}`;
     opt.title = code ? `${code} · ${m.name}` : m.name;
     materialIdEl.appendChild(opt);
   }
@@ -2278,6 +2309,120 @@ function renderMaterialNameOptions(materials: CatalogMaterial[], selectedId?: st
   if (selectedId && materials.some((m) => m.material_id === selectedId)) {
     materialIdEl.value = selectedId;
   }
+  syncFavoriteButtons();
+}
+
+function renderFavoriteOptions(selectedId?: string | null): void {
+  if (!materialFavoriteEl) return;
+  const keep = selectedId ?? materialFavoriteEl.value;
+  materialFavoriteEl.replaceChildren();
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = favoriteMaterials.length
+    ? "— kies uit meest gebruikt —"
+    : "— geen favorieten voor dit project —";
+  materialFavoriteEl.appendChild(ph);
+  for (const m of favoriteMaterials) {
+    const opt = document.createElement("option");
+    opt.value = m.material_id;
+    const code = (m.catalog_id || "").trim();
+    const ra = m.ra_dba != null ? ` · RA ${m.ra_dba}` : "";
+    opt.textContent = code ? `${code} · ${m.name}${ra}` : `${m.name}${ra}`;
+    materialFavoriteEl.appendChild(opt);
+  }
+  materialFavoriteEl.disabled = favoriteMaterials.length === 0;
+  if (keep && favoriteMaterials.some((m) => m.material_id === keep)) {
+    materialFavoriteEl.value = keep;
+  }
+  syncFavoriteButtons();
+}
+
+function syncFavoriteButtons(): void {
+  const hasBuilding = Boolean(buildingId);
+  const mid = (materialIdEl?.value || materialFavoriteEl?.value || "").trim();
+  const isFav = Boolean(mid && favoriteMaterials.some((m) => m.material_id === mid));
+  if (favoriteAddBtn) favoriteAddBtn.disabled = !hasBuilding || !mid || isFav;
+  if (favoriteRemoveBtn) favoriteRemoveBtn.disabled = !hasBuilding || !isFav;
+  if (presetSaveBtn) presetSaveBtn.disabled = !hasBuilding || favoriteMaterials.length === 0;
+  if (presetApplyBtn) presetApplyBtn.disabled = !hasBuilding;
+}
+
+async function loadFavoriteMaterials(): Promise<void> {
+  if (!auth?.token || !buildingId) {
+    favoriteMaterials = [];
+    renderFavoriteOptions();
+    return;
+  }
+  try {
+    const data = await apiGet<{ materials: CatalogMaterial[] }>(
+      `/api/floormap/material-favorites?building_id=${encodeURIComponent(buildingId)}`,
+    );
+    favoriteMaterials = data.materials || [];
+    renderFavoriteOptions(materialIdEl?.value || null);
+  } catch (err) {
+    favoriteMaterials = [];
+    renderFavoriteOptions();
+    console.warn("load favorites failed", err);
+  }
+}
+
+async function addMaterialFavorite(materialId: string): Promise<void> {
+  if (!auth?.token || !buildingId || !materialId) return;
+  await apiPost("/api/floormap/material-favorites", {
+    building_id: buildingId,
+    material_id: materialId,
+  });
+  await loadFavoriteMaterials();
+  setStatus("Toegevoegd aan meest gebruikt", "ok");
+}
+
+async function removeMaterialFavorite(materialId: string): Promise<void> {
+  if (!auth?.token || !buildingId || !materialId) return;
+  await apiDelete(
+    `/api/floormap/material-favorites?building_id=${encodeURIComponent(buildingId)}&material_id=${encodeURIComponent(materialId)}`,
+  );
+  await loadFavoriteMaterials();
+  setStatus("Verwijderd uit meest gebruikt", "ok");
+}
+
+async function selectMaterialById(materialId: string, fromFavorite = false): Promise<void> {
+  const fromFav = favoriteMaterials.find((m) => m.material_id === materialId);
+  const fromCat = catalogMaterials.find((m) => m.material_id === materialId);
+  const mat = fromFav || fromCat;
+  if (!mat) return;
+  if (mat.master_category && materialCategoryEl) {
+    await ensureMaterialCategories();
+    if (![...materialCategoryEl.options].some((o) => o.value === mat.master_category)) {
+      const opt = document.createElement("option");
+      opt.value = mat.master_category;
+      opt.textContent = mat.master_category;
+      materialCategoryEl.appendChild(opt);
+    }
+    materialCategoryEl.value = mat.master_category;
+    renderMaterialSubcategoryOptions();
+    if (mat.category && materialSubcategoryEl) {
+      if (![...materialSubcategoryEl.options].some((o) => o.value === mat.category)) {
+        const opt = document.createElement("option");
+        opt.value = mat.category;
+        opt.textContent = mat.category;
+        materialSubcategoryEl.appendChild(opt);
+      }
+      materialSubcategoryEl.value = mat.category;
+    }
+    if (!fromCat) {
+      await loadMaterialsForCategory(mat.master_category, "");
+    }
+  }
+  if (!catalogMaterials.some((m) => m.material_id === mat.material_id)) {
+    catalogMaterials = [mat, ...catalogMaterials];
+    renderMaterialNameOptions(catalogMaterials, mat.material_id);
+  } else if (materialIdEl) {
+    materialIdEl.value = mat.material_id;
+  }
+  if (fromFavorite && materialFavoriteEl) materialFavoriteEl.value = materialId;
+  updateMaterialSpectrumPreview(mat);
+  syncFavoriteButtons();
+  syncPendingRoomButtons();
 }
 
 async function ensureMaterialCategories(): Promise<void> {
@@ -2297,8 +2442,7 @@ async function ensureMaterialCategories(): Promise<void> {
 async function loadMaterialsForCategory(category: string, q = ""): Promise<void> {
   if (!auth?.token || !materialIdEl) return;
   const keep = materialIdEl.value;
-  const eigenOnly = Boolean(materialEigenOnlyEl?.checked);
-  if (!category && !eigenOnly) {
+  if (!category) {
     catalogMaterials = [];
     renderMaterialNameOptions([]);
     materialIdEl.disabled = true;
@@ -2309,11 +2453,10 @@ async function loadMaterialsForCategory(category: string, q = ""): Promise<void>
   try {
     const params = new URLSearchParams({
       limit: "1000",
+      master_category: category,
     });
-    if (category) params.set("master_category", category);
-    if (eigenOnly) params.set("source", "eigen");
     const sub = (materialSubcategoryEl?.value || "").trim();
-    if (sub && category) params.set("category", sub);
+    if (sub) params.set("category", sub);
     if (q.trim()) params.set("q", q.trim());
     const data = await apiGet<{ materials: CatalogMaterial[] }>(
       `/api/floormap/materials?${params.toString()}`,
@@ -2480,29 +2623,104 @@ function coerceRingPoints(raw: unknown): Pt[] {
   return out;
 }
 
+function resolveRoomListEl(): HTMLUListElement | null {
+  const live = document.getElementById("fm-room-list") as HTMLUListElement | null;
+  if (live) return live;
+  return roomListEl && document.body.contains(roomListEl) ? roomListEl : null;
+}
+
+function resolveRoomCountEl(): HTMLElement | null {
+  const live = document.getElementById("fm-room-count") as HTMLElement | null;
+  if (live) return live;
+  return roomCountEl && document.body.contains(roomCountEl) ? roomCountEl : null;
+}
+
 function renderRoomList(): void {
-  const listEl =
-    roomListEl || (document.getElementById("fm-room-list") as HTMLUListElement | null);
-  const countEl =
-    (roomCountEl && document.body.contains(roomCountEl) ? roomCountEl : null) ||
-    (document.getElementById("fm-room-count") as HTMLElement | null);
+  const listEl = resolveRoomListEl();
+  const countEl = resolveRoomCountEl();
   if (!listEl) return;
+  const scrollTop = listEl.scrollTop;
+  const items = rooms.filter((r): r is RoomSubsection => Boolean(r?.id));
+  if (items.length !== rooms.length) {
+    rooms = items;
+  }
   listEl.replaceChildren();
-  if (countEl) countEl.textContent = String(rooms.length);
-  if (rooms.length === 0) {
+  if (countEl) countEl.textContent = String(items.length);
+  if (items.length === 0) {
     const li = document.createElement("li");
     li.className = "hint drawing-list-empty";
     li.textContent = `Nog geen ${activePartNoun().plural} — Teken ${activePartNoun().singular} of Ontdek.`;
     listEl.appendChild(li);
     return;
   }
+  let booleanSourceIds = new Set<string>();
+  let supersededIds = new Set<string>();
+  let boolGroups = new Map<string, BoolListRole>();
   const allowSetSelect = !isFloormapKind();
-  const booleanSourceIds = allowSetSelect ? collectBooleanSourceIds(rooms) : new Set<string>();
-  const supersededIds = allowSetSelect ? collectSupersededSourceIds(rooms) : new Set<string>();
-  const boolGroups = allowSetSelect ? assignBooleanListGroups(rooms) : new Map<string, BoolListRole>();
-  rooms.forEach((r, index) => {
+  try {
+    if (allowSetSelect) {
+      booleanSourceIds = collectBooleanSourceIds(items);
+      supersededIds = collectSupersededSourceIds(items);
+      boolGroups = assignBooleanListGroups(items);
+    }
+  } catch (err) {
+    console.warn("renderRoomList: boolean metadata failed", err);
+  }
+  items.forEach((r, index) => {
+    try {
+      renderRoomListItem(listEl, r, index, items.length, {
+        allowSetSelect,
+        booleanSourceIds,
+        supersededIds,
+        boolGroups,
+      });
+    } catch (err) {
+      console.warn("renderRoomList: item failed", r.id, err);
+      const fallback = document.createElement("li");
+      fallback.className = "drawing-list-item";
+      fallback.textContent = r.label || r.id;
+      listEl.appendChild(fallback);
+    }
+  });
+  if (pendingRoom?.editingId) {
+    // Keep the active (red) component row in view; ignore prior scroll restore.
+    scrollActiveRoomListItemIntoView(listEl, pendingRoom.editingId);
+  } else {
+    listEl.scrollTop = scrollTop;
+  }
+}
+
+/** Ensure the currently edited component stays visible in the saved-components list. */
+function scrollActiveRoomListItemIntoView(listEl: HTMLUListElement, roomId: string): void {
+  const run = (): void => {
+    const li =
+      (listEl.querySelector(
+        `.drawing-list-item[data-room-id="${CSS.escape(roomId)}"]`,
+      ) as HTMLElement | null) ||
+      (listEl.querySelector(".drawing-list-item.selected") as HTMLElement | null);
+    if (!li) return;
+    li.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
+  };
+  // After DOM replace + layout; double-rAF covers sticky sidebar measure.
+  requestAnimationFrame(() => requestAnimationFrame(run));
+}
+
+function renderRoomListItem(
+  listEl: HTMLUListElement,
+  r: RoomSubsection,
+  index: number,
+  total: number,
+  meta: {
+    allowSetSelect: boolean;
+    booleanSourceIds: Set<string>;
+    supersededIds: Set<string>;
+    boolGroups: Map<string, BoolListRole>;
+  },
+): void {
+  const { allowSetSelect, booleanSourceIds, supersededIds, boolGroups } = meta;
     const li = document.createElement("li");
     li.className = "drawing-list-item";
+    li.dataset.roomId = r.id;
     if (allowSetSelect) li.classList.add("drawing-list-item--set");
     if (pendingRoom?.editingId === r.id) li.classList.add("selected");
     if (touchedRoomIds.has(r.id)) li.classList.add("drawing-list-item--touched");
@@ -2599,7 +2817,8 @@ function renderRoomList(): void {
     upBtn.setAttribute("aria-label", "Verplaats omhoog in de lijst");
     upBtn.title = "Omhoog";
     upBtn.disabled = index === 0;
-    upBtn.addEventListener("click", () => {
+    upBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
       void moveRoom(index, -1);
     });
     actions.appendChild(upBtn);
@@ -2610,8 +2829,9 @@ function renderRoomList(): void {
     downBtn.textContent = "▼";
     downBtn.setAttribute("aria-label", "Verplaats omlaag in de lijst");
     downBtn.title = "Omlaag";
-    downBtn.disabled = index >= rooms.length - 1;
-    downBtn.addEventListener("click", () => {
+    downBtn.disabled = index >= total - 1;
+    downBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
       void moveRoom(index, 1);
     });
     actions.appendChild(downBtn);
@@ -2683,7 +2903,6 @@ function renderRoomList(): void {
     actions.appendChild(btn);
     li.appendChild(actions);
     listEl.appendChild(li);
-  });
 }
 
 async function refreshLinkedRooms(): Promise<void> {
@@ -2770,6 +2989,7 @@ async function loadFloormapSections(bid: string): Promise<void> {
     history.replaceState(null, "", url.toString());
     projectMenu?.rememberCurrent();
     projectMenu?.refreshTitle();
+    void loadFavoriteMaterials();
     setStatus(`${sections.length} section(s)`, "ok");
     if (URL_SECTION && sections.some((s) => s.id === URL_SECTION)) {
       await openSection(URL_SECTION);
@@ -2817,8 +3037,8 @@ async function loadRooms(): Promise<void> {
     }
     renderRoomList();
   } catch (err) {
-    rooms = [];
-    renderRoomList();
+    // Keep the previous in-memory list visible — never wipe the UI on a fetch error.
+    // (Previously this set rooms=[] which made the whole component list disappear.)
     throw err;
   }
   try {
@@ -3877,32 +4097,46 @@ async function moveRoom(index: number, delta: -1 | 1): Promise<void> {
   if (!auth?.token || !activeSection) return;
   const j = index + delta;
   if (index < 0 || j < 0 || index >= rooms.length || j >= rooms.length) return;
-  const prev = rooms.slice();
+
+  // Deep-enough snapshot so a failed API call can restore both order and sort_order.
+  const prevOrder = rooms.map((r) => ({ room: r, sort_order: r.sort_order }));
   const next = rooms.slice();
   const tmp = next[index];
+  if (!tmp || !next[j]) return;
   next[index] = next[j];
   next[j] = tmp;
   next.forEach((r, i) => {
     r.sort_order = i;
   });
   rooms = next;
-  renderRoomList();
-  drawOverlay();
+  try {
+    renderRoomList();
+    drawOverlay();
+  } catch (err) {
+    console.warn("moveRoom: local render failed", err);
+  }
   try {
     await apiPost("/api/floormap/subsections/reorder", {
       section_id: activeSection.id,
-      ordered_ids: rooms.map((r) => r.id),
+      ordered_ids: rooms.map((r) => r.id).filter(Boolean),
     });
     setStatus("Volgorde opgeslagen", "ok");
   } catch (err) {
-    rooms = prev;
-    renderRoomList();
-    drawOverlay();
+    rooms = prevOrder.map((p) => {
+      p.room.sort_order = p.sort_order;
+      return p.room;
+    });
+    try {
+      renderRoomList();
+      drawOverlay();
+    } catch {
+      /* keep restored rooms even if render glitches */
+    }
     setStatus(err instanceof Error ? err.message : String(err), "err");
     try {
       await loadRooms();
     } catch {
-      /* keep reverted local order */
+      /* keep reverted local order — do not clear the list */
     }
   }
 }
@@ -4257,37 +4491,98 @@ materialSubcategoryEl?.addEventListener("change", () => {
 materialFilterEl?.addEventListener("input", () => {
   scheduleMaterialFilterReload();
 });
-materialEigenOnlyEl?.addEventListener("change", () => {
-  syncEigenOnlyFilterUi();
-  // Turning the filter off should show the full category again (not a sticky eigen-id search).
-  if (!materialEigenOnlyEl.checked && materialFilterEl?.value.trim()) {
-    materialFilterEl.value = "";
+materialFavoriteEl?.addEventListener("change", () => {
+  const id = (materialFavoriteEl.value || "").trim();
+  if (!id) {
+    syncFavoriteButtons();
+    return;
   }
-  void loadMaterialsForCategory(
-    (materialCategoryEl?.value || "").trim(),
-    (materialFilterEl?.value || "").trim(),
+  void selectMaterialById(id, true);
+});
+favoriteAddBtn?.addEventListener("click", () => {
+  const id = (materialIdEl?.value || "").trim();
+  if (!id) return;
+  void addMaterialFavorite(id).catch((err) =>
+    setStatus(err instanceof Error ? err.message : String(err), "err"),
   );
 });
-
-function syncEigenOnlyFilterUi(): void {
-  const on = Boolean(materialEigenOnlyEl?.checked);
-  materialEigenFilterLabelEl?.classList.toggle("is-on", on);
-  if (materialEigenFilterStateEl) materialEigenFilterStateEl.textContent = on ? "aan" : "uit";
-  if (materialEigenOnlyEl) {
-    materialEigenOnlyEl.setAttribute("aria-checked", on ? "true" : "false");
-  }
-}
+favoriteRemoveBtn?.addEventListener("click", () => {
+  const id = (materialIdEl?.value || materialFavoriteEl?.value || "").trim();
+  if (!id) return;
+  void removeMaterialFavorite(id).catch((err) =>
+    setStatus(err instanceof Error ? err.message : String(err), "err"),
+  );
+});
+presetSaveBtn?.addEventListener("click", () => {
+  if (!buildingId) return;
+  const name = window.prompt("Naam voor deze favorieten-preset:");
+  if (!name?.trim()) return;
+  void apiPost("/api/floormap/material-favorite-presets", {
+    action: "save",
+    name: name.trim(),
+    building_id: buildingId,
+  })
+    .then((data: { material_count?: number }) => {
+      setStatus(`Preset opgeslagen (${data.material_count ?? "?"} materialen)`, "ok");
+    })
+    .catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
+});
+presetApplyBtn?.addEventListener("click", () => {
+  if (!buildingId) return;
+  void (async () => {
+    const data = await apiGet<{
+      presets: Array<{ preset_id: string; name: string; material_count: number }>;
+    }>("/api/floormap/material-favorite-presets");
+    const presets = data.presets || [];
+    if (!presets.length) {
+      setStatus("Geen presets beschikbaar", "err");
+      return;
+    }
+    const lines = presets.map((p, i) => `${i + 1}. ${p.name} (${p.material_count})`).join("\n");
+    const pick = window.prompt(`Kies preset-nummer:\n${lines}`);
+    const idx = Number(pick) - 1;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= presets.length) return;
+    const preset = presets[idx];
+    if (
+      !window.confirm(
+        `Favorieten van dit project vervangen door «${preset.name}» (${preset.material_count} materialen)?`,
+      )
+    ) {
+      return;
+    }
+    await apiPost("/api/floormap/material-favorite-presets", {
+      action: "apply",
+      preset_id: preset.preset_id,
+      building_id: buildingId,
+    });
+    await loadFavoriteMaterials();
+    setStatus(`Preset «${preset.name}» toegepast`, "ok");
+  })().catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
+});
 materialIdEl?.addEventListener("change", () => {
   syncPendingRoomButtons();
   updateMaterialQuantityHint();
   updateMaterialSpectrumPreview();
+  if (materialFavoriteEl && materialIdEl.value) {
+    if (favoriteMaterials.some((m) => m.material_id === materialIdEl.value)) {
+      materialFavoriteEl.value = materialIdEl.value;
+    } else {
+      materialFavoriteEl.value = "";
+    }
+  }
+  syncFavoriteButtons();
 });
 
-function openMaterialCatalogEditor(): void {
-  const mat = selectedCatalogMaterial();
+function openMaterialCatalogEditor(opts?: { newMaterial?: boolean }): void {
   const matUrl = new URL("/materials.html", location.origin);
-  if (mat?.material_id) matUrl.searchParams.set("material_id", mat.material_id);
-  if (mat?.catalog_id) matUrl.searchParams.set("q", mat.catalog_id);
+  if (opts?.newMaterial) {
+    matUrl.searchParams.set("new", "1");
+  } else {
+    const mat = selectedCatalogMaterial();
+    if (mat?.material_id) matUrl.searchParams.set("material_id", mat.material_id);
+    if (mat?.catalog_id) matUrl.searchParams.set("q", mat.catalog_id);
+  }
+  if (buildingId) matUrl.searchParams.set("building_id", buildingId);
   stashComponentDraftForCatalog();
   matUrl.searchParams.set("return", componentReturnPath());
   matUrl.searchParams.set("return_label", "Terug naar gevelcomponent");
@@ -4529,136 +4824,12 @@ async function restoreViewStateFromDraft(draft: ComponentDraft): Promise<void> {
   }
 }
 
-function setCustomMatPanelOpen(open: boolean): void {
-  if (!customMatPanelEl) return;
-  customMatPanelEl.classList.toggle("hidden", !open);
-  if (open) void ensureCustomMatRubrieken();
-}
-
-async function ensureCustomMatRubrieken(): Promise<void> {
-  if (!customMatRubriekEl || !auth) return;
-  await ensureMaterialCategories();
-  if (customMatRubriekEl.options.length > 1) return;
-  customMatRubriekEl.replaceChildren();
-  const ph = document.createElement("option");
-  ph.value = "";
-  ph.textContent = "— kies rubriek —";
-  customMatRubriekEl.appendChild(ph);
-  for (const c of materialCategoryMeta) {
-    if (c.rubriek_nr == null) continue;
-    const o = document.createElement("option");
-    o.value = String(c.rubriek_nr);
-    o.textContent = c.label || c.master_category;
-    customMatRubriekEl.appendChild(o);
-  }
-  const current = materialCategoryMeta.find((c) => c.master_category === (materialCategoryEl?.value || "").trim());
-  if (current?.rubriek_nr != null) customMatRubriekEl.value = String(current.rubriek_nr);
-}
-
 openMatCatalogBtn?.addEventListener("click", () => {
   openMaterialCatalogEditor();
 });
 
 customMatToggleBtn?.addEventListener("click", () => {
-  setCustomMatPanelOpen(true);
-  if (customMatNameEl && !customMatNameEl.value.trim()) {
-    customMatNameEl.value = (roomLabelInput?.value || "").trim();
-  }
-});
-
-customMatCancelBtn?.addEventListener("click", () => {
-  setCustomMatPanelOpen(false);
-});
-
-customMatForm?.addEventListener("submit", (ev) => {
-  ev.preventDefault();
-  void (async () => {
-    if (!auth?.token) throw new Error("Niet ingelogd");
-    const rubriek = Number(customMatRubriekEl?.value || "");
-    const name = (customMatNameEl?.value || "").trim();
-    const ra = Number(customMatRaEl?.value);
-    if (!Number.isInteger(rubriek) || rubriek < 1) throw new Error("Kies een rubriek");
-    if (!name) throw new Error("Naam is verplicht");
-    if (!Number.isFinite(ra) || ra < 0 || ra > 100) throw new Error("RA moet tussen 0 en 100 liggen");
-
-    const subsectionId = pendingRoom?.editingId || "";
-    setStatus("Eigen materiaal opslaan…", "busy");
-    const data = await apiPost<{
-      material: {
-        material_id: string;
-        name: string;
-        ra_dba: number;
-        catalog_id: string;
-        master_category: string;
-        rubriek_nr?: number;
-      };
-      assigned: boolean;
-    }>("/api/floormap/materials", {
-      name,
-      ra_dba: ra,
-      rubriek_nr: rubriek,
-      subsection_id: subsectionId || undefined,
-    });
-
-    const master =
-      data.material.master_category ||
-      materialCategoryMeta.find((c) => c.rubriek_nr === rubriek)?.master_category ||
-      "";
-    await ensureMaterialCategories();
-    if (materialCategoryEl && master) {
-      if (![...materialCategoryEl.options].some((o) => o.value === master)) {
-        const opt = document.createElement("option");
-        opt.value = master;
-        opt.textContent = master;
-        materialCategoryEl.appendChild(opt);
-      }
-      materialCategoryEl.value = master;
-      renderMaterialSubcategoryOptions();
-    }
-    if (materialEigenOnlyEl) {
-      // Keep full catalog visible; the new eigen row is selected below.
-      materialEigenOnlyEl.checked = false;
-      syncEigenOnlyFilterUi();
-    }
-    if (materialFilterEl) materialFilterEl.value = "";
-    await loadMaterialsForCategory(master, "");
-    if (materialIdEl) {
-      if (![...materialIdEl.options].some((o) => o.value === data.material.material_id)) {
-        const opt = document.createElement("option");
-        opt.value = data.material.material_id;
-        opt.textContent = `${data.material.catalog_id} · ${data.material.name} · eigen`;
-        materialIdEl.appendChild(opt);
-        if (!catalogMaterials.some((m) => m.material_id === data.material.material_id)) {
-          catalogMaterials.push({
-            material_id: data.material.material_id,
-            catalog_id: data.material.catalog_id,
-            material_no: 0,
-            master_category: master,
-            name: data.material.name,
-            category: "",
-            thickness_mm: null,
-            ra_dba: data.material.ra_dba,
-          });
-        }
-      }
-      materialIdEl.value = data.material.material_id;
-      materialIdEl.disabled = false;
-    }
-    updateMaterialSpectrumPreview();
-    syncPendingRoomButtons();
-    setCustomMatPanelOpen(false);
-    if (customMatNameEl) customMatNameEl.value = "";
-    if (data.assigned && subsectionId) {
-      markRoomTouched(subsectionId);
-      await loadRooms();
-      setStatus(`Materiaal «${data.material.name}» opgeslagen en gekoppeld aan component`, "ok");
-    } else {
-      setStatus(
-        `Materiaal «${data.material.name}» opgeslagen — kies Component opslaan om te koppelen`,
-        "ok",
-      );
-    }
-  })().catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
+  openMaterialCatalogEditor({ newMaterial: true });
 });
 
 function updateMaterialQuantityHint(): void {
@@ -4830,7 +5001,7 @@ editNudgeUpBtn?.addEventListener("click", () => nudgeCurrent(0, -0.01));
 editNudgeDownBtn?.addEventListener("click", () => nudgeCurrent(0, 0.01));
 
 syncPendingRoomButtons();
-syncEigenOnlyFilterUi();
+syncFavoriteButtons();
 
 function connect(): void {
   setStatus("Connecting…", "busy");

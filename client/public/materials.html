@@ -64,13 +64,6 @@
               <option value="">0 - Alle subrubrieken</option>
             </select>
           </label>
-          <label>Bron
-            <select id="mat-source-filter">
-              <option value="">Alle materialen</option>
-              <option value="eigen">Eigen materialen</option>
-              <option value="catalogus">Catalogus</option>
-            </select>
-          </label>
           <div class="actions mat-filter-actions">
             <button type="submit">Search</button>
             <button type="button" id="mat-new-btn" class="secondary">New material</button>
@@ -144,14 +137,18 @@
               </label>
               <label class="mat-field mat-field-md">Source
                 <select id="mat-source">
-                  <option value="eigen" selected>eigen (blijft bij herstart)</option>
+                  <option value="app" selected>app (toegevoegd in catalogus)</option>
                   <option value="catalogusGG.pdf">catalogusGG.pdf (seed)</option>
-                  <option value="GL.cat">GL.cat (seed)</option>
+                  <option value="GL.cat">GL.cat (legacy seed)</option>
                 </select>
               </label>
               <label class="mat-field mat-field-check checkbox-label">
                 <input id="mat-spectrum-ok" type="checkbox" checked />
                 <span>Spectrum OK</span>
+              </label>
+              <label id="mat-fav-wrap" class="mat-field mat-field-check checkbox-label hidden">
+                <input id="mat-favorite" type="checkbox" />
+                <span>Meest gebruikt in dit project</span>
               </label>
             </div>
           </fieldset>
@@ -217,8 +214,18 @@
           </div>
         </form>
       </section>
+
+      <section class="panel" id="mat-presets-panel">
+        <h2>Favorieten-presets</h2>
+        <p class="hint">
+          Benoemde templates die je op de geveltekening op een project kunt toepassen
+          («Meest gebruikt»). Beheer hier: hernoemen of verwijderen.
+        </p>
+        <ul id="mat-preset-list" class="mat-preset-list"></ul>
+        <p class="hint" id="mat-preset-empty">Nog geen presets.</p>
+      </section>
     </section>
   </main>
-  <script type="module" src="/materials.js?v=mat-deeplink"></script>
+  <script type="module" src="/materials.js?v=mat-new"></script>
 </body>
 </html>

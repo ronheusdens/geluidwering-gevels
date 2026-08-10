@@ -37,6 +37,13 @@ async function syncSessionCookie(token) {
   } catch {
   }
 }
+function apiAuthHeaders(token, json = false) {
+  const h = {
+    Authorization: `Bearer ${token}`
+  };
+  if (json) h["Content-Type"] = "application/json";
+  return h;
+}
 
 // src/ws-url.ts
 function resolveBppWsUrl() {
@@ -195,6 +202,7 @@ var AUTH_KEY = "app_gevelwering_admin_auth";
 var bootParams = new URLSearchParams(location.search);
 var deepMaterialId = (bootParams.get("material_id") || bootParams.get("id") || "").trim();
 var deepQ = (bootParams.get("q") || "").trim();
+var deepNew = bootParams.get("new") === "1" || bootParams.get("new") === "true" || bootParams.get("mode") === "new";
 var returnHref = safeSameOriginPath(bootParams.get("return"));
 var returnLabel = (bootParams.get("return_label") || "Terug naar toekennen vlak (gevel)").trim();
 var returnLinkEl = document.getElementById("mat-return-link");
@@ -203,6 +211,17 @@ var pickBtnEl = document.getElementById("mat-pick-btn");
 var pickBtnEditorEl = document.getElementById("mat-pick-btn-editor");
 var pickHintEl = document.getElementById("mat-pick-hint");
 var PICK_STORAGE_KEY = "app-gevelwering-material-pick";
+function buildingIdFromContext() {
+  const direct = (bootParams.get("building_id") || "").trim();
+  if (direct) return direct;
+  if (!returnHref) return "";
+  try {
+    return new URL(returnHref, location.origin).searchParams.get("building_id")?.trim() || "";
+  } catch {
+    return "";
+  }
+}
+var contextBuildingId = buildingIdFromContext();
 function safeSameOriginPath(raw) {
   if (!raw) return null;
   try {
@@ -267,6 +286,104 @@ function pickMaterialForCaller() {
   }
   location.assign(returnHref);
 }
+async function httpJson(url, init) {
+  if (!auth?.token) throw new Error("Not signed in");
+  const res = await fetch(url, {
+    credentials: "include",
+    ...init,
+    headers: {
+      ...apiAuthHeaders(auth.token, Boolean(init?.body)),
+      ...init?.headers || {}
+    }
+  });
+  const body = await res.json();
+  if (!res.ok || body.ok === false) {
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  return body;
+}
+async function syncFavoriteCheckbox() {
+  if (!favoriteWrapEl || !favoriteEl) return;
+  if (!contextBuildingId) {
+    favoriteWrapEl.classList.add("hidden");
+    favoriteEl.checked = false;
+    return;
+  }
+  favoriteWrapEl.classList.remove("hidden");
+  const mid = (selectedId || idEl.value || "").trim();
+  if (!mid || !auth?.token) {
+    favoriteEl.checked = false;
+    return;
+  }
+  try {
+    const data = await httpJson(
+      `/api/floormap/material-favorites?building_id=${encodeURIComponent(contextBuildingId)}`
+    );
+    favoriteEl.checked = (data.materials || []).some((m) => m.material_id === mid);
+  } catch {
+    favoriteEl.checked = false;
+  }
+}
+async function setFavoriteForSelection(on) {
+  if (!contextBuildingId || !auth?.token) return;
+  const mid = (selectedId || idEl.value || "").trim();
+  if (!mid) return;
+  if (on) {
+    await httpJson("/api/floormap/material-favorites", {
+      method: "POST",
+      body: JSON.stringify({ building_id: contextBuildingId, material_id: mid })
+    });
+  } else {
+    await httpJson(
+      `/api/floormap/material-favorites?building_id=${encodeURIComponent(contextBuildingId)}&material_id=${encodeURIComponent(mid)}`,
+      { method: "DELETE" }
+    );
+  }
+}
+async function loadPresets() {
+  if (!presetListEl || !presetEmptyEl || !auth?.token) return;
+  try {
+    const data = await httpJson("/api/floormap/material-favorite-presets");
+    const presets = data.presets || [];
+    presetListEl.replaceChildren();
+    presetEmptyEl.classList.toggle("hidden", presets.length > 0);
+    for (const p of presets) {
+      const li = document.createElement("li");
+      li.className = "mat-preset-item";
+      const label = document.createElement("span");
+      label.textContent = `${p.name} (${p.material_count})`;
+      const renameBtn = document.createElement("button");
+      renameBtn.type = "button";
+      renameBtn.className = "secondary";
+      renameBtn.textContent = "Hernoemen";
+      renameBtn.addEventListener("click", () => {
+        const name = window.prompt("Nieuwe preset-naam:", p.name);
+        if (!name?.trim() || name.trim() === p.name) return;
+        void httpJson("/api/floormap/material-favorite-presets", {
+          method: "POST",
+          body: JSON.stringify({ action: "rename", preset_id: p.preset_id, name: name.trim() })
+        }).then(() => loadPresets()).then(() => setStatus(`Preset hernoemd naar \xAB${name.trim()}\xBB`, "ok")).catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
+      });
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "danger secondary";
+      delBtn.textContent = "Verwijderen";
+      delBtn.addEventListener("click", () => {
+        if (!window.confirm(`Preset \xAB${p.name}\xBB verwijderen?`)) return;
+        void httpJson("/api/floormap/material-favorite-presets", {
+          method: "POST",
+          body: JSON.stringify({ action: "delete", preset_id: p.preset_id })
+        }).then(() => loadPresets()).then(() => setStatus(`Preset \xAB${p.name}\xBB verwijderd`, "ok")).catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
+      });
+      li.append(label, renameBtn, delBtn);
+      presetListEl.appendChild(li);
+    }
+  } catch (err) {
+    presetListEl.replaceChildren();
+    presetEmptyEl.classList.remove("hidden");
+    presetEmptyEl.textContent = err instanceof Error ? `Presets laden mislukt: ${err.message}` : "Presets laden mislukt";
+  }
+}
 var connBarEl = document.getElementById("mat-conn-bar");
 var connLedEl = document.getElementById("mat-conn-led");
 var connStatusEl = document.getElementById("mat-conn-status");
@@ -280,7 +397,6 @@ var filterForm = document.getElementById("mat-filter-form");
 var qEl = document.getElementById("mat-q");
 var categoryEl = document.getElementById("mat-category");
 var subcategoryFilterEl = document.getElementById("mat-subcategory");
-var sourceFilterEl = document.getElementById("mat-source-filter");
 var pagerLabelEl = document.getElementById("mat-pager-label");
 var prevBtn = document.getElementById("mat-prev-btn");
 var nextBtn = document.getElementById("mat-next-btn");
@@ -298,6 +414,10 @@ var catEl = document.getElementById("mat-cat");
 var sourceRefEl = document.getElementById("mat-source-ref");
 var sourceEl = document.getElementById("mat-source");
 var spectrumOkEl = document.getElementById("mat-spectrum-ok");
+var favoriteWrapEl = document.getElementById("mat-fav-wrap");
+var favoriteEl = document.getElementById("mat-favorite");
+var presetListEl = document.getElementById("mat-preset-list");
+var presetEmptyEl = document.getElementById("mat-preset-empty");
 var thickEl = document.getElementById("mat-thick");
 var weightEl = document.getElementById("mat-weight");
 var raEl = document.getElementById("mat-ra");
@@ -359,6 +479,8 @@ function showAdmin(info) {
   loginPanelEl.classList.add("hidden");
   panelEl.classList.remove("hidden");
   userLabelEl.textContent = `Signed in as ${info.display_name || info.username}`;
+  if (favoriteWrapEl) favoriteWrapEl.classList.toggle("hidden", !contextBuildingId);
+  void loadPresets();
 }
 function send(type, payload, wantType) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -484,26 +606,28 @@ function listCategoryFilter() {
   return sub ? `${master}::${sub}` : master;
 }
 function ensureSourceOption(value) {
-  const v = (value || "eigen").trim() || "eigen";
+  const v = (value || "app").trim() || "app";
+  const normalized = v === "eigen" ? "app" : v;
   if (sourceEl instanceof HTMLSelectElement) {
-    if (![...sourceEl.options].some((o) => o.value === v)) {
+    if (![...sourceEl.options].some((o) => o.value === normalized)) {
       const opt = document.createElement("option");
-      opt.value = v;
-      opt.textContent = v;
+      opt.value = normalized;
+      opt.textContent = normalized;
       sourceEl.appendChild(opt);
     }
-    sourceEl.value = v;
+    sourceEl.value = normalized;
   } else {
-    sourceEl.value = v;
+    sourceEl.value = normalized;
   }
 }
 function resolveSaveSource() {
   const cid = catalogIdEl.value.trim().toUpperCase();
   const isNew = !idEl.value.trim();
-  let src = (sourceEl.value || "").trim() || "eigen";
-  if (isNew) src = "eigen";
+  let src = (sourceEl.value || "").trim() || "app";
+  if (src === "eigen") src = "app";
+  if (isNew) src = "app";
   if ((src === "catalogusGG.pdf" || src === "GL.cat") && cid && !cid.startsWith("D")) {
-    src = "eigen";
+    src = "app";
   }
   ensureSourceOption(src);
   return src;
@@ -519,7 +643,7 @@ function clearEditor() {
   nameEl.value = "";
   catEl.value = "";
   sourceRefEl.value = "";
-  ensureSourceOption("eigen");
+  ensureSourceOption("app");
   spectrumOkEl.checked = true;
   thickEl.value = "";
   weightEl.value = "";
@@ -540,6 +664,8 @@ function clearEditor() {
   editorTitleEl.textContent = "New material";
   deleteBtn.disabled = true;
   syncPickUi();
+  if (favoriteEl) favoriteEl.checked = false;
+  if (favoriteWrapEl) favoriteWrapEl.classList.toggle("hidden", !contextBuildingId);
 }
 function fillEditor(m) {
   selectedId = m.material_id || null;
@@ -565,7 +691,7 @@ function fillEditor(m) {
     catEl.value = m.category;
   }
   sourceRefEl.value = m.source_ref || "";
-  ensureSourceOption(m.source || "eigen");
+  ensureSourceOption(m.source || "app");
   spectrumOkEl.checked = m.spectrum_ok === "true" || m.spectrum_ok === "t";
   thickEl.value = m.thickness_mm || "";
   weightEl.value = m.weight_kg_m2 || "";
@@ -587,6 +713,7 @@ function fillEditor(m) {
   deleteBtn.disabled = !m.material_id;
   highlightSelection();
   syncPickUi();
+  void syncFavoriteCheckbox();
 }
 function highlightSelection() {
   for (const tr of tbodyEl.querySelectorAll("tr[data-id]")) {
@@ -647,7 +774,7 @@ async function loadList(preferId) {
     listCategoryFilter(),
     String(lim),
     String(offset),
-    (sourceFilterEl?.value || "").trim()
+    ""
   ]);
   if (ret.startsWith("ERROR")) {
     setStatus(ret, "err");
@@ -657,15 +784,13 @@ async function loadList(preferId) {
   const parsed = JSON.parse(ret);
   total = Number(parsed.total) || 0;
   listRows = parsed.materials ?? [];
-  tbodyEl.innerHTML = listRows.map((m) => {
-    const eigen = (m.source || "").trim().toLowerCase() === "eigen";
-    const nameCell = eigen ? `${esc(m.name)} <span class="mat-eigen-badge">eigen</span>` : esc(m.name);
-    return `
-      <tr data-id="${esc(m.material_id)}" role="option" tabindex="-1" title="Dubbelklik om te bewerken"${eigen ? ' class="mat-row-eigen"' : ""}>
+  tbodyEl.innerHTML = listRows.map(
+    (m) => `
+      <tr data-id="${esc(m.material_id)}" role="option" tabindex="-1" title="Dubbelklik om te bewerken">
         <td data-field="mat-catalog-id">${esc(m.catalog_id || "")}</td>
         <td data-field="mat-master">${esc(m.master_category || "")}</td>
         <td data-field="mat-cat">${esc(m.category || "")}</td>
-        <td class="mat-name-cell" data-field="mat-name">${nameCell}</td>
+        <td class="mat-name-cell" data-field="mat-name">${esc(m.name)}</td>
         <td data-field="mat-thick">${esc(m.thickness_mm || "")}</td>
         <td data-field="mat-weight">${esc(m.weight_kg_m2 || "")}</td>
         <td data-field="mat-ra">${esc(m.ra_dba || "")}</td>
@@ -679,8 +804,8 @@ async function loadList(preferId) {
         <td data-field="mat-rw">${esc(m.rw_db || "")}</td>
         <td data-field="mat-c">${esc(m.c_db || "")}</td>
         <td data-field="mat-ctr">${esc(m.ctr_db || "")}</td>
-      </tr>`;
-  }).join("");
+      </tr>`
+  ).join("");
   updatePager();
   const want = preferId ?? selectedId;
   const pick = want && listRows.find((m) => m.material_id === want) || listRows[0] || null;
@@ -693,7 +818,16 @@ async function loadList(preferId) {
   }
 }
 async function applyDeepLink() {
-  if (!auth?.token || !deepMaterialId) return;
+  if (!auth?.token) return;
+  if (deepNew && !deepMaterialId) {
+    await loadList();
+    clearEditor();
+    editorForm.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    nameEl.focus({ preventScroll: true });
+    setStatus("Nieuw materiaal \u2014 vul rubriek, subrubriek, spectra en RA in", "ok");
+    return;
+  }
+  if (!deepMaterialId) return;
   if (deepQ && !qEl.value.trim()) qEl.value = deepQ;
   setStatus("Loading material\u2026", "busy");
   const ret = await invokeString("API_AdminGetMaterial", [auth.token, deepMaterialId]);
@@ -747,7 +881,7 @@ async function bootstrapSession() {
       const info = JSON.parse(validated);
       if (info.username === "admin") {
         showAdmin({ token: stored.token, username: info.username, display_name: info.display_name });
-        if (deepMaterialId) await applyDeepLink();
+        if (deepMaterialId || deepNew) await applyDeepLink();
         else await loadList();
         return;
       }
@@ -775,7 +909,7 @@ loginForm.addEventListener("submit", async (ev) => {
     }
     showAdmin(info);
     offset = 0;
-    if (deepMaterialId) await applyDeepLink();
+    if (deepMaterialId || deepNew) await applyDeepLink();
     else await loadList();
     setStatus("Admin signed in", "ok");
   } catch (err) {
@@ -822,6 +956,23 @@ newBtn.addEventListener("click", () => {
   nameEl.focus();
 });
 clearBtn.addEventListener("click", () => clearEditor());
+favoriteEl?.addEventListener("change", () => {
+  if (!favoriteEl || !contextBuildingId) return;
+  if (!selectedId && !idEl.value.trim()) {
+    favoriteEl.checked = false;
+    setStatus("Sla het materiaal eerst op voordat je favoriet zet", "err");
+    return;
+  }
+  void setFavoriteForSelection(favoriteEl.checked).then(
+    () => setStatus(
+      favoriteEl.checked ? "Toegevoegd aan meest gebruikt" : "Verwijderd uit meest gebruikt",
+      "ok"
+    )
+  ).catch((err) => {
+    favoriteEl.checked = !favoriteEl.checked;
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+  });
+});
 pickBtnEl?.addEventListener("click", () => pickMaterialForCaller());
 pickBtnEditorEl?.addEventListener("click", () => pickMaterialForCaller());
 tbodyEl.addEventListener("click", (ev) => {
@@ -904,8 +1055,26 @@ editorForm.addEventListener("submit", async (ev) => {
       return;
     }
     const saved = JSON.parse(ret);
+    const wantFav = Boolean(favoriteEl?.checked && contextBuildingId);
     setStatus(saved.created ? "Material created" : "Material updated", "ok");
     await loadList(saved.material_id || null);
+    if (wantFav && saved.material_id) {
+      try {
+        await httpJson("/api/floormap/material-favorites", {
+          method: "POST",
+          body: JSON.stringify({
+            building_id: contextBuildingId,
+            material_id: saved.material_id
+          })
+        });
+        if (favoriteEl) favoriteEl.checked = true;
+      } catch (favErr) {
+        setStatus(
+          `Opgeslagen, maar favoriet mislukt: ${favErr instanceof Error ? favErr.message : String(favErr)}`,
+          "err"
+        );
+      }
+    }
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   } finally {

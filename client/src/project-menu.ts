@@ -1,7 +1,10 @@
 /**
- * Shared Bestand-menu for engineer suite pages (engineer / floormap / GA).
- * Open · Recent · Project opslaan · Hernoemen · Verwijderen
+ * Shared Bestand- + Over-menu for engineer suite pages (engineer / floormap / GA).
+ * Bestand: Open · Recent · Project opslaan · Hernoemen · Verwijderen
+ * Over: versie · gebruikershandleiding
  */
+
+import { APP_NAME, APP_VERSION, USER_DOCS_HREF } from "./app-version";
 
 export type ProjectListItem = {
   building_id: string;
@@ -104,6 +107,7 @@ export type ProjectMenuApi = {
 
 export function mountProjectMenu(root: HTMLElement, host: ProjectMenuHost): ProjectMenuApi {
   root.classList.add("file-menu");
+  root.setAttribute("aria-label", "Bestand en Over");
   root.innerHTML = `
     <div class="file-menu-bar">
       <details class="file-menu-details" id="pm-root">
@@ -119,6 +123,16 @@ export function mountProjectMenu(root: HTMLElement, host: ProjectMenuHost): Proj
           <li><button type="button" role="menuitem" data-act="save">Project opslaan</button></li>
           <li><button type="button" role="menuitem" data-act="rename">Hernoemen…</button></li>
           <li><button type="button" role="menuitem" data-act="delete" class="danger">Verwijderen…</button></li>
+        </ul>
+      </details>
+      <details class="file-menu-details" id="pm-about">
+        <summary class="file-menu-summary">Over</summary>
+        <ul class="file-menu-list" role="menu">
+          <li class="file-menu-about-version" role="menuitem">${APP_NAME}</li>
+          <li class="file-menu-about-version" role="menuitem">Versie ${APP_VERSION}</li>
+          <li>
+            <a class="file-menu-about-link" href="${USER_DOCS_HREF}" role="menuitem">Gebruikershandleiding</a>
+          </li>
         </ul>
       </details>
       <span class="file-menu-project-title" id="pm-title" aria-live="polite">Geen project</span>
@@ -137,6 +151,7 @@ export function mountProjectMenu(root: HTMLElement, host: ProjectMenuHost): Proj
   `;
 
   const detailsEl = root.querySelector("#pm-root") as HTMLDetailsElement;
+  const aboutEl = root.querySelector("#pm-about") as HTMLDetailsElement;
   const titleEl = root.querySelector("#pm-title") as HTMLElement;
   const recentEl = root.querySelector("#pm-recent") as HTMLUListElement;
   const dialogEl = root.querySelector("#pm-open-dialog") as HTMLDialogElement;
@@ -170,6 +185,7 @@ export function mountProjectMenu(root: HTMLElement, host: ProjectMenuHost): Proj
 
   function closeMenu(): void {
     detailsEl.open = false;
+    aboutEl.open = false;
     const recent = root.querySelector(".file-menu-recent") as HTMLDetailsElement | null;
     if (recent) recent.open = false;
   }
@@ -333,6 +349,13 @@ export function mountProjectMenu(root: HTMLElement, host: ProjectMenuHost): Proj
     }
   }
 
+  detailsEl.addEventListener("toggle", () => {
+    if (detailsEl.open) aboutEl.open = false;
+  });
+  aboutEl.addEventListener("toggle", () => {
+    if (aboutEl.open) detailsEl.open = false;
+  });
+
   root.addEventListener("click", (ev) => {
     const btn = (ev.target as HTMLElement).closest("button[data-act]") as HTMLButtonElement | null;
     if (!btn || !root.contains(btn)) return;
@@ -344,7 +367,7 @@ export function mountProjectMenu(root: HTMLElement, host: ProjectMenuHost): Proj
   });
 
   document.addEventListener("click", (ev) => {
-    if (!detailsEl.open) return;
+    if (!detailsEl.open && !aboutEl.open) return;
     if (root.contains(ev.target as Node)) return;
     closeMenu();
   });

@@ -66,7 +66,6 @@
 
     <section id="app-panel" class="hidden">
       <div class="panel user-bar">
-        <span id="user-label"></span>
         <div class="user-actions">
           <button type="button" id="method-btn" class="secondary">Berekeningsmethode</button>
           <button type="button" id="profile-btn" class="secondary">Profiel</button>
@@ -189,7 +188,8 @@ GA;k = GA − 10·log<sub>10</sub>(max(V/S<sub>tot</sub>, 3) / (6·T<sub>0</sub>
           <div class="progress-report-slot" id="project-report-slot" hidden>
             <p class="inbox-message" id="project-report-hint"></p>
             <div class="actions">
-              <button type="button" id="download-report-btn" disabled>PDF ophalen</button>
+              <button type="button" id="download-results-btn" disabled>Download rekenresultaten</button>
+              <button type="button" id="download-rapportage-btn" class="secondary" disabled title="Nog niet beschikbaar — volgt later">Download rapportage</button>
               <button type="button" id="email-report-btn" class="secondary" disabled>Laten e-mailen</button>
             </div>
           </div>
@@ -231,6 +231,6 @@ GA;k = GA − 10·log<sub>10</sub>(max(V/S<sub>tot</sub>, 3) / (6·T<sub>0</sub>
       </section>
     </section>
   </main>
-  <script type="module" src="/app.js?v=pdf-inbox"></script>
+  <script type="module" src="/app.js?v=dl-results"></script>
 </body>
 </html>

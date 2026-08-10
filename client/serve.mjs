@@ -29,6 +29,10 @@ import {
   handleFloormapVrComponentsList,
 } from "./lib/floormap-api.mjs";
 import {
+  handleMaterialFavoritePresets,
+  handleMaterialFavorites,
+} from "./lib/material-favorites-api.mjs";
+import {
   handleSessionApiOptions,
   handleSessionClear,
   handleSessionSave,
@@ -204,7 +208,9 @@ const server = http.createServer(async (req, res) => {
     urlPath === "/api/floormap/vr-components" ||
     urlPath === "/api/floormap/scale" ||
     urlPath === "/api/floormap/material-categories" ||
-    urlPath === "/api/floormap/materials"
+    urlPath === "/api/floormap/materials" ||
+    urlPath === "/api/floormap/material-favorites" ||
+    urlPath === "/api/floormap/material-favorite-presets"
   ) {
     if (req.method === "OPTIONS") {
       handleFloormapApiOptions(req, res);
@@ -237,6 +243,14 @@ const server = http.createServer(async (req, res) => {
       }
       if (urlPath === "/api/floormap/subsections" && req.method === "DELETE") {
         await handleFloormapSubsectionDelete(req, res, url);
+        return;
+      }
+      if (urlPath === "/api/floormap/material-favorites") {
+        await handleMaterialFavorites(req, res, url);
+        return;
+      }
+      if (urlPath === "/api/floormap/material-favorite-presets") {
+        await handleMaterialFavoritePresets(req, res, url);
         return;
       }
       if (urlPath === "/api/floormap/scale" && req.method === "POST") {

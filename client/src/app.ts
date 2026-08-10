@@ -92,7 +92,6 @@ const saveBtn = document.getElementById("save-btn") as HTMLButtonElement;
 const reloadBtn = document.getElementById("reload-btn") as HTMLButtonElement;
 const tabSigninBtn = document.getElementById("tab-signin") as HTMLButtonElement;
 const tabRegisterBtn = document.getElementById("tab-register") as HTMLButtonElement;
-const userLabel = document.getElementById("user-label") as HTMLElement;
 const pageTitle = document.getElementById("page-title") as HTMLElement;
 const pageLede = document.getElementById("page-lede") as HTMLElement;
 const projectListEl = document.getElementById("project-list") as HTMLUListElement;
@@ -124,7 +123,8 @@ const projectProgressStepsEl = document.getElementById("project-progress-steps")
 const projectProgressCaptionEl = document.getElementById("project-progress-caption") as HTMLElement;
 const projectReportSlotEl = document.getElementById("project-report-slot") as HTMLElement;
 const projectReportHintEl = document.getElementById("project-report-hint") as HTMLElement | null;
-const downloadReportBtn = document.getElementById("download-report-btn") as HTMLButtonElement;
+const downloadResultsBtn = document.getElementById("download-results-btn") as HTMLButtonElement;
+const downloadRapportageBtn = document.getElementById("download-rapportage-btn") as HTMLButtonElement | null;
 const emailReportBtn = document.getElementById("email-report-btn") as HTMLButtonElement | null;
 const inboxPanelEl = document.getElementById("inbox-panel") as HTMLElement | null;
 const inboxListEl = document.getElementById("inbox-list") as HTMLUListElement | null;
@@ -266,7 +266,7 @@ function kindLabel(kind: string): string {
 
 function renderInboxMessage(item: InboxItem): string {
   const label = kindLabel(item.report_kind);
-  return `De ${label} rapportage (PDF) is beschikbaar. <a href="#" id="inbox-fetch-link">PDF ophalen</a> (of <a href="#" id="inbox-email-link">laten e-mailen</a>).`;
+  return `De ${label} rekenresultaten zijn beschikbaar. <a href="#" id="inbox-fetch-link">Download rekenresultaten</a> (of <a href="#" id="inbox-email-link">laten e-mailen</a>).`;
 }
 
 function bindInboxMessageLinks(): void {
@@ -274,7 +274,7 @@ function bindInboxMessageLinks(): void {
   const emailLink = document.getElementById("inbox-email-link");
   fetchLink?.addEventListener("click", (ev) => {
     ev.preventDefault();
-    downloadReportBtn.click();
+    downloadResultsBtn.click();
   });
   emailLink?.addEventListener("click", (ev) => {
     ev.preventDefault();
@@ -325,7 +325,7 @@ async function refreshGlobalInbox(): Promise<void> {
     // Bij meerdere projecten: direct PDF, geen omweg via «Open project».
     const dlBtn = document.createElement("button");
     dlBtn.type = "button";
-    dlBtn.textContent = "PDF ophalen";
+    dlBtn.textContent = "Download rekenresultaten";
     dlBtn.title = item.filename.endsWith(".pdf")
       ? item.filename
       : item.filename.replace(/\.html$/i, ".pdf");
@@ -334,6 +334,12 @@ async function refreshGlobalInbox(): Promise<void> {
         setStatus(err instanceof Error ? err.message : String(err), "err");
       });
     });
+    const rapportBtn = document.createElement("button");
+    rapportBtn.type = "button";
+    rapportBtn.className = "secondary";
+    rapportBtn.textContent = "Download rapportage";
+    rapportBtn.disabled = true;
+    rapportBtn.title = "Nog niet beschikbaar — volgt later";
     const emailBtn = document.createElement("button");
     emailBtn.type = "button";
     emailBtn.className = "secondary";
@@ -344,6 +350,7 @@ async function refreshGlobalInbox(): Promise<void> {
       });
     });
     actions.appendChild(dlBtn);
+    actions.appendChild(rapportBtn);
     actions.appendChild(emailBtn);
     li.appendChild(actions);
     inboxListEl.appendChild(li);
@@ -361,7 +368,8 @@ function escapeHtml(s: string): string {
 async function refreshProjectInbox(): Promise<void> {
   cachedReports = [];
   activeInboxItem = null;
-  downloadReportBtn.disabled = true;
+  downloadResultsBtn.disabled = true;
+  if (downloadRapportageBtn) downloadRapportageBtn.disabled = true;
   if (emailReportBtn) emailReportBtn.disabled = true;
 
   const projectId = activeProjectId();
@@ -405,7 +413,8 @@ async function refreshProjectInbox(): Promise<void> {
   }
 
   projectReportSlotEl.hidden = false;
-  downloadReportBtn.disabled = false;
+  downloadResultsBtn.disabled = false;
+  if (downloadRapportageBtn) downloadRapportageBtn.disabled = true;
   if (emailReportBtn) emailReportBtn.disabled = false;
   if (projectReportHintEl) {
     projectReportHintEl.innerHTML = renderInboxMessage(activeInboxItem);
@@ -453,13 +462,14 @@ async function refreshProjectReportsLegacy(): Promise<void> {
     return;
   }
   projectReportSlotEl.hidden = false;
-  downloadReportBtn.disabled = false;
+  downloadResultsBtn.disabled = false;
+  if (downloadRapportageBtn) downloadRapportageBtn.disabled = true;
   if (emailReportBtn) emailReportBtn.disabled = true;
   if (projectReportHintEl) {
     const label = latest.filename.endsWith(".pdf")
       ? latest.filename
       : latest.filename.replace(/\.html$/i, ".pdf");
-    projectReportHintEl.textContent = `PDF-rapport gereed: ${label}`;
+    projectReportHintEl.textContent = `Rekenresultaten gereed: ${label}`;
   }
 }
 
@@ -513,7 +523,7 @@ async function downloadInboxItem(item: InboxItem): Promise<void> {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
-  setStatus(`PDF gedownload: ${downloadName}`, "ok");
+  setStatus(`Rekenresultaten gedownload: ${downloadName}`, "ok");
   await refreshGlobalInbox();
   if (activeProjectId() === item.building_id) await refreshProjectInbox();
 }
@@ -591,14 +601,18 @@ function showLogin(): void {
   document.title = "Geluidwering Gevels — Opdrachtgever";
 }
 
+function loggedInLabel(info: AuthInfo): string {
+  const name = info.display_name?.trim();
+  return name ? `Ingelogd als ${name} (${info.username})` : `Ingelogd als ${info.username}`;
+}
+
 async function showApp(info: AuthInfo): Promise<void> {
   auth = info;
   storeAuth(info);
   loginPanel.classList.add("hidden");
   appPanel.classList.remove("hidden");
   projectDetailPanel.classList.add("hidden");
-  const label = info.display_name || info.username;
-  userLabel.textContent = `Ingelogd als ${label}`;
+  setStatus(loggedInLabel(info), "ok");
   profileServiceEmailEl.textContent = info.email
     ? `Account-e-mail: ${info.email}`
     : "Geen account-e-mail ingesteld.";
@@ -717,7 +731,6 @@ async function bootstrapSession(): Promise<void> {
     }
     const info = JSON.parse(validated) as AuthInfo;
     await showApp(info);
-    if (!lastProjectId) setStatus(`Ingelogd als ${info.display_name || info.username}`, "ok");
   } else {
     showLogin();
   }
@@ -1089,7 +1102,6 @@ loginForm.addEventListener("submit", async (ev) => {
     }
     const info = JSON.parse(ret) as AuthInfo;
     await showApp(info);
-    if (!lastProjectId) setStatus(`Ingelogd als ${info.display_name || info.username}`, "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   } finally {
@@ -1406,7 +1418,7 @@ submitDrawingsBtn.addEventListener("click", () => {
   void submitDrawingsForReview();
 });
 
-downloadReportBtn.addEventListener("click", () => {
+downloadResultsBtn.addEventListener("click", () => {
   void (async () => {
     if (!auth?.token) return;
     try {
@@ -1420,7 +1432,7 @@ downloadReportBtn.addEventListener("click", () => {
         cachedReports.find((r) => r.filename.endsWith(".html")) ||
         cachedReports[0];
       if (!projectId || !latest) {
-        setStatus("Geen rapport beschikbaar om te downloaden", "err");
+        setStatus("Geen rekenresultaten beschikbaar om te downloaden", "err");
         return;
       }
       const res = await fetch(
@@ -1449,11 +1461,15 @@ downloadReportBtn.addEventListener("click", () => {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      setStatus(`PDF gedownload: ${downloadName}`, "ok");
+      setStatus(`Rekenresultaten gedownload: ${downloadName}`, "ok");
     } catch (err) {
       setStatus(err instanceof Error ? err.message : String(err), "err");
     }
   })();
+});
+
+downloadRapportageBtn?.addEventListener("click", () => {
+  setStatus("Download rapportage volgt later — nog niet beschikbaar", "err");
 });
 
 emailReportBtn?.addEventListener("click", () => {

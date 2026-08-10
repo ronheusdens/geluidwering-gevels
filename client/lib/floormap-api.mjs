@@ -1279,10 +1279,9 @@ export async function handleFloormapMaterialCategoriesGet(req, res, url) {
 }
 
 /**
- * GET /api/floormap/materials?master_category=&category=&q=&source=&limit=
- * Catalog pick list for façade set-ops (engineer).
+ * GET /api/floormap/materials?master_category=&category=&q=&limit=
+ * Shared catalog pick list for façade set-ops (engineer).
  * `category` filters by subrubriek name (optional).
- * `source=eigen` limits to engineer-created materials; master_category optional then.
  */
 export async function handleFloormapMaterialsList(req, res, url) {
   if (requireHttpsOrReject(req, res)) return;
@@ -1296,10 +1295,8 @@ export async function handleFloormapMaterialsList(req, res, url) {
     return;
   }
   const masterCategory = (url.searchParams.get("master_category") || "").trim();
-  const sourceFilter = (url.searchParams.get("source") || "").trim().toLowerCase();
-  const eigenOnly = sourceFilter === "eigen";
-  if (!masterCategory && !eigenOnly) {
-    json(req, res, 400, { ok: false, error: "master_category is required (unless source=eigen)" });
+  if (!masterCategory) {
+    json(req, res, 400, { ok: false, error: "master_category is required" });
     return;
   }
   const subCategory = (url.searchParams.get("category") || "").trim();
@@ -1320,9 +1317,6 @@ export async function handleFloormapMaterialsList(req, res, url) {
     const params = [];
     /** @type {string[]} */
     const clauses = [];
-    if (eigenOnly) {
-      clauses.push("source = 'eigen'");
-    }
     if (rub) {
       params.push(rub.nr);
       clauses.push(`rubriek_nr = $${params.length}`);
@@ -1382,7 +1376,6 @@ export async function handleFloormapMaterialsList(req, res, url) {
       master_category: rub ? rub.name : masterCategory || null,
       rubriek_nr: rub ? rub.nr : null,
       category: subCategory || null,
-      source: eigenOnly ? "eigen" : null,
       materials: rows.map((r) => ({
         material_id: r.material_id,
         catalog_id: r.catalog_id,
@@ -1412,8 +1405,8 @@ export async function handleFloormapMaterialsList(req, res, url) {
 
 /**
  * POST /api/floormap/materials
- * Engineer: eigen materiaal aanmaken (source=eigen) en optioneel koppelen aan gevelcomponent.
- * body: { name, ra_dba, rubriek_nr, subsection_id? }
+ * Engineer: materiaal toevoegen aan de gedeelde catalogus (source=app, id A#####).
+ * body: { name, ra_dba, rubriek_nr, subrubriek_nr?, category?, subsection_id? }
  */
 export async function handleFloormapMaterialCreate(req, res) {
   if (requireHttpsOrReject(req, res)) return;
@@ -1438,6 +1431,8 @@ export async function handleFloormapMaterialCreate(req, res) {
   const name = String(body.name || "").trim().slice(0, 200);
   const ra = Number(body.ra_dba);
   const rubriekNr = Number(body.rubriek_nr);
+  const subrubriekNrRaw = body.subrubriek_nr != null ? Number(body.subrubriek_nr) : NaN;
+  const categoryName = String(body.category || "").trim().slice(0, 120);
   const subsectionId = String(body.subsection_id || "").trim();
 
   if (!name) {
@@ -1459,6 +1454,17 @@ export async function handleFloormapMaterialCreate(req, res) {
 
   const rub = MATERIAL_RUBRIEKEN.find((r) => r.nr === rubriekNr);
   const masterCategory = rub ? rub.name : `Rubriek ${rubriekNr}`;
+  const subs = subrubriekenFor(rubriekNr);
+  let subrubriekNr = Number.isInteger(subrubriekNrRaw) ? subrubriekNrRaw : null;
+  let category = categoryName;
+  if (subrubriekNr != null) {
+    const sub = subs.find((s) => s.nr === subrubriekNr);
+    if (sub) category = sub.name;
+    else subrubriekNr = null;
+  } else if (category) {
+    const sub = subs.find((s) => s.name === category);
+    if (sub) subrubriekNr = sub.nr;
+  }
   const asLength = isLengthQuantityRubriek(rubriekNr);
 
   const pool = getPool();
@@ -1471,7 +1477,7 @@ export async function handleFloormapMaterialCreate(req, res) {
     }
 
     await client.query("BEGIN");
-    const src = "eigen";
+    const src = "app";
     const { rows: nextRows } = await client.query(
       `SELECT
          COALESCE(MAX(material_no), 0) + 1 AS next_no,
@@ -1482,28 +1488,30 @@ export async function handleFloormapMaterialCreate(req, res) {
     );
     const materialNo = Number(nextRows[0]?.next_no) || 1;
     const catalogIndex = Number(nextRows[0]?.next_idx) || 0;
-    const catalogId = `E${String(materialNo).padStart(5, "0")}`;
+    const catalogId = `A${String(materialNo).padStart(5, "0")}`;
 
     const { rows: matRows } = await client.query(
       `INSERT INTO app_gevelwering.material (
-         catalog_index, catalog_id, material_no, master_category, name,
-         rubriek_nr, ra_dba, spectrum_ok, source, source_ref
+         catalog_index, catalog_id, material_no, master_category, name, category,
+         rubriek_nr, subrubriek_nr, ra_dba, spectrum_ok, source, source_ref
        ) VALUES (
-         $1, $2, $3, $4, $5,
-         $6, $7, true, $8, $9
+         $1, $2, $3, $4, $5, $6,
+         $7, $8, $9, true, $10, $11
        )
-       RETURNING id::text AS material_id, catalog_id, name, master_category,
-                 rubriek_nr, ra_dba`,
+       RETURNING id::text AS material_id, catalog_id, name, master_category, category,
+                 rubriek_nr, subrubriek_nr, ra_dba`,
       [
         catalogIndex,
         catalogId,
         materialNo,
         masterCategory,
         name,
+        category || null,
         rubriekNr,
+        subrubriekNr,
         ra,
         src,
-        "eigen materiaal",
+        "app catalogus",
       ],
     );
     const mat = matRows[0];
@@ -1561,7 +1569,9 @@ export async function handleFloormapMaterialCreate(req, res) {
         catalog_id: mat.catalog_id,
         name: mat.name,
         master_category: mat.master_category,
+        category: mat.category || "",
         rubriek_nr: Number(mat.rubriek_nr),
+        subrubriek_nr: mat.subrubriek_nr != null ? Number(mat.subrubriek_nr) : null,
         ra_dba: Number(mat.ra_dba),
         source: src,
       },

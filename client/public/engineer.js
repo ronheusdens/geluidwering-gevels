@@ -161,6 +161,11 @@ function initEngineerLayoutSplit(root = document) {
   });
 }
 
+// src/app-version.ts
+var APP_VERSION = "0.1.0";
+var APP_NAME = "Geluidwering Gevels";
+var USER_DOCS_HREF = "/handleiding.html";
+
 // src/project-menu.ts
 var RECENT_KEY = "app-gevelwering-recent-projects";
 var RECENT_MAX = 8;
@@ -219,6 +224,7 @@ async function cleanupProjectFolder(buildingId, headers) {
 }
 function mountProjectMenu(root, host) {
   root.classList.add("file-menu");
+  root.setAttribute("aria-label", "Bestand en Over");
   root.innerHTML = `
     <div class="file-menu-bar">
       <details class="file-menu-details" id="pm-root">
@@ -236,6 +242,16 @@ function mountProjectMenu(root, host) {
           <li><button type="button" role="menuitem" data-act="delete" class="danger">Verwijderen\u2026</button></li>
         </ul>
       </details>
+      <details class="file-menu-details" id="pm-about">
+        <summary class="file-menu-summary">Over</summary>
+        <ul class="file-menu-list" role="menu">
+          <li class="file-menu-about-version" role="menuitem">${APP_NAME}</li>
+          <li class="file-menu-about-version" role="menuitem">Versie ${APP_VERSION}</li>
+          <li>
+            <a class="file-menu-about-link" href="${USER_DOCS_HREF}" role="menuitem">Gebruikershandleiding</a>
+          </li>
+        </ul>
+      </details>
       <span class="file-menu-project-title" id="pm-title" aria-live="polite">Geen project</span>
     </div>
     <dialog class="file-menu-dialog" id="pm-open-dialog">
@@ -251,6 +267,7 @@ function mountProjectMenu(root, host) {
     </dialog>
   `;
   const detailsEl = root.querySelector("#pm-root");
+  const aboutEl = root.querySelector("#pm-about");
   const titleEl = root.querySelector("#pm-title");
   const recentEl = root.querySelector("#pm-recent");
   const dialogEl = root.querySelector("#pm-open-dialog");
@@ -280,6 +297,7 @@ function mountProjectMenu(root, host) {
   }
   function closeMenu() {
     detailsEl.open = false;
+    aboutEl.open = false;
     const recent = root.querySelector(".file-menu-recent");
     if (recent) recent.open = false;
   }
@@ -435,6 +453,12 @@ Dit wist berekeningen, tekeningen en rapportmappen. Dit kan niet ongedaan worden
       status("err", err instanceof Error ? err.message : String(err));
     }
   }
+  detailsEl.addEventListener("toggle", () => {
+    if (detailsEl.open) aboutEl.open = false;
+  });
+  aboutEl.addEventListener("toggle", () => {
+    if (aboutEl.open) detailsEl.open = false;
+  });
   root.addEventListener("click", (ev) => {
     const btn = ev.target.closest("button[data-act]");
     if (!btn || !root.contains(btn)) return;
@@ -445,7 +469,7 @@ Dit wist berekeningen, tekeningen en rapportmappen. Dit kan niet ongedaan worden
     else if (act === "delete") void deleteProject();
   });
   document.addEventListener("click", (ev) => {
-    if (!detailsEl.open) return;
+    if (!detailsEl.open && !aboutEl.open) return;
     if (root.contains(ev.target)) return;
     closeMenu();
   });

@@ -740,6 +740,26 @@ body {
   vertical-align: middle;
 }
 
+.mat-preset-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.mat-preset-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mat-preset-item > span {
+  flex: 1 1 12rem;
+}
+
 .mat-table-wrap {
   overflow-x: auto;
   overflow-y: auto;
@@ -900,8 +920,21 @@ body {
 }
 
 button.danger {
-  color: var(--danger);
-  border-color: #e0b4b4;
+  color: #1c1a16;
+  background: #d64545;
+  border-color: #b53232;
+}
+
+button.danger:hover:not(:disabled) {
+  background: #c53838;
+  border-color: #9e2a2a;
+}
+
+button.danger:disabled {
+  color: #1c1a16;
+  background: #e8a0a0;
+  border-color: #d48888;
+  opacity: 0.85;
 }
 
 .project-list {
@@ -1370,7 +1403,7 @@ button:disabled {
 .user-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 1rem;
   font-family: "IBM Plex Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
   font-size: 0.9rem;
@@ -1449,6 +1482,38 @@ button:disabled {
 
 .file-menu-list > li > button.danger {
   color: #b71c1c;
+}
+
+.file-menu-about-version {
+  padding: 0.4rem 0.85rem 0.15rem;
+  font-size: 0.82rem;
+  color: #5f6b66;
+  line-height: 1.35;
+  user-select: text;
+  cursor: default;
+}
+
+.file-menu-about-version + .file-menu-about-version {
+  padding-top: 0;
+  padding-bottom: 0.45rem;
+  font-variant-numeric: tabular-nums;
+}
+
+a.file-menu-about-link {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  padding: 0.45rem 0.85rem;
+  font: inherit;
+  color: #1565c0;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+a.file-menu-about-link:hover {
+  background: #eef2f0;
+  text-decoration: underline;
 }
 
 .file-menu-recent {

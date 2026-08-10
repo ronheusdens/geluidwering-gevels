@@ -12,7 +12,7 @@ REM         API_EngineerListReviewQueue, API_EngineerGetProject, API_ReviewDrawi
 REM         API_ListDrawingRegions, API_SaveDrawingRegion, API_DeleteDrawingRegion,
 REM         API_ListFloormapSections, API_SaveFloormapScale,
 REM         API_AdminListCustomers, API_AdminListCustomerProjects, API_AdminUpdateProjectStatus,
-REM         API_AdminListAccounts, API_AdminUpdateAccount, API_AdminResetAccountPassword,
+REM         API_AdminListAccounts, API_AdminUpdateAccount, API_AdminResetAccountPassword, API_AdminDeleteAccount,
 REM         API_AdminListMaterials, API_AdminGetMaterial, API_AdminSaveMaterial, API_AdminDeleteMaterial,
 REM         GA model (DDL 0.2.16+): API_ListVariants, API_SaveVariant, API_DeleteVariant, API_CloneVariant,
 REM         API_ListVerblijfsgebieden, API_CreateVerblijfsgebied, API_SaveVerblijfsgebied, API_DeleteVerblijfsgebied,
@@ -451,7 +451,7 @@ REM --- Admin opdrachtgever accounts (service_user, non-engineer) ---
 
 PROCEDURE API_AdminListAccounts(session_token$) AS STRING
     DIM sql$, rid%, n%, i%, out$, t$, username$
-    DIM uid$, uname$, email$, dname$, active$, mustchg$, cid$, cname$, created$
+    DIM uid$, uname$, email$, dname$, active$, mustchg$, cid$, cname$, created$, pcount$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -479,7 +479,11 @@ PROCEDURE API_AdminListAccounts(session_token$) AS STRING
     sql$ = sql$ + "COALESCE(u.display_name,'') AS display_name, "
     sql$ = sql$ + "u.is_active::text AS is_active, u.must_change_password::text AS must_change_password, "
     sql$ = sql$ + "COALESCE(c.id::text,'') AS customer_id, COALESCE(c.name,'') AS customer_name, "
-    sql$ = sql$ + "u.created_at::text AS created_at "
+    sql$ = sql$ + "u.created_at::text AS created_at, "
+    sql$ = sql$ + "(SELECT COUNT(*)::text FROM app_gevelwering.building b "
+    sql$ = sql$ + " WHERE b.owner_user_id = u.id "
+    sql$ = sql$ + "    OR b.customer_id IN (SELECT cx.id FROM app_gevelwering.customer cx WHERE cx.owner_user_id = u.id)"
+    sql$ = sql$ + ") AS project_count "
     sql$ = sql$ + "FROM app_gevelwering.service_user u "
     sql$ = sql$ + "LEFT JOIN app_gevelwering.customer c ON c.owner_user_id = u.id "
     sql$ = sql$ + "WHERE COALESCE(u.is_engineer, false) = false "
@@ -503,6 +507,10 @@ PROCEDURE API_AdminListAccounts(session_token$) AS STRING
         cid$ = POSTGRES_GET_BY_NAME$(rid%, i%, "customer_id")
         cname$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "customer_name"), CHR$(34), "")
         created$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "created_at"), CHR$(34), "")
+        pcount$ = POSTGRES_GET_BY_NAME$(rid%, i%, "project_count")
+        IF pcount$ = "" THEN
+            pcount$ = "0"
+        END IF
         out$ = out$ + "{" + CHR$(34) + "user_id" + CHR$(34) + ":" + CHR$(34) + uid$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "username" + CHR$(34) + ":" + CHR$(34) + uname$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "email" + CHR$(34) + ":" + CHR$(34) + email$ + CHR$(34)
@@ -526,6 +534,7 @@ PROCEDURE API_AdminListAccounts(session_token$) AS STRING
             out$ = out$ + CHR$(34) + cid$ + CHR$(34)
         END IF
         out$ = out$ + "," + CHR$(34) + "customer_name" + CHR$(34) + ":" + CHR$(34) + cname$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "project_count" + CHR$(34) + ":" + pcount$
         out$ = out$ + "," + CHR$(34) + "created_at" + CHR$(34) + ":" + CHR$(34) + created$ + CHR$(34) + "}"
         i% = i% + 1
     WEND
@@ -686,6 +695,79 @@ PROCEDURE API_AdminResetAccountPassword(session_token$, user_id$) AS STRING
     RETURN out$
 END PROCEDURE
 
+PROCEDURE API_AdminDeleteAccount(session_token$, user_id$) AS STRING
+    DIM sql$, rid%, t$, username$, uid$, uname$, pcount$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR user_id$ = "" THEN
+        RETURN "ERROR: session_token and user_id are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    uid$ = SUBSTITUTE$(user_id$, "'", "''")
+
+    sql$ = "SELECT u.username "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    IF username$ <> "admin" THEN
+        RETURN "ERROR: admin access required"
+    END IF
+
+    sql$ = "SELECT username, COALESCE(is_engineer::text,'false') AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.service_user WHERE id = '" + uid$ + "'::uuid"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: account not found"
+    END IF
+    uname$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    IF uname$ = "admin" OR POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") = "true" OR POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") = "t" THEN
+        RETURN "ERROR: cannot delete admin or engineer accounts here"
+    END IF
+
+    sql$ = "SELECT COUNT(*)::text AS project_count FROM app_gevelwering.building b "
+    sql$ = sql$ + "WHERE b.owner_user_id = '" + uid$ + "'::uuid "
+    sql$ = sql$ + "   OR b.customer_id IN ("
+    sql$ = sql$ + "        SELECT c.id FROM app_gevelwering.customer c WHERE c.owner_user_id = '" + uid$ + "'::uuid"
+    sql$ = sql$ + "   )"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    pcount$ = POSTGRES_GET_BY_NAME$(rid%, 0, "project_count")
+    IF pcount$ = "" THEN
+        pcount$ = "0"
+    END IF
+    IF VAL(pcount$) > 0 THEN
+        RETURN "ERROR: account heeft " + pcount$ + " project(en) — verwijderen niet toegestaan"
+    END IF
+
+    sql$ = "DELETE FROM app_gevelwering.login_session WHERE user_id = '" + uid$ + "'::uuid"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+
+    sql$ = "DELETE FROM app_gevelwering.customer WHERE owner_user_id = '" + uid$ + "'::uuid"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+
+    sql$ = "DELETE FROM app_gevelwering.service_user WHERE id = '" + uid$ + "'::uuid "
+    sql$ = sql$ + "RETURNING id::text AS id, username"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: account delete failed"
+    END IF
+
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true"
+    out$ = out$ + "," + CHR$(34) + "user_id" + CHR$(34) + ":" + CHR$(34) + POSTGRES_GET_BY_NAME$(rid%, 0, "id") + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "username" + CHR$(34) + ":" + CHR$(34) + SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "username"), CHR$(34), "") + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "deleted" + CHR$(34) + ":true"
+    out$ = out$ + "}"
+    RETURN out$
+END PROCEDURE
+
 REM --- Admin material catalog (app_gevelwering.material / catalogusGG.pdf) ---
 
 PROCEDURE API_AdminListMaterials(session_token$, q$, category$, limit$, offset$, source_filter$) AS STRING
@@ -755,11 +837,11 @@ PROCEDURE API_AdminListMaterials(session_token$, q$, category$, limit$, offset$,
             sql$ = sql$ + " AND master_category = '" + cat$ + "'"
         END IF
     END IF
-    IF sfilt$ = "eigen" THEN
-        sql$ = sql$ + " AND source = 'eigen'"
+    IF sfilt$ = "eigen" OR sfilt$ = "app" THEN
+        sql$ = sql$ + " AND source IN ('eigen', 'app')"
     ELSE
         IF sfilt$ = "catalogus" OR sfilt$ = "catalog" THEN
-            sql$ = sql$ + " AND COALESCE(source, '') <> 'eigen'"
+            sql$ = sql$ + " AND COALESCE(source, '') NOT IN ('eigen', 'app')"
         END IF
     END IF
     rid% = POSTGRES_QUERY(g_conn%, sql$)
@@ -806,11 +888,11 @@ PROCEDURE API_AdminListMaterials(session_token$, q$, category$, limit$, offset$,
             sql$ = sql$ + " AND master_category = '" + cat$ + "'"
         END IF
     END IF
-    IF sfilt$ = "eigen" THEN
-        sql$ = sql$ + " AND source = 'eigen'"
+    IF sfilt$ = "eigen" OR sfilt$ = "app" THEN
+        sql$ = sql$ + " AND source IN ('eigen', 'app')"
     ELSE
         IF sfilt$ = "catalogus" OR sfilt$ = "catalog" THEN
-            sql$ = sql$ + " AND COALESCE(source, '') <> 'eigen'"
+            sql$ = sql$ + " AND COALESCE(source, '') NOT IN ('eigen', 'app')"
         END IF
     END IF
     sql$ = sql$ + " ORDER BY master_category, category, material_no ASC LIMIT " + lim$ + " OFFSET " + off$
@@ -1075,15 +1157,18 @@ PROCEDURE API_AdminSaveMaterial(session_token$, material_id$, catalog_id$, maste
     acav$ = SUBSTITUTE$(glass_cavity$, "'", "''")
     at2$ = SUBSTITUTE$(glass_t2$, "'", "''")
     src$ = SUBSTITUTE$(source$, "'", "''")
-    IF src$ = "" THEN
-        src$ = "eigen"
+    IF src$ = "" OR src$ = "eigen" THEN
+        src$ = "app"
     END IF
-    REM New rows and custom catalog ids (P…/E…, not DGMR D…) must not use catalog seed sources.
+    REM New app rows use source=app (A#####). Keep DGMR D… on catalogusGG.pdf.
     IF mid$ = "" THEN
-        src$ = "eigen"
+        src$ = "app"
     END IF
     IF (src$ = "catalogusGG.pdf" OR src$ = "GL.cat") AND LEFT$(UCASE$(cid$), 1) <> "D" THEN
-        src$ = "eigen"
+        src$ = "app"
+    END IF
+    IF src$ = "eigen" THEN
+        src$ = "app"
     END IF
     IF sok$ = "1" OR sok$ = "true" OR sok$ = "t" OR sok$ = "yes" THEN
         sok_sql$ = "true"
@@ -1225,6 +1310,13 @@ PROCEDURE API_AdminSaveMaterial(session_token$, material_id$, catalog_id$, maste
         END IF
         out_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "material_id")
         mno$ = POSTGRES_GET_BY_NAME$(rid%, 0, "material_no")
+        sql$ = "UPDATE app_gevelwering.material m SET " + _
+            "rubriek_nr = (SELECT r.nr FROM app_gevelwering.material_rubriek r WHERE r.name = m.master_category LIMIT 1), " + _
+            "subrubriek_nr = (SELECT s.nr FROM app_gevelwering.material_subrubriek s " + _
+            " JOIN app_gevelwering.material_rubriek r ON r.nr = s.rubriek_nr " + _
+            " WHERE r.name = m.master_category AND s.name = m.category LIMIT 1) " + _
+            "WHERE m.id = '" + out_id$ + "'::uuid"
+        rid% = POSTGRES_QUERY(g_conn%, sql$)
         RETURN "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "material_id" + CHR$(34) + ":" + CHR$(34) + out_id$ + CHR$(34) + "," + CHR$(34) + "material_no" + CHR$(34) + ":" + mno$ + "," + CHR$(34) + "created" + CHR$(34) + ":true}"
     END IF
 
@@ -1265,6 +1357,13 @@ PROCEDURE API_AdminSaveMaterial(session_token$, material_id$, catalog_id$, maste
     END IF
     out_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "material_id")
     mno$ = POSTGRES_GET_BY_NAME$(rid%, 0, "material_no")
+    sql$ = "UPDATE app_gevelwering.material m SET " + _
+        "rubriek_nr = (SELECT r.nr FROM app_gevelwering.material_rubriek r WHERE r.name = m.master_category LIMIT 1), " + _
+        "subrubriek_nr = (SELECT s.nr FROM app_gevelwering.material_subrubriek s " + _
+        " JOIN app_gevelwering.material_rubriek r ON r.nr = s.rubriek_nr " + _
+        " WHERE r.name = m.master_category AND s.name = m.category LIMIT 1) " + _
+        "WHERE m.id = '" + out_id$ + "'::uuid"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
     RETURN "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "material_id" + CHR$(34) + ":" + CHR$(34) + out_id$ + CHR$(34) + "," + CHR$(34) + "material_no" + CHR$(34) + ":" + mno$ + "," + CHR$(34) + "created" + CHR$(34) + ":false}"
 END PROCEDURE
 
