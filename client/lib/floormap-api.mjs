@@ -12,7 +12,7 @@ import {
   requireHttpsOrReject,
   securityHeaders,
 } from "./http-security.mjs";
-import { partitionVrGaComponents } from "./ga-vr-components.mjs";
+import { composeSourcesMaterialComplete, partitionVrGaComponents } from "./ga-vr-components.mjs";
 import {
   MATERIAL_RUBRIEKEN,
   formatRubriekLabel,
@@ -473,39 +473,44 @@ export async function handleFloormapVrComponentsList(req, res, url) {
     );
 
     const part = partitionVrGaComponents(rows, vrNr);
-    const matIds = [
-      ...new Set(
-        part.eligible
-          .map((s) => (s.material_id != null ? String(s.material_id) : ""))
-          .filter((id) => UUID_RE.test(id)),
-      ),
-    ];
-    const catalogIds = [
-      ...new Set(
-        part.eligible
-          .map((s) => {
-            const a =
-              s.analysis && typeof s.analysis === "object" && !Array.isArray(s.analysis)
-                ? s.analysis
-                : {};
-            return a.catalog_id != null ? String(a.catalog_id).trim() : "";
-          })
-          .filter((c) => c.length > 0),
-      ),
-    ];
+    const byId = new Map(rows.map((s) => [String(s.id), s]));
+
+    /** Collect material refs from eligible + compose sources (for labels). */
+    const matIds = new Set();
+    const catalogIds = new Set();
+    const collectMatRefs = (analysis) => {
+      const a =
+        analysis && typeof analysis === "object" && !Array.isArray(analysis) ? analysis : {};
+      const mid = a.material_id != null ? String(a.material_id).trim() : "";
+      if (mid && UUID_RE.test(mid)) matIds.add(mid);
+      const cat = a.catalog_id != null ? String(a.catalog_id).trim() : "";
+      if (cat) catalogIds.add(cat);
+    };
+    for (const s of part.eligible) collectMatRefs(s.analysis);
+    for (const s of part.eligible) {
+      const a =
+        s.analysis && typeof s.analysis === "object" && !Array.isArray(s.analysis)
+          ? s.analysis
+          : {};
+      const src = Array.isArray(a.source_subsection_ids) ? a.source_subsection_ids : [];
+      for (const sid of src) {
+        const row = byId.get(String(sid));
+        if (row) collectMatRefs(row.analysis);
+      }
+    }
     /** @type {Map<string, { id: string, ra_dba: number|null, catalog_id: string|null, name: string|null }>} */
     const matById = new Map();
     /** @type {Map<string, { id: string, ra_dba: number|null, catalog_id: string|null, name: string|null }>} */
     const matByCatalog = new Map();
-    if (matIds.length || catalogIds.length) {
+    if (matIds.size || catalogIds.size) {
       const clauses = [];
       const params = [];
-      if (matIds.length) {
-        params.push(matIds);
+      if (matIds.size) {
+        params.push([...matIds]);
         clauses.push(`id = ANY($${params.length}::uuid[])`);
       }
-      if (catalogIds.length) {
-        params.push(catalogIds);
+      if (catalogIds.size) {
+        params.push([...catalogIds]);
         clauses.push(`catalog_id = ANY($${params.length}::text[])`);
       }
       const { rows: mats } = await client.query(
@@ -529,6 +534,69 @@ export async function handleFloormapVrComponentsList(req, res, url) {
         if (info.catalog_id) matByCatalog.set(info.catalog_id, info);
       }
     }
+
+    const resolveMat = (analysis, fallbackMid) => {
+      const a =
+        analysis && typeof analysis === "object" && !Array.isArray(analysis) ? analysis : {};
+      const mid = fallbackMid || (a.material_id != null ? String(a.material_id) : "");
+      const catalogFromAnalysis =
+        a.catalog_id != null && String(a.catalog_id).trim() ? String(a.catalog_id).trim() : null;
+      return (
+        (mid && matById.get(mid)) ||
+        (catalogFromAnalysis && matByCatalog.get(catalogFromAnalysis)) ||
+        null
+      );
+    };
+
+    /** Build +/- constituents for a compose/difference result. */
+    const buildConstituents = (analysis, compositeId) => {
+      const a =
+        analysis && typeof analysis === "object" && !Array.isArray(analysis) ? analysis : {};
+      const op = a.boolean_op != null ? String(a.boolean_op) : "";
+      if (op !== "compose" && op !== "difference") return [];
+      const src = Array.isArray(a.source_subsection_ids) ? a.source_subsection_ids : [];
+      if (src.length < 2) return [];
+      const signs =
+        a.constituent_signs && typeof a.constituent_signs === "object" && !Array.isArray(a.constituent_signs)
+          ? a.constituent_signs
+          : {};
+      const outerId = a.outer_subsection_id != null ? String(a.outer_subsection_id) : "";
+      return src
+        .map((sid) => {
+          const id = String(sid || "").trim();
+          if (!id) return null;
+          const row = byId.get(id);
+          const ra =
+            row?.analysis && typeof row.analysis === "object" && !Array.isArray(row.analysis)
+              ? row.analysis
+              : {};
+          const matInfo = resolveMat(ra, ra.material_id != null ? String(ra.material_id) : "");
+          const catalog =
+            matInfo?.catalog_id ||
+            (ra.catalog_id != null && String(ra.catalog_id).trim()
+              ? String(ra.catalog_id).trim()
+              : null);
+          const name =
+            matInfo?.name ||
+            (ra.material_name != null ? String(ra.material_name) : null) ||
+            (row?.label != null ? String(row.label) : null) ||
+            id.slice(0, 8);
+          let sign = signs[id] != null ? String(signs[id]) : "";
+          if (sign !== "+" && sign !== "-") {
+            sign = outerId && id === outerId ? "+" : src.indexOf(sid) === 0 ? "+" : "-";
+          }
+          return {
+            id,
+            sign,
+            label: row?.label != null ? String(row.label) : name,
+            catalog_id: catalog,
+            material_name: name,
+            area_m2: row?.area_m2 != null ? Number(row.area_m2) : null,
+            is_result: id === compositeId,
+          };
+        })
+        .filter(Boolean);
+    };
 
     /** Heal stale material_id UUIDs after catalog reseed (keep catalog_id, rewrite id). */
     const heals = [];
@@ -580,12 +648,10 @@ export async function handleFloormapVrComponentsList(req, res, url) {
         const mid = s.material_id != null ? String(s.material_id) : "";
         const catalogFromAnalysis =
           a.catalog_id != null && String(a.catalog_id).trim() ? String(a.catalog_id).trim() : null;
-        const matInfo =
-          (mid && matById.get(mid)) ||
-          (catalogFromAnalysis && matByCatalog.get(catalogFromAnalysis)) ||
-          null;
+        const matInfo = resolveMat(a, mid);
         const liveArea = qkind === "length" ? null : liveAreaM2FromRow(s);
         const liveLen = qkind === "length" ? liveLengthMFromRow(s) : null;
+        const constituents = buildConstituents(a, String(s.id));
         return {
           id: s.id,
           section_id: s.section_id,
@@ -594,17 +660,17 @@ export async function handleFloormapVrComponentsList(req, res, url) {
           label: s.label,
           vg_nr: s.vg_nr != null ? Number(s.vg_nr) : null,
           vr_nr: s.vr_nr != null ? String(s.vr_nr) : null,
-          // For length quantities (kierdichting) do not expose polygon area as the GA quantity.
           area_m2: liveArea,
           quantity_kind: qkind,
           length_m: liveLen,
-          ga_ready: Boolean(matInfo?.id || mid),
+          ga_ready: Boolean(matInfo?.id || mid) && composeSourcesMaterialComplete(s, rows),
           material_id: matInfo?.id || s.material_id || null,
           catalog_id: matInfo?.catalog_id || catalogFromAnalysis,
           master_category: s.master_category,
           material_name: matInfo?.name || s.material_name,
           ra_dba: matInfo ? matInfo.ra_dba : null,
           boolean_op: a.boolean_op || null,
+          constituents,
         };
       }),
       excluded_as_source: part.excluded_as_source.map((s) => ({
@@ -1586,6 +1652,254 @@ export async function handleFloormapMaterialCreate(req, res) {
     }
     console.error("floormap material create failed:", err);
     json(req, res, 500, { ok: false, error: "failed to create material" });
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * GET /api/floormap/material-alternatives?material_id=&limit=
+ * Same rubriek (+ subrubriek if set) with higher RA — for GA «Analyseer» suggestions.
+ */
+export async function handleFloormapMaterialAlternatives(req, res, url) {
+  if (requireHttpsOrReject(req, res)) return;
+  if (req.method !== "GET") {
+    json(req, res, 405, { ok: false, error: "method not allowed" });
+    return;
+  }
+  const token = parseSessionToken(req);
+  if (!token) {
+    json(req, res, 401, { ok: false, error: "Authorization: Bearer <session_token> required" });
+    return;
+  }
+  const materialId = (url.searchParams.get("material_id") || "").trim();
+  if (!UUID_RE.test(materialId)) {
+    json(req, res, 400, { ok: false, error: "invalid material_id" });
+    return;
+  }
+  let limit = Number(url.searchParams.get("limit") || 6);
+  if (!Number.isFinite(limit) || limit < 1) limit = 6;
+  if (limit > 20) limit = 20;
+
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    const session = await resolveEngineerSession(client, token);
+    if (!session) {
+      json(req, res, 403, { ok: false, error: "engineer access required" });
+      return;
+    }
+    const { rows: baseRows } = await client.query(
+      `SELECT id::text AS material_id,
+              catalog_id,
+              name,
+              rubriek_nr,
+              subrubriek_nr,
+              master_category,
+              COALESCE(category, '') AS category,
+              ra_dba
+       FROM app_gevelwering.material
+       WHERE id = $1::uuid`,
+      [materialId],
+    );
+    const base = baseRows[0];
+    if (!base) {
+      json(req, res, 404, { ok: false, error: "materiaal niet gevonden" });
+      return;
+    }
+    const ra = base.ra_dba != null && Number.isFinite(Number(base.ra_dba)) ? Number(base.ra_dba) : null;
+    if (ra == null) {
+      json(req, res, 200, {
+        ok: true,
+        current: {
+          material_id: base.material_id,
+          catalog_id: base.catalog_id,
+          name: base.name,
+          ra_dba: null,
+          rubriek_nr: base.rubriek_nr != null ? Number(base.rubriek_nr) : null,
+          subrubriek_nr: base.subrubriek_nr != null ? Number(base.subrubriek_nr) : null,
+          master_category: base.master_category,
+          category: base.category,
+        },
+        alternatives: [],
+        reason: "huidig materiaal heeft geen RA",
+      });
+      return;
+    }
+
+    const params = [materialId, ra];
+    const clauses = [`id <> $1::uuid`, `ra_dba IS NOT NULL`, `ra_dba > $2`];
+    if (base.rubriek_nr != null) {
+      params.push(Number(base.rubriek_nr));
+      clauses.push(`rubriek_nr = $${params.length}`);
+    } else if (base.master_category) {
+      params.push(String(base.master_category));
+      clauses.push(`master_category = $${params.length}`);
+    }
+    if (base.subrubriek_nr != null) {
+      params.push(Number(base.subrubriek_nr));
+      clauses.push(`subrubriek_nr = $${params.length}`);
+    }
+    params.push(limit);
+    const { rows } = await client.query(
+      `SELECT id::text AS material_id,
+              catalog_id,
+              name,
+              rubriek_nr,
+              subrubriek_nr,
+              master_category,
+              COALESCE(category, '') AS category,
+              ra_dba,
+              thickness_mm
+       FROM app_gevelwering.material
+       WHERE ${clauses.join(" AND ")}
+       ORDER BY ra_dba ASC, name ASC
+       LIMIT $${params.length}`,
+      params,
+    );
+    json(req, res, 200, {
+      ok: true,
+      current: {
+        material_id: base.material_id,
+        catalog_id: base.catalog_id,
+        name: base.name,
+        ra_dba: ra,
+        rubriek_nr: base.rubriek_nr != null ? Number(base.rubriek_nr) : null,
+        subrubriek_nr: base.subrubriek_nr != null ? Number(base.subrubriek_nr) : null,
+        master_category: base.master_category,
+        category: base.category,
+      },
+      alternatives: rows.map((r) => ({
+        material_id: r.material_id,
+        catalog_id: r.catalog_id,
+        name: r.name,
+        rubriek_nr: r.rubriek_nr != null ? Number(r.rubriek_nr) : null,
+        subrubriek_nr: r.subrubriek_nr != null ? Number(r.subrubriek_nr) : null,
+        master_category: r.master_category,
+        category: r.category,
+        ra_dba: Number(r.ra_dba),
+        delta_ra: Math.round((Number(r.ra_dba) - ra) * 10) / 10,
+        thickness_mm: r.thickness_mm != null ? Number(r.thickness_mm) : null,
+      })),
+    });
+  } catch (err) {
+    console.error("floormap material-alternatives failed:", err);
+    json(req, res, 500, { ok: false, error: "alternatieven ophalen mislukt" });
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * POST /api/floormap/subsection-material
+ * body: { subsection_id, material_id }
+ * Update only the material binding on a façade/section component (GA Analyseer → Pas toe).
+ */
+export async function handleFloormapSubsectionMaterial(req, res) {
+  if (requireHttpsOrReject(req, res)) return;
+  if (req.method !== "POST") {
+    json(req, res, 405, { ok: false, error: "method not allowed" });
+    return;
+  }
+  const token = parseSessionToken(req);
+  if (!token) {
+    json(req, res, 401, { ok: false, error: "Authorization: Bearer <session_token> required" });
+    return;
+  }
+  let body;
+  try {
+    body = await readJsonBody(req, 64 * 1024);
+  } catch {
+    json(req, res, 400, { ok: false, error: "invalid JSON body" });
+    return;
+  }
+  const subsectionId = String(body.subsection_id || "").trim();
+  const materialId = String(body.material_id || "").trim();
+  if (!UUID_RE.test(subsectionId) || !UUID_RE.test(materialId)) {
+    json(req, res, 400, { ok: false, error: "subsection_id and material_id required" });
+    return;
+  }
+
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    const session = await resolveEngineerSession(client, token);
+    if (!session) {
+      json(req, res, 403, { ok: false, error: "engineer access required" });
+      return;
+    }
+    const { rows: subRows } = await client.query(
+      `SELECT s.id::text AS id,
+              s.analysis,
+              r.region_kind
+       FROM app_gevelwering.drawing_subsection s
+       JOIN app_gevelwering.drawing_region r ON r.id = s.section_id
+       WHERE s.id = $1::uuid`,
+      [subsectionId],
+    );
+    if (!subRows[0]) {
+      json(req, res, 404, { ok: false, error: "component niet gevonden" });
+      return;
+    }
+    const kind = String(subRows[0].region_kind || "").toUpperCase();
+    if (kind === "FLOORMAP") {
+      json(req, res, 400, { ok: false, error: "materiaal hoort bij gevelcomponenten, niet bij plattegrondruimten" });
+      return;
+    }
+    const { rows: matRows } = await client.query(
+      `SELECT id::text AS material_id,
+              catalog_id,
+              name,
+              rubriek_nr,
+              subrubriek_nr,
+              master_category,
+              COALESCE(category, '') AS category,
+              ra_dba
+       FROM app_gevelwering.material
+       WHERE id = $1::uuid`,
+      [materialId],
+    );
+    const mat = matRows[0];
+    if (!mat) {
+      json(req, res, 404, { ok: false, error: "materiaal niet gevonden" });
+      return;
+    }
+    const prev =
+      subRows[0].analysis && typeof subRows[0].analysis === "object" && !Array.isArray(subRows[0].analysis)
+        ? { ...subRows[0].analysis }
+        : {};
+    prev.material_id = mat.material_id;
+    if (mat.catalog_id) prev.catalog_id = String(mat.catalog_id);
+    else delete prev.catalog_id;
+    prev.material_name = mat.name != null ? String(mat.name) : "";
+    if (mat.master_category) prev.master_category = String(mat.master_category);
+    if (mat.category) prev.category = String(mat.category);
+    if (mat.rubriek_nr != null) prev.rubriek_nr = Number(mat.rubriek_nr);
+    if (mat.subrubriek_nr != null) prev.subrubriek_nr = Number(mat.subrubriek_nr);
+    if (mat.ra_dba != null) prev.ra_dba = Number(mat.ra_dba);
+
+    await client.query(
+      `UPDATE app_gevelwering.drawing_subsection
+       SET analysis = $2::jsonb,
+           updated_at = now()
+       WHERE id = $1::uuid`,
+      [subsectionId, JSON.stringify(prev)],
+    );
+    json(req, res, 200, {
+      ok: true,
+      subsection_id: subsectionId,
+      material: {
+        material_id: mat.material_id,
+        catalog_id: mat.catalog_id,
+        name: mat.name,
+        ra_dba: mat.ra_dba != null ? Number(mat.ra_dba) : null,
+        master_category: mat.master_category,
+        category: mat.category,
+      },
+    });
+  } catch (err) {
+    console.error("floormap subsection-material failed:", err);
+    json(req, res, 500, { ok: false, error: "materiaal toekennen mislukt" });
   } finally {
     client.release();
   }

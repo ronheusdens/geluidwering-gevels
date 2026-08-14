@@ -91,6 +91,38 @@ export function collectSupersededSourceIds(subsections) {
  * @param {string | null | undefined} a
  * @param {string | null | undefined} b
  */
+function hasMaterialId(analysis) {
+  const mid = asAnalysis(analysis).material_id;
+  return mid != null && String(mid).trim().length > 0;
+}
+
+/**
+ * Constituenten van een compositie zonder materiaal (oranje led).
+ * @param {{ id?: string, analysis?: unknown }} component
+ * @param {Array<{ id?: string, analysis?: unknown }>} subsections
+ */
+export function composeConstituentsMissingMaterial(component, subsections) {
+  const ca = asAnalysis(component?.analysis);
+  const src = ca.source_subsection_ids;
+  if (!ca.boolean_op || !Array.isArray(src) || src.length < 2) return [];
+  const byId = new Map();
+  for (const s of subsections || []) {
+    if (s?.id != null) byId.set(String(s.id), s);
+  }
+  const missing = [];
+  for (const sid of src) {
+    if (typeof sid !== "string" || !sid.trim() || sid === component.id) continue;
+    const child = byId.get(sid.trim());
+    if (!child) continue;
+    if (!hasMaterialId(child.analysis)) missing.push(child);
+  }
+  return missing;
+}
+
+export function composeSourcesMaterialComplete(component, subsections) {
+  return composeConstituentsMissingMaterial(component, subsections).length === 0;
+}
+
 export function sameVrNr(a, b) {
   if (a == null || b == null) return false;
   const aa = String(a).trim().toLowerCase();
@@ -127,9 +159,10 @@ export function partitionVrGaComponents(subsections, vrNr, opts = {}) {
     }
     const analysis = asAnalysis(s.analysis);
     const materialId = analysis.material_id != null ? String(analysis.material_id) : null;
+    const sourcesComplete = composeSourcesMaterialComplete(s, subsections);
     eligible.push({
       ...s,
-      ga_ready: Boolean(materialId),
+      ga_ready: Boolean(materialId) && sourcesComplete,
       material_id: materialId,
       master_category: analysis.master_category != null ? String(analysis.master_category) : null,
       material_name: analysis.material_name != null ? String(analysis.material_name) : null,

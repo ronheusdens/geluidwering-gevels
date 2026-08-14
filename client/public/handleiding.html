@@ -102,8 +102,8 @@
           een project over meerdere sessies afronden.
         </p>
         <ul>
-          <li><strong>Openen…</strong> — lijst van lopende projecten (breder dan alleen de review-queue)</li>
-          <li><strong>Recent</strong> — snel terug naar recent geopende projecten (lokaal in de browser)</li>
+          <li><strong>Openen…</strong> — lijst van lopende projecten (breder dan alleen de reviewwachtrij)</li>
+          <li><strong>Recent geopend</strong> — snel terug naar recent geopende projecten (lokaal in de browser)</li>
           <li><strong>Project opslaan</strong> — op GA: herbereken en sla GA/Lbi/GA;k op voor alle VR’s in de actieve variant. Op engineer/plattegrond: tekeningen worden al per actie opgeslagen</li>
           <li><strong>Hernoemen…</strong> — wijzig projectnaam en/of werknummer</li>
           <li><strong>Verwijderen…</strong> — wist het project (inclusief rapportmap); alleen met bevestiging</li>
@@ -118,7 +118,7 @@
       <article class="manual-section" id="werkvolgorde" data-manual-section>
         <h2>3. Werkvolgorde</h2>
         <ol>
-          <li><strong>Tekeningen</strong> — reviewqueue, secties markeren, review afronden</li>
+          <li><strong>Tekeningen</strong> — reviewwachtrij, secties markeren, review afronden</li>
           <li><strong>Plattegrond</strong> — FLOORMAP-sectie: VG/VR-ruimten tekenen, schaal zetten</li>
           <li><strong>Gevel</strong> — componenten tekenen, materiaal toekennen, eventueel compositie</li>
           <li><strong>Geluidsbelasting (Lb)</strong> — handmatig of later via NoiseLoad van de wegverkeer-app</li>
@@ -133,10 +133,10 @@
 
       <article class="manual-section" id="tekeningen" data-manual-section>
         <h2>4. Tekeningen beoordelen</h2>
-        <p>Scherm: <a href="/engineer.html">Engineer drawing review</a>.</p>
-        <h3>Reviewqueue</h3>
+        <p>Scherm: <a href="/engineer.html">Tekeningen beoordelen</a>.</p>
+        <h3>Reviewwachtrij</h3>
         <ul>
-          <li>Open de collapsible <strong>Review queue</strong> en kies een project.</li>
+          <li>Open de inklapbare <strong>Reviewwachtrij</strong> en kies een project.</li>
           <li>Controleer of tekeningen voldoende en leesbaar zijn.</li>
           <li>Markeer secties (bijv. plattegrond, gevel) op de PDF-crop.</li>
           <li>Sla regio’s op; rond de review af wanneer voldoende + leesbaar.</li>
@@ -147,7 +147,7 @@
           (GA). De rechter zijbalk is versleepbaar in breedte.
         </p>
         <p class="hint">
-          Tools-paneel en queue kun je inklappen; de app onthoudt die voorkeur.
+          Gereedschappaneel en wachtrij kun je inklappen; de app onthoudt die voorkeur.
         </p>
       </article>
 
@@ -251,18 +251,21 @@
         </p>
         <h3>Stappen</h3>
         <ol>
-          <li>Open het project via <strong>Bestand → Openen…</strong> / Recent (of building-id / queue).</li>
+          <li>Open het project via <strong>Bestand → Openen…</strong> / Recent geopend (of project-id / wachtrij).</li>
           <li>Maak of selecteer een <strong>variant</strong>: omschrijving, gebruiksfunctie, Lb [dB], spectrum.</li>
           <li>Koppel een vrije plattegrondruimte als nieuw VG (+ eerste VR), of voeg een VR toe aan een bestaand VG.</li>
           <li>Selecteer de VR; voeg <strong>vlakken</strong> toe door gevelcomponenten te kiezen.</li>
-          <li>Stel CL / Cg in indien nodig; klik <strong>Opslaan &amp; herberekenen</strong> of
+          <li>Stel op het vlak <strong>oriëntatie</strong>, <strong>CL</strong> en <strong>Cg</strong> in
+            (niet op het catalogusmateriaal); klik <strong>Opslaan &amp; herberekenen</strong> of
             <strong>Herberekenen GA / GA;k</strong>.</li>
           <li>Aan het eind van een werksessie: <strong>Bestand → Project opslaan</strong> om alle VR-resultaten te checkpointen.</li>
         </ol>
         <p>
-          CL en Cg tellen 1:1 mee in D<sub>2m,nT</sub> = R′ + Cg + Ruimte + CL. Tijdens typen zie je
-          een live preview; permanente resultaten worden bij herberekenen opgeslagen en blijven na
-          herstart zichtbaar (als “opgeslagen”).
+          <strong>Materiaal / RA</strong> horen bij de gevelcomponent (geveltekening).
+          <strong>Oriëntatie, CL en Cg</strong> horen bij het vlak. CL en Cg van het grootste
+          geveloppervlak worden alleen opgeteld bij de berekende <strong>GA;k</strong>
+          (niet in R′ / D<sub>2m,nT</sub> / GA). Tijdens typen zie je een live preview; permanente
+          resultaten worden bij herberekenen opgeslagen.
         </p>
         <p class="hint">
           Spectrum op de variant is vooralsnog vooral ter weergave/export; de rekenkern gebruikt
@@ -353,6 +356,6 @@
     </main>
   </div>
 
-  <script type="module" src="/handleiding.js?v=1"></script>
+  <script type="module" src="/handleiding.js?v=ui-nl"></script>
 </body>
 </html>

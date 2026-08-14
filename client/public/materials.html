@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="nl">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -17,8 +17,8 @@
         </div>
       </div>
       <p class="lede">
-        CRUD for <code>app_gevelwering.material</code> (R&nbsp;63–4000&nbsp;Hz + RA / Rw(C,&nbsp;Ctr)).
-        Restricted to <code>admin</code>.
+        Beheer van <code>app_gevelwering.material</code> (R&nbsp;63–4000&nbsp;Hz + RA / Rw(C,&nbsp;Ctr)).
+        Alleen voor <code>admin</code>.
         <a href="/admin.html">← Projectenbeheer</a>
         ·
         <a id="mat-return-link" class="hidden" href="/ga.html">← Terug naar toekennen vlak (gevel)</a>
@@ -27,18 +27,18 @@
 
     <section class="panel conn-bar" id="mat-conn-bar" aria-live="polite">
       <span class="conn-led disconnected" id="mat-conn-led" aria-hidden="true"></span>
-      <span id="mat-conn-status">Connecting…</span>
+      <span id="mat-conn-status">Verbinden…</span>
     </section>
 
     <section class="panel" id="mat-login-panel">
       <form id="mat-login-form" class="form" novalidate>
         <fieldset>
-          <legend>Admin login</legend>
-          <label>Username <input name="username" required autocomplete="username" value="admin" /></label>
-          <label>Password <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
+          <legend>Beheerder-login</legend>
+          <label>Gebruikersnaam <input name="username" required autocomplete="username" value="admin" /></label>
+          <label>Wachtwoord <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
         </fieldset>
         <div class="actions">
-          <button type="submit" id="mat-login-btn">Sign in</button>
+          <button type="submit" id="mat-login-btn">Inloggen</button>
         </div>
       </form>
     </section>
@@ -46,13 +46,13 @@
     <section id="mat-panel" class="hidden">
       <div class="panel user-bar">
         <span id="mat-user-label"></span>
-        <button type="button" id="mat-logout-btn" class="secondary">Sign out</button>
+        <button type="button" id="mat-logout-btn" class="secondary">Uitloggen</button>
       </div>
 
       <section class="panel">
         <form id="mat-filter-form" class="form mat-filter-row">
-          <label>Search
-            <input id="mat-q" name="q" type="search" placeholder="name or D00…" />
+          <label>Zoeken
+            <input id="mat-q" name="q" type="search" placeholder="naam of D00…" />
           </label>
           <label>Rubriek
             <select id="mat-category">
@@ -65,14 +65,14 @@
             </select>
           </label>
           <div class="actions mat-filter-actions">
-            <button type="submit">Search</button>
-            <button type="button" id="mat-new-btn" class="secondary">New material</button>
+            <button type="submit">Zoeken</button>
+            <button type="button" id="mat-new-btn" class="secondary">Nieuw materiaal</button>
           </div>
         </form>
         <p class="hint" id="mat-pager-label">—</p>
         <div class="actions">
-          <button type="button" id="mat-prev-btn" class="secondary" disabled>Previous</button>
-          <button type="button" id="mat-next-btn" class="secondary" disabled>Next</button>
+          <button type="button" id="mat-prev-btn" class="secondary" disabled>Vorige</button>
+          <button type="button" id="mat-next-btn" class="secondary" disabled>Volgende</button>
         </div>
         <div class="mat-pick-bar panel-inset hidden" id="mat-pick-bar">
           <button type="button" id="mat-pick-btn" disabled>Neem dit materiaal over in component</button>
@@ -80,14 +80,14 @@
         </div>
       </section>
 
-      <section class="panel mat-table-wrap" id="mat-listbox" tabindex="0" role="listbox" aria-label="Material catalog">
+      <section class="panel mat-table-wrap" id="mat-listbox" tabindex="0" role="listbox" aria-label="Materiaalcatalogus">
         <table class="mat-table" id="mat-table">
           <thead>
             <tr>
               <th>Id</th>
               <th>Rubriek</th>
               <th>Subrubriek</th>
-              <th>Name</th>
+              <th>Naam</th>
               <th>Dikte</th>
               <th>Gewicht</th>
               <th>RA</th>
@@ -108,23 +108,23 @@
       </section>
 
       <section class="panel" id="mat-editor-panel">
-        <h2 id="mat-editor-title">Edit material</h2>
+        <h2 id="mat-editor-title">Materiaal bewerken</h2>
         <form id="mat-editor-form" class="form mat-editor">
           <input type="hidden" id="mat-id" />
 
           <fieldset class="mat-fieldset">
-            <legend>Identity</legend>
+            <legend>Identiteit</legend>
             <div class="mat-row">
-              <label class="mat-field mat-field-sm">Catalog id
+              <label class="mat-field mat-field-sm">Catalogus-id
                 <input id="mat-catalog-id" required maxlength="16" placeholder="D00118" />
               </label>
-              <label class="mat-field mat-field-sm">No
+              <label class="mat-field mat-field-sm">Nr
                 <input id="mat-no" type="number" step="1" />
               </label>
               <label class="mat-field mat-field-md">Rubriek
                 <select id="mat-master" required></select>
               </label>
-              <label class="mat-field mat-field-grow">Name
+              <label class="mat-field mat-field-grow">Naam
                 <input id="mat-name" required maxlength="200" />
               </label>
               <label class="mat-field mat-field-md">Subrubriek
@@ -132,10 +132,10 @@
               </label>
             </div>
             <div class="mat-row">
-              <label class="mat-field mat-field-grow">Bron / source ref
+              <label class="mat-field mat-field-grow">Bron / bronverwijzing
                 <input id="mat-source-ref" maxlength="200" />
               </label>
-              <label class="mat-field mat-field-md">Source
+              <label class="mat-field mat-field-md">Bron
                 <select id="mat-source">
                   <option value="app" selected>app (toegevoegd in catalogus)</option>
                   <option value="catalogusGG.pdf">catalogusGG.pdf (seed)</option>
@@ -144,7 +144,7 @@
               </label>
               <label class="mat-field mat-field-check checkbox-label">
                 <input id="mat-spectrum-ok" type="checkbox" checked />
-                <span>Spectrum OK</span>
+                <span>Spectrum in orde</span>
               </label>
               <label id="mat-fav-wrap" class="mat-field mat-field-check checkbox-label hidden">
                 <input id="mat-favorite" type="checkbox" />
@@ -154,29 +154,29 @@
           </fieldset>
 
           <fieldset class="mat-fieldset">
-            <legend>Physical</legend>
+            <legend>Fysiek</legend>
             <div class="mat-row">
               <label class="mat-field mat-field-sm">Dikte mm
-                <input id="mat-thick" type="number" step="any" />
+                <input id="mat-thick" type="text" inputmode="decimal" autocomplete="off" />
               </label>
               <label class="mat-field mat-field-sm">Gewicht kg/m²
-                <input id="mat-weight" type="number" step="any" />
+                <input id="mat-weight" type="text" inputmode="decimal" autocomplete="off" />
               </label>
               <label class="mat-field mat-field-sm">Glas t1 mm
-                <input id="mat-t1" type="number" step="any" />
+                <input id="mat-t1" type="text" inputmode="decimal" autocomplete="off" />
               </label>
               <label class="mat-field mat-field-sm">Spouw mm
-                <input id="mat-cav" type="number" step="any" />
+                <input id="mat-cav" type="text" inputmode="decimal" autocomplete="off" />
               </label>
               <label class="mat-field mat-field-sm">Glas t2 mm
-                <input id="mat-t2" type="number" step="any" />
+                <input id="mat-t2" type="text" inputmode="decimal" autocomplete="off" />
               </label>
             </div>
           </fieldset>
 
           <fieldset class="mat-fieldset">
             <legend>Spectra (dB)</legend>
-            <div class="mat-spectrum" role="group" aria-label="Sound reduction spectrum and single-number ratings">
+            <div class="mat-spectrum" role="group" aria-label="Geluidweringspectrum en enkelgetalswaarden">
               <div class="mat-spectrum-headers">
                 <span>63&nbsp;Hz</span>
                 <span>125&nbsp;Hz</span>
@@ -191,25 +191,26 @@
                 <span>Ctr</span>
               </div>
               <div class="mat-spectrum-inputs">
-                <input id="mat-r63" type="number" step="any" aria-label="R 63 Hz" />
-                <input id="mat-r125" type="number" step="any" aria-label="R 125 Hz" />
-                <input id="mat-r250" type="number" step="any" aria-label="R 250 Hz" />
-                <input id="mat-r500" type="number" step="any" aria-label="R 500 Hz" />
-                <input id="mat-r1000" type="number" step="any" aria-label="R 1000 Hz" />
-                <input id="mat-r2000" type="number" step="any" aria-label="R 2000 Hz" />
-                <input id="mat-r4000" type="number" step="any" aria-label="R 4000 Hz" />
-                <input id="mat-ra" type="number" step="any" aria-label="RA dB(A)" />
-                <input id="mat-rw" type="number" step="any" aria-label="Rw" />
-                <input id="mat-c" type="number" step="any" aria-label="C" />
-                <input id="mat-ctr" type="number" step="any" aria-label="Ctr" />
+                <!-- text + inputmode: NL-komma (42,6) én punt (42.6) toestaan; type=number weigert komma -->
+                <input id="mat-r63" type="text" inputmode="decimal" autocomplete="off" aria-label="R 63 Hz" />
+                <input id="mat-r125" type="text" inputmode="decimal" autocomplete="off" aria-label="R 125 Hz" />
+                <input id="mat-r250" type="text" inputmode="decimal" autocomplete="off" aria-label="R 250 Hz" />
+                <input id="mat-r500" type="text" inputmode="decimal" autocomplete="off" aria-label="R 500 Hz" />
+                <input id="mat-r1000" type="text" inputmode="decimal" autocomplete="off" aria-label="R 1000 Hz" />
+                <input id="mat-r2000" type="text" inputmode="decimal" autocomplete="off" aria-label="R 2000 Hz" />
+                <input id="mat-r4000" type="text" inputmode="decimal" autocomplete="off" aria-label="R 4000 Hz" />
+                <input id="mat-ra" type="text" inputmode="decimal" autocomplete="off" aria-label="RA dB(A)" />
+                <input id="mat-rw" type="text" inputmode="decimal" autocomplete="off" aria-label="Rw" />
+                <input id="mat-c" type="text" inputmode="decimal" autocomplete="off" aria-label="C" />
+                <input id="mat-ctr" type="text" inputmode="decimal" autocomplete="off" aria-label="Ctr" />
               </div>
             </div>
           </fieldset>
 
           <div class="actions">
-            <button type="submit" id="mat-save-btn">Save</button>
-            <button type="button" id="mat-delete-btn" class="danger secondary">Delete</button>
-            <button type="button" id="mat-clear-btn" class="secondary">Clear form</button>
+            <button type="submit" id="mat-save-btn">Opslaan</button>
+            <button type="button" id="mat-delete-btn" class="danger secondary">Verwijderen</button>
+            <button type="button" id="mat-clear-btn" class="secondary">Formulier wissen</button>
             <button type="button" id="mat-pick-btn-editor" class="hidden">Neem dit materiaal over in component</button>
           </div>
         </form>
@@ -226,6 +227,6 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/materials.js?v=mat-new"></script>
+  <script type="module" src="/materials.js?v=ui-nl"></script>
 </body>
 </html>

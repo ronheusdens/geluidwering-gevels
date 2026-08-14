@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="nl">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Geluidwering Gevels — Drawing analysis</title>
-  <link rel="stylesheet" href="/styles.css?v=about-menu" />
+  <title>Geluidwering Gevels — Tekeninganalyse</title>
+  <link rel="stylesheet" href="/styles.css?v=section-thumb" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body class="engineer-body">
@@ -14,11 +14,11 @@
         <img class="brand-logo" src="/assets/stilte-logo.jpg" alt="" width="52" height="52" />
         <div class="brand-copy">
           <p class="brand-name">Geluidwering Gevels</p>
-          <h1 class="page-heading">Drawing analysis</h1>
+          <h1 class="page-heading">Tekeninganalyse</h1>
         </div>
       </div>
       <p class="hint">
-        <a href="/engineer.html">← Back to drawing review</a>
+        <a href="/engineer.html">← Terug naar tekeningbeoordeling</a>
         ·
         <a id="fm-ga-link" href="/ga.html">Berekening gevelwering</a>
         ·
@@ -29,18 +29,18 @@
 
     <section class="panel conn-bar" id="fm-conn-bar" aria-live="polite">
       <span class="conn-led disconnected" id="fm-conn-led" aria-hidden="true"></span>
-      <span id="fm-conn-status">Connecting…</span>
+      <span id="fm-conn-status">Verbinden…</span>
     </section>
 
     <section class="panel" id="fm-login-panel">
       <form id="fm-login-form" class="form" novalidate>
         <fieldset>
-          <legend>Engineer login</legend>
-          <label>Username <input name="username" required autocomplete="username" value="engineer" /></label>
-          <label>Password <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
+          <legend>Ingenieur-login</legend>
+          <label>Gebruikersnaam <input name="username" required autocomplete="username" value="engineer" /></label>
+          <label>Wachtwoord <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
         </fieldset>
         <div class="actions">
-          <button type="submit" id="fm-login-btn">Sign in</button>
+          <button type="submit" id="fm-login-btn">Inloggen</button>
         </div>
       </form>
     </section>
@@ -48,8 +48,8 @@
     <section id="fm-panel" class="hidden">
       <div class="panel user-bar">
         <span id="fm-user-label"></span>
-        <button type="button" id="fm-logout-btn" class="secondary">Sign out</button>
-        <label class="inline-label">Building id
+        <button type="button" id="fm-logout-btn" class="secondary">Uitloggen</button>
+        <label class="inline-label">Project-id
           <input id="fm-building-input" placeholder="uuid" size="36" />
         </label>
         <button type="button" id="fm-load-building-btn" class="secondary">Ophalen</button>
@@ -64,7 +64,7 @@
       <section class="panel hidden engineer-workspace-panel" id="fm-workspace-panel">
         <div class="engineer-workspace-head">
           <div>
-            <h2 id="fm-section-title">Section</h2>
+            <h2 id="fm-section-title">Sectie</h2>
             <p class="hint" id="fm-section-meta"></p>
           </div>
           <button type="button" id="fm-back-picker-btn" class="secondary">← Overzicht</button>
@@ -73,14 +73,14 @@
         <div class="engineer-layout">
           <div class="engineer-viewer-wrap">
             <div class="engineer-viewer-toolbar">
-              <button type="button" id="fm-zoom-out" class="secondary" title="Zoom out">−</button>
+              <button type="button" id="fm-zoom-out" class="secondary" title="Uitzoomen">−</button>
               <button type="button" id="fm-zoom-btn">Zoom</button>
-              <button type="button" id="fm-zoom-in" class="secondary" title="Zoom in">+</button>
+              <button type="button" id="fm-zoom-in" class="secondary" title="Inzoomen">+</button>
               <span id="fm-zoom-label">100%</span>
-              <button type="button" id="fm-zoom-fit" class="secondary">Fit</button>
+              <button type="button" id="fm-zoom-fit" class="secondary">Passend</button>
               <span class="toolbar-sep" aria-hidden="true"></span>
-              <button type="button" id="fm-discover-btn" class="secondary">Discover rooms</button>
-              <button type="button" id="fm-calibrate-btn" class="secondary">Calibrate scale</button>
+              <button type="button" id="fm-discover-btn" class="secondary">Ontdek ruimten</button>
+              <button type="button" id="fm-calibrate-btn" class="secondary">Schaal kalibreren</button>
               <span
                 class="scale-calibrated-led"
                 id="fm-calibrate-led"
@@ -93,45 +93,45 @@
             </div>
 
             <section class="scale-bar panel-inset" id="fm-scale-bar">
-              <strong>Drawing scale</strong>
-              <span id="fm-scale-status">Not set</span>
+              <strong>Tekeningsschaal</strong>
+              <span id="fm-scale-status">Niet gezet</span>
               <div class="scale-mm-popup hidden" id="fm-calibrate-metres-wrap">
                 <label class="discovery-inline">
-                  Real length of marked line (mm)
+                  Werkelijke lengte van gemarkeerde lijn (mm)
                   <input id="fm-calibrate-metres" type="number" min="1" step="1" value="5000" />
                 </label>
-                <button type="button" id="fm-calibrate-apply-btn">Apply</button>
-                <button type="button" id="fm-calibrate-repick-btn" class="secondary">Repick points</button>
+                <button type="button" id="fm-calibrate-apply-btn">Toepassen</button>
+                <button type="button" id="fm-calibrate-repick-btn" class="secondary">Punten opnieuw kiezen</button>
               </div>
-              <p class="hint" id="fm-calibrate-hint">Click Calibrate scale when you are ready.</p>
+              <p class="hint" id="fm-calibrate-hint">Klik op Schaal kalibreren wanneer u klaar bent.</p>
             </section>
 
             <details class="tools-panel panel-inset" id="fm-tools-bar" open>
               <summary class="tools-panel-toggle">
-                <strong>Tools</strong>
+                <strong>Gereedschap</strong>
                 <span class="tools-panel-chevron" aria-hidden="true"></span>
               </summary>
               <div class="tools-panel-main" id="fm-tools-main">
                 <div class="tools-panel-head">
-                  <div class="tools-mode-btns" role="group" aria-label="Drawing tools">
-                    <button type="button" class="secondary tool-mode-btn active" data-tool="off">Off</button>
-                    <button type="button" class="secondary tool-mode-btn" data-tool="length">Length (m)</button>
+                  <div class="tools-mode-btns" role="group" aria-label="Tekengereedschap">
+                    <button type="button" class="secondary tool-mode-btn active" data-tool="off">Uit</button>
+                    <button type="button" class="secondary tool-mode-btn" data-tool="length">Lengte (m)</button>
                     <button type="button" class="secondary tool-mode-btn" data-tool="room">Teken ruimte</button>
                   </div>
-                  <button type="button" id="fm-tool-clear-btn" class="secondary">Clear</button>
+                  <button type="button" id="fm-tool-clear-btn" class="secondary">Wissen</button>
                 </div>
                 <div class="tools-readouts">
-                  <label class="discovery-inline">Length (m)
+                  <label class="discovery-inline">Lengte (m)
                     <input id="fm-tool-length-mm" type="text" readonly value="—" />
                   </label>
-                  <label class="discovery-inline">Circumference (m)
+                  <label class="discovery-inline">Omtrek (m)
                     <input id="fm-tool-circ-mm" type="text" readonly value="—" />
                   </label>
-                  <label class="discovery-inline">Area (m²)
+                  <label class="discovery-inline">Oppervlakte (m²)
                     <input id="fm-tool-area-mm2" type="text" readonly value="—" />
                   </label>
                 </div>
-                <p class="hint" id="fm-tool-hint">Set scale, then measure a length or draw a room — circ/area update from the room polygon.</p>
+                <p class="hint" id="fm-tool-hint">Zet eerst de schaal, meet daarna een lengte of teken een ruimte — omtrek/oppervlakte volgen uit de polygoon.</p>
               </div>
             </details>
 
@@ -161,7 +161,7 @@
               </div>
               <div class="discovery-dock-body">
                 <div class="discovery-adjust compact" aria-label="Verplaats component">
-                  <span class="discovery-adjust-label">Move</span>
+                  <span class="discovery-adjust-label">Verplaats</span>
                   <button type="button" id="fm-edit-nudge-left" class="secondary" title="Links">←</button>
                   <button type="button" id="fm-edit-nudge-right" class="secondary" title="Rechts">→</button>
                   <button type="button" id="fm-edit-nudge-up" class="secondary" title="Omhoog">↑</button>
@@ -172,12 +172,12 @@
 
             <section class="discovery-dock hidden" id="fm-discovery-dock">
               <div class="discovery-dock-top">
-                <strong>Discovered room <span id="fm-discovery-progress"></span></strong>
-                <p class="hint" id="fm-discovery-hint">Drag white anchors to follow walls. Double-click an anchor to remove it, or Simplify to thin the polyline. Then Accept.</p>
+                <strong>Ontdekte ruimte <span id="fm-discovery-progress"></span></strong>
+                <p class="hint" id="fm-discovery-hint">Sleep witte ankers langs de muren. Dubbelklik een anker om te verwijderen, of Vereenvoudigen om de polylijn te dunnen. Daarna Accepteren.</p>
               </div>
               <div class="discovery-dock-body">
-                <label class="discovery-inline">Label <input id="fm-discovery-label" /></label>
-                <label class="discovery-inline">Level
+                <label class="discovery-inline">Omschrijving <input id="fm-discovery-label" /></label>
+                <label class="discovery-inline">Verdieping
                   <select id="fm-discovery-level">
                     <option value="GROUND">Begane vloer</option>
                     <option value="FIRST">Verdieping</option>
@@ -187,18 +187,18 @@
                     <option value="OTHER">Overig</option>
                   </select>
                 </label>
-                <div class="discovery-adjust compact" aria-label="Nudge polygon">
-                  <span class="discovery-adjust-label">Move</span>
-                  <button type="button" id="fm-nudge-left" class="secondary" title="Left">←</button>
-                  <button type="button" id="fm-nudge-right" class="secondary" title="Right">→</button>
-                  <button type="button" id="fm-nudge-up" class="secondary" title="Up">↑</button>
-                  <button type="button" id="fm-nudge-down" class="secondary" title="Down">↓</button>
-                  <button type="button" id="fm-discovery-simplify" class="secondary" title="Drop near-collinear anchors">Simplify</button>
+                <div class="discovery-adjust compact" aria-label="Polygoon verschuiven">
+                  <span class="discovery-adjust-label">Verplaats</span>
+                  <button type="button" id="fm-nudge-left" class="secondary" title="Links">←</button>
+                  <button type="button" id="fm-nudge-right" class="secondary" title="Rechts">→</button>
+                  <button type="button" id="fm-nudge-up" class="secondary" title="Omhoog">↑</button>
+                  <button type="button" id="fm-nudge-down" class="secondary" title="Omlaag">↓</button>
+                  <button type="button" id="fm-discovery-simplify" class="secondary" title="Laat bijna-collineaire ankers weg">Vereenvoudigen</button>
                 </div>
                 <div class="discovery-dock-actions">
-                  <button type="button" id="fm-discovery-accept">Accept</button>
-                  <button type="button" id="fm-discovery-skip" class="secondary">Skip</button>
-                  <button type="button" id="fm-discovery-cancel" class="secondary">Cancel</button>
+                  <button type="button" id="fm-discovery-accept">Accepteren</button>
+                  <button type="button" id="fm-discovery-skip" class="secondary">Overslaan</button>
+                  <button type="button" id="fm-discovery-cancel" class="secondary">Annuleren</button>
                 </div>
               </div>
             </section>
@@ -222,7 +222,7 @@
           <aside class="engineer-sidebar">
             <fieldset id="fm-mark-room-fieldset">
               <legend>Ruimte</legend>
-              <label class="block-label">Label
+              <label class="block-label">Omschrijving
                 <input id="fm-room-label" placeholder="bijv. slaapkamer 1" />
               </label>
               <div class="vg-vr-row" id="fm-vg-vr-row">
@@ -234,6 +234,21 @@
                 </label>
               </div>
               <p class="hint" id="fm-vg-vr-hint">Zelfde VG + andere VR = ruimten in hetzelfde verblijfsgebied. VR is uniek per project (bijv. 1, 3A).</p>
+              <div id="fm-expected-ori-block" class="fm-expected-ori-block hidden">
+                <p class="fm-expected-ori-label">Geveloriëntaties (VR) *</p>
+                <div class="fm-expected-ori-row" id="fm-expected-ori-row" role="group" aria-label="Verplichte geveloriëntaties van deze VR">
+                  <label class="fm-ori-check"><input type="checkbox" value="N" /> N</label>
+                  <label class="fm-ori-check"><input type="checkbox" value="NO" /> NO</label>
+                  <label class="fm-ori-check"><input type="checkbox" value="O" /> O</label>
+                  <label class="fm-ori-check"><input type="checkbox" value="ZO" /> ZO</label>
+                  <label class="fm-ori-check"><input type="checkbox" value="Z" /> Z</label>
+                  <label class="fm-ori-check"><input type="checkbox" value="ZW" /> ZW</label>
+                  <label class="fm-ori-check"><input type="checkbox" value="W" /> W</label>
+                  <label class="fm-ori-check"><input type="checkbox" value="NW" /> NW</label>
+                </div>
+                <div id="fm-ori-corr-rows" class="fm-ori-corr-rows hidden" aria-label="CL en Cg per geveloriëntatie"></div>
+                <p class="hint" id="fm-expected-ori-hint">Verplicht: vink windrichtingen aan en vul CL/Cg per oriëntatie. Op GA zijn die correcties vast (niet live te wijzigen).</p>
+              </div>
               <div id="fm-material-block" class="hidden">
                 <label class="block-label">Meest gebruikt (dit project)
                   <select id="fm-material-favorite" disabled>
@@ -297,7 +312,20 @@
                   <option value="OTHER">Overig</option>
                 </select>
               </label>
-              <p class="hint" id="fm-room-pending-hint">Gebruik Teken ruimte in Tools, klik hoekpunten, sluit daarna af en sla op.</p>
+              <p class="hint" id="fm-room-pending-hint">Gebruik Teken ruimte in Gereedschap, klik hoekpunten, sluit daarna af en sla op.</p>
+              <div id="fm-kier-suggest" class="fm-kier-suggest hidden">
+                <label class="inline-check">
+                  <input type="checkbox" id="fm-kier-suggest-cb" />
+                  Kierdichting voor dit vlak (omtrek)
+                </label>
+                <p class="hint" id="fm-kier-suggest-hint">Optioneel. Standaard D02408. Bij aanvinken wordt een extra lengtecomponent gemaakt; lengtes van hetzelfde kierdichtingsstype worden opgeteld.</p>
+                <label class="block-label">Kierdichtingsmateriaal
+                  <select id="fm-kier-suggest-mat">
+                    <option value="">D02408 (standaard)</option>
+                  </select>
+                </label>
+                <button type="button" id="fm-kier-suggest-new" class="secondary">Nieuw materiaal…</button>
+              </div>
               <div class="fm-component-actions">
                 <div class="fm-action-group" role="group" aria-label="Tekenen">
                   <span class="fm-action-group-label">Tekenen</span>
@@ -332,7 +360,18 @@
             </fieldset>
 
             <div class="saved-sections-block" id="fm-saved-block">
-              <h3 id="fm-saved-heading">Opgeslagen componenten <span id="fm-room-count" class="region-count-badge">0</span></h3>
+              <h3 id="fm-saved-heading" class="saved-list-heading">
+                <span class="saved-list-heading-main">
+                  <span id="fm-saved-heading-text">Opgeslagen componenten</span>
+                  <span id="fm-room-count" class="region-count-badge">0</span>
+                </span>
+                <label class="saved-vr-filter hidden" for="fm-room-vr-filter">
+                  <span class="saved-vr-filter-label">VR</span>
+                  <select id="fm-room-vr-filter" aria-label="Filter op verblijfsruimte">
+                    <option value="">Alle VR's</option>
+                  </select>
+                </label>
+              </h3>
               <p class="hint" id="fm-rooms-hint">Elke component toont oppervlakte (m²) en omtrek (m) bij ingestelde schaal.</p>
               <ul id="fm-room-list" class="drawing-list"></ul>
             </div>
@@ -341,6 +380,6 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/floormap.js?v=new-mat-cat"></script>
+  <script type="module" src="/floormap.js?v=section-thumb"></script>
 </body>
 </html>

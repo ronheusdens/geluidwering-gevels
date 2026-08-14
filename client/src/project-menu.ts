@@ -1,6 +1,6 @@
 /**
  * Shared Bestand- + Over-menu for engineer suite pages (engineer / floormap / GA).
- * Bestand: Open · Recent · Project opslaan · Hernoemen · Verwijderen
+ * Bestand: Open · Recent geopend · Project opslaan · Hernoemen · Verwijderen
  * Over: versie · gebruikershandleiding
  */
 
@@ -116,7 +116,7 @@ export function mountProjectMenu(root: HTMLElement, host: ProjectMenuHost): Proj
           <li><button type="button" role="menuitem" data-act="open">Openen…</button></li>
           <li class="file-menu-recent-wrap">
             <details class="file-menu-recent">
-              <summary>Recent</summary>
+              <summary>Recent geopend</summary>
               <ul class="file-menu-recent-list" id="pm-recent"></ul>
             </details>
           </li>
@@ -293,7 +293,7 @@ export function mountProjectMenu(root: HTMLElement, host: ProjectMenuHost): Proj
     const meta = host.getProjectMeta();
     const label = window.prompt("Projectnaam (label)", meta.label || "");
     if (label === null) return;
-    const externalRef = window.prompt("Werknummer / externe referentie", meta.external_ref || "");
+    const externalRef = window.prompt("Projectnummer / werknummer", meta.external_ref || "");
     if (externalRef === null) return;
     status("busy", "Hernoemen…");
     try {

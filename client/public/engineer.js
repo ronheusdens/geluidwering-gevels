@@ -233,7 +233,7 @@ function mountProjectMenu(root, host) {
           <li><button type="button" role="menuitem" data-act="open">Openen\u2026</button></li>
           <li class="file-menu-recent-wrap">
             <details class="file-menu-recent">
-              <summary>Recent</summary>
+              <summary>Recent geopend</summary>
               <ul class="file-menu-recent-list" id="pm-recent"></ul>
             </details>
           </li>
@@ -400,7 +400,7 @@ function mountProjectMenu(root, host) {
     const meta = host.getProjectMeta();
     const label = window.prompt("Projectnaam (label)", meta.label || "");
     if (label === null) return;
-    const externalRef = window.prompt("Werknummer / externe referentie", meta.external_ref || "");
+    const externalRef = window.prompt("Projectnummer / werknummer", meta.external_ref || "");
     if (externalRef === null) return;
     status("busy", "Hernoemen\u2026");
     try {
@@ -684,14 +684,14 @@ function showPanel(info) {
   storeAuth2(info);
   loginPanelEl.classList.add("hidden");
   panelEl.classList.remove("hidden");
-  userLabelEl.textContent = `Signed in as ${info.display_name || info.username}`;
+  userLabelEl.textContent = `Ingelogd als ${info.display_name || info.username}`;
   if (fileMenuRoot) fileMenuRoot.hidden = false;
   projectMenu?.setEnabled(true);
   projectMenu?.refreshTitle();
 }
 function send(type, payload, wantType) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    return Promise.reject(new Error("WebSocket not open"));
+    return Promise.reject(new Error("WebSocket niet open"));
   }
   const request_id = nextRequestId(type.replace(".", "_"));
   const env = { v: 1, type, request_id, payload };
@@ -731,21 +731,21 @@ function onMessage(raw) {
 async function invokeString(target, args) {
   const inv = await send("invoke.request", { target_kind: "procedure", target, args }, "invoke.completed");
   const ret = inv.payload?.return;
-  if (typeof ret !== "string") throw new Error(`Unexpected return from ${target}: ${JSON.stringify(inv.payload)}`);
+  if (typeof ret !== "string") throw new Error(`Onverwacht resultaat van ${target}: ${JSON.stringify(inv.payload)}`);
   return ret;
 }
 function statusLabel(status) {
   switch (status) {
     case "INITIAL_REQUEST":
-      return "Initial request";
+      return "Project gestart";
     case "PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED":
-      return "Awaiting review";
+      return "Gegevens aangeleverd \u2014 nog niet verwerkt";
     case "PROJECT_UNDERWAY":
-      return "Under review / calculation";
+      return "Project in uitvoering";
     case "PROJECT_NEAR_FINAL":
-      return "Near final";
+      return "Project bijna afgerond";
     case "PROJECT_FINISHED":
-      return "Finished";
+      return "Project afgerond";
     default:
       return status;
   }
@@ -757,14 +757,14 @@ async function loadSharedApi() {
     "exec.completed"
   );
   const bootRet = await invokeString("API_Bootstrap", []);
-  if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap failed: ${bootRet}`);
+  if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap mislukt: ${bootRet}`);
 }
 async function bootstrapAndLogin(username, password) {
   await loadSharedApi();
   const ret = await invokeString("API_Login", [username, password]);
   if (ret.startsWith("ERROR")) throw new Error(ret);
   const parsed = JSON.parse(ret);
-  if (!parsed.ok || !parsed.token) throw new Error("Login failed");
+  if (!parsed.ok || !parsed.token) throw new Error("Inloggen mislukt");
   showPanel({
     token: parsed.token,
     username: parsed.username || username,
@@ -795,7 +795,7 @@ async function loadQueue() {
     const docs = Number(p.drawing_count) || 0;
     card.innerHTML = `
       <h3>${title}</h3>
-      <p class="hint">${p.customer_name} \xB7 ${statusLabel(p.project_status)} \xB7 ${docs} tekening(en)</p>
+      <p class="hint">${p.customer_name} \xB7 ${statusLabel(p.project_status)} \xB7 kenmerk ${p.client_ref || "\u2014"} \xB7 ${docs} tekening(en)</p>
     `;
     const btn = document.createElement("button");
     btn.type = "button";
@@ -810,7 +810,7 @@ async function loadQueue() {
 }
 async function openProject(buildingId) {
   if (!auth?.token) return;
-  setStatus("Loading project\u2026", "busy");
+  setStatus("Project laden\u2026", "busy");
   const ret = await invokeString("API_EngineerGetProject", [auth.token, buildingId]);
   if (ret.startsWith("ERROR")) {
     setStatus(ret, "err");
@@ -820,7 +820,7 @@ async function openProject(buildingId) {
   activeProject.regions = (activeProject.regions || []).map(normalizeRegion);
   reviewPanelEl.classList.remove("hidden");
   projectTitleEl.textContent = activeProject.label || "Project";
-  projectMetaEl.textContent = `${activeProject.customer_name} \xB7 ${statusLabel(activeProject.project_status)} \xB7 ref ${activeProject.external_ref || "\u2014"}`;
+  projectMetaEl.textContent = `${activeProject.customer_name} \xB7 ${statusLabel(activeProject.project_status)} \xB7 werknummer ${activeProject.external_ref || "\u2014"} \xB7 kenmerk ${activeProject.client_ref || "\u2014"}`;
   if (gaLinkEl) {
     gaLinkEl.href = `/ga.html?building_id=${encodeURIComponent(activeProject.building_id)}`;
     gaLinkEl.classList.remove("hidden");
@@ -841,12 +841,12 @@ async function openProject(buildingId) {
     await loadActiveDocument();
   } else {
     activeDocumentId = null;
-    docHintEl.textContent = "No drawings on this project.";
+    docHintEl.textContent = "Geen tekeningen bij dit project.";
   }
   renderRegionList();
   projectMenu?.rememberCurrent();
   projectMenu?.refreshTitle();
-  setStatus("Project loaded", "ok");
+  setStatus("Project geladen", "ok");
 }
 function normalizeRegion(raw) {
   const scaleRatio = raw.scale_ratio != null ? Number(raw.scale_ratio) : NaN;
@@ -856,7 +856,7 @@ function normalizeRegion(raw) {
     id: String(raw.id || raw.region_id || ""),
     document_id: String(raw.document_id || ""),
     page_index: Number(raw.page_index) || 0,
-    label: String(raw.label || "Section"),
+    label: String(raw.label || "Sectie"),
     region_kind: raw.region_kind || "OTHER",
     x_min: Number(raw.x_min),
     y_min: Number(raw.y_min),
@@ -885,9 +885,9 @@ function selectedRegion() {
 function scaleSourceLabel(source) {
   switch ((source || "").toUpperCase()) {
     case "PDF_TEXT":
-      return "from drawing text";
+      return "uit tekeningtekst";
     case "CALIBRATED":
-      return "from marked length";
+      return "uit gemarkeerde lengte";
     default:
       return "";
   }
@@ -897,58 +897,58 @@ function regionSupportsScale(kind) {
 }
 function formatScaleStatus(sel) {
   const mpu = sel.metres_per_norm_unit;
-  if (mpu == null || !(mpu > 0)) return `${sel.label}: scale not set`;
+  if (mpu == null || !(mpu > 0)) return `${sel.label}: schaal niet gezet`;
   const src = scaleSourceLabel(sel.scale_source);
   if (sel.scale_ratio != null && sel.scale_ratio > 0) {
     const from2 = src ? ` (${src})` : "";
-    return `${sel.label}: paper scale 1:${sel.scale_ratio}${from2}`;
+    return `${sel.label}: papierschalen 1:${sel.scale_ratio}${from2}`;
   }
   const from = src ? ` (${src})` : "";
-  return `${sel.label}: scale set${from} \u2014 areas/lengths in metres`;
+  return `${sel.label}: schaal gezet${from} \u2014 oppervlakten/lengtes in meters`;
 }
 function updateScaleUi() {
   const sel = selectedRegion();
   const awaitingMm = Boolean(scalePick && scalePick.points.length >= 2);
   if (scaleMmWrap) scaleMmWrap.classList.toggle("hidden", !awaitingMm);
   if (!sel) {
-    scaleStatusEl.textContent = "Select a section, then Set scale";
+    scaleStatusEl.textContent = "Selecteer een sectie, daarna Schaal instellen";
     scaleHintEl.textContent = "Klik een plattegrond, gevel of doorsnede, daarna Schaal instellen.";
     scaleBtn.disabled = true;
-    scaleBtn.textContent = "Set scale";
+    scaleBtn.textContent = "Schaal instellen";
     return;
   }
   if (!regionSupportsScale(sel.region_kind)) {
-    scaleStatusEl.textContent = `${sel.label} cannot be scaled`;
+    scaleStatusEl.textContent = `${sel.label} kan niet geschaald worden`;
     scaleHintEl.textContent = "Schaal geldt voor plattegrond, gevel, doorsnede en dwarsdoorsnede.";
     scaleBtn.disabled = true;
-    scaleBtn.textContent = "Set scale";
+    scaleBtn.textContent = "Schaal instellen";
     return;
   }
   scaleBtn.disabled = false;
   if (scalePick) {
     if (awaitingMm) {
-      scaleStatusEl.textContent = `Two points marked on ${sel.label}`;
-      scaleHintEl.textContent = "Enter the real length in millimetres below, then click Apply (or press Enter).";
-      scaleBtn.textContent = "Cancel scale";
+      scaleStatusEl.textContent = `Twee punten gemarkeerd op ${sel.label}`;
+      scaleHintEl.textContent = "Vul hieronder de werkelijke lengte in millimeters in, klik daarna Toepassen (of druk op Enter).";
+      scaleBtn.textContent = "Schaal annuleren";
       queueMicrotask(() => {
         scaleMmInput.focus();
         scaleMmInput.select();
       });
     } else {
-      scaleStatusEl.textContent = `Mark a known length (${scalePick.points.length}/2 clicks)`;
-      scaleHintEl.textContent = "Click both ends of something with a known size (wall, scale bar, door opening).";
-      scaleBtn.textContent = "Cancel scale";
+      scaleStatusEl.textContent = `Markeer een bekende lengte (${scalePick.points.length}/2 klikken)`;
+      scaleHintEl.textContent = "Klik beide uiteinden van iets met een bekende maat (muur, schaalbalk, deuropening).";
+      scaleBtn.textContent = "Schaal annuleren";
     }
     return;
   }
   scaleStatusEl.textContent = formatScaleStatus(sel);
   const hasScale = sel.metres_per_norm_unit != null && sel.metres_per_norm_unit > 0;
   if (hasScale) {
-    scaleHintEl.textContent = "Scale is ready. Use Tools \u2192 Length / Polyline to measure, or Set scale to recalibrate.";
+    scaleHintEl.textContent = "Schaal is klaar. Gebruik Gereedschap \u2192 Lengte / Polylijn om te meten, of Schaal instellen om opnieuw te kalibreren.";
   } else {
-    scaleHintEl.textContent = "Click Set scale, mark two points, then enter that length in mm.";
+    scaleHintEl.textContent = "Klik Schaal instellen, markeer twee punten, vul daarna die lengte in mm in.";
   }
-  scaleBtn.textContent = hasScale ? "Recalibrate scale" : "Set scale";
+  scaleBtn.textContent = hasScale ? "Schaal herkalibreren" : "Schaal instellen";
   updateAnalyzePanel();
 }
 function analysisWorkspaceUrl(sectionId) {
@@ -964,17 +964,17 @@ function updateAnalyzePanel() {
   }
   analyzeComponentsFieldset.classList.remove("hidden");
   const isFloor = sel.region_kind === "FLOORMAP";
-  const noun = isFloor ? "room" : "component";
-  const nounPlural = isFloor ? "rooms" : "components";
+  const noun = isFloor ? "ruimte" : "component";
+  const nounPlural = isFloor ? "ruimten" : "componenten";
   if (analyzeComponentsLegend) {
-    analyzeComponentsLegend.textContent = isFloor ? "Rooms" : "Components";
+    analyzeComponentsLegend.textContent = isFloor ? "Ruimten" : "Componenten";
   }
   if (analyzeComponentsHint) {
-    analyzeComponentsHint.innerHTML = `This is where you <strong>draw, discover, and save</strong> marked ${nounPlural} on <em>${sel.label}</em> \u2014 same menu as floormap (label, level, Draw, Save, Discover).`;
+    analyzeComponentsHint.innerHTML = `Hier <strong>teken, ontdek en sla</strong> je gemarkeerde ${nounPlural} op op <em>${sel.label}</em> \u2014 zelfde menu als plattegrond (omschrijving, verdieping, Teken, Opslaan, Ontdekken).`;
   }
-  if (analyzeOpenBtn) analyzeOpenBtn.textContent = `Open ${noun} analysis workspace`;
-  if (analyzeDiscoverBtn) analyzeDiscoverBtn.textContent = `Discover ${nounPlural}\u2026`;
-  if (analyzeDrawBtn) analyzeDrawBtn.textContent = `Draw & save ${noun}\u2026`;
+  if (analyzeOpenBtn) analyzeOpenBtn.textContent = `Analysewerkruimte ${noun} openen`;
+  if (analyzeDiscoverBtn) analyzeDiscoverBtn.textContent = `${nounPlural.charAt(0).toUpperCase()}${nounPlural.slice(1)} ontdekken\u2026`;
+  if (analyzeDrawBtn) analyzeDrawBtn.textContent = `${noun.charAt(0).toUpperCase()}${noun.slice(1)} tekenen & opslaan\u2026`;
 }
 function openAnalysisWorkspace() {
   const sel = selectedRegion();
@@ -984,7 +984,7 @@ function openAnalysisWorkspace() {
   }
   const url = analysisWorkspaceUrl(sel.id);
   if (!url) {
-    setStatus("No project loaded", "err");
+    setStatus("Geen project geladen", "err");
     return;
   }
   window.location.href = url;
@@ -1003,11 +1003,11 @@ function startScalePick() {
     return;
   }
   if (discoveryCandidates.length > 0) {
-    setStatus("Finish or cancel discovery before setting scale", "err");
+    setStatus("Rond ontdekken eerst af of annuleer het voordat je schaal instelt", "err");
     return;
   }
   if (scalePick) {
-    endScalePick("Scale pick cancelled");
+    endScalePick("Schaalkeuze geannuleerd");
     return;
   }
   if (measure.tool !== "off") {
@@ -1018,7 +1018,7 @@ function startScalePick() {
   scalePick = { points: [] };
   scaleMmWrap.classList.add("hidden");
   updateScaleUi();
-  setStatus("Click first scale point on the canvas", "busy");
+  setStatus("Klik het eerste schaalpunt op het canvas", "busy");
   drawRegionsOverlay();
 }
 function repickScalePoints() {
@@ -1026,7 +1026,7 @@ function repickScalePoints() {
   scalePick = { points: [] };
   scaleMmWrap.classList.add("hidden");
   updateScaleUi();
-  setStatus("Click first scale point on the canvas", "busy");
+  setStatus("Klik het eerste schaalpunt op het canvas", "busy");
   drawRegionsOverlay();
 }
 function pageNormToSectionLocal(px, py, sec) {
@@ -1117,20 +1117,20 @@ function updateToolHint() {
     return;
   }
   if (measure.tool === "length") {
-    toolHintEl.textContent = measure.points.length < 2 ? "Click two points to measure length (live while moving)." : "Length ready. Clear measure or click again to start over.";
+    toolHintEl.textContent = measure.points.length < 2 ? "Klik twee punten om de lengte te meten (live tijdens bewegen)." : "Lengte klaar. Wis meting of klik opnieuw om opnieuw te beginnen.";
     return;
   }
   if (measure.tool === "polyline") {
     if (measure.closed) {
-      toolHintEl.textContent = "Polyline closed \u2014 circumference and area shown. Clear to redraw.";
+      toolHintEl.textContent = "Polylijn gesloten \u2014 omtrek en oppervlakte getoond. Wissen om opnieuw te tekenen.";
     } else if (measure.points.length === 0) {
-      toolHintEl.textContent = "Click to add vertices. Double-click or click near the start to close.";
+      toolHintEl.textContent = "Klik om hoekpunten toe te voegen. Dubbelklik of klik bij het begin om te sluiten.";
     } else {
-      toolHintEl.textContent = `${measure.points.length} point(s). Double-click / click start to close for area.`;
+      toolHintEl.textContent = `${measure.points.length} punt(en). Dubbelklik / klik begin om te sluiten voor oppervlakte.`;
     }
     return;
   }
-  toolHintEl.textContent = "Choose Length or Polyline from the Tools menu.";
+  toolHintEl.textContent = "Kies Lengte of Polylijn in het menu Gereedschap.";
 }
 function syncToolSelectUi(tool) {
   if (toolSelectEl) toolSelectEl.value = tool;
@@ -1156,13 +1156,13 @@ function setMeasureTool(tool) {
   if (tool !== "off") {
     if (scalePick) endScalePick();
     if (discoveryCandidates.length > 0) {
-      setStatus("Finish or cancel discovery before measuring", "err");
+      setStatus("Rond ontdekken eerst af of annuleer het voordat je meet", "err");
       syncToolSelectUi("off");
       return;
     }
     const mpu = activeScaleMpu();
     if (!mpu) {
-      setStatus("Select a scaled section first", "err");
+      setStatus("Selecteer eerst een geschaalde sectie", "err");
       syncToolSelectUi("off");
       measure.tool = "off";
       updateToolHint();
@@ -1175,8 +1175,8 @@ function setMeasureTool(tool) {
   updateMeasureReadouts();
   updateToolHint();
   drawRegionsOverlay();
-  if (tool === "length") setStatus("Measure length: click two points", "busy");
-  else if (tool === "polyline") setStatus("Measure polyline: click vertices", "busy");
+  if (tool === "length") setStatus("Lengte meten: klik twee punten", "busy");
+  else if (tool === "polyline") setStatus("Polylijn meten: klik hoekpunten", "busy");
 }
 function nearFirstMeasurePoint(pt) {
   if (measure.points.length < 3) return false;
@@ -1212,7 +1212,7 @@ function drawMeasureOverlay(ctx) {
   }
 }
 async function saveSectionScale(sectionId, mpu, aspectYx) {
-  if (!auth?.token) throw new Error("Not logged in");
+  if (!auth?.token) throw new Error("Niet ingelogd");
   let httpErr = "";
   try {
     const res = await fetch("/api/floormap/scale", {
@@ -1233,7 +1233,7 @@ async function saveSectionScale(sectionId, mpu, aspectYx) {
     } catch {
     }
     if (res.ok && body.ok) return;
-    httpErr = body.error || `Scale save failed (HTTP ${res.status})`;
+    httpErr = body.error || `Schaal opslaan mislukt (HTTP ${res.status})`;
     if (res.status === 401 || res.status === 403 || res.status === 400) {
       throw new Error(httpErr);
     }
@@ -1263,24 +1263,24 @@ async function saveSectionScale(sectionId, mpu, aspectYx) {
 async function finishScalePick() {
   const sel = selectedRegion();
   if (!auth?.token) {
-    setStatus("Not logged in \u2014 cannot save scale", "err");
+    setStatus("Niet ingelogd \u2014 schaal kan niet worden opgeslagen", "err");
     return;
   }
   if (!sel) {
-    setStatus("Select a section first", "err");
+    setStatus("Selecteer eerst een sectie", "err");
     return;
   }
   if (!regionSupportsScale(sel.region_kind)) {
-    setStatus("This section type cannot be scaled", "err");
+    setStatus("Dit sectietype kan niet geschaald worden", "err");
     return;
   }
   if (!scalePick || scalePick.points.length < 2) {
-    setStatus("Mark two scale points first", "err");
+    setStatus("Markeer eerst twee schaalpunten", "err");
     return;
   }
   const mm = Number(scaleMmInput.value);
   if (!(mm > 0)) {
-    setStatus("Enter a positive distance in mm", "err");
+    setStatus("Vul een positieve afstand in mm in", "err");
     return;
   }
   const aPage = {
@@ -1297,20 +1297,20 @@ async function finishScalePick() {
   const metres = mm / 1e3;
   const mpu = metresPerNormFromCalibration(metres, a, b, aspect);
   if (!(mpu > 0) || !Number.isFinite(mpu)) {
-    setStatus("Scale points too close \u2014 pick again", "err");
+    setStatus("Schaalpunten te dicht bij elkaar \u2014 kies opnieuw", "err");
     scalePick = { points: [] };
     updateScaleUi();
     drawRegionsOverlay();
     return;
   }
-  setStatus("Saving scale\u2026", "busy");
+  setStatus("Schaal opslaan\u2026", "busy");
   try {
     await saveSectionScale(sel.id, mpu, aspect);
     sel.metres_per_norm_unit = mpu;
     sel.scale_aspect_yx = aspect;
     sel.scale_source = "CALIBRATED";
     sel.scale_ratio = null;
-    endScalePick(`Scale saved: marked line = ${mm} mm`);
+    endScalePick(`Schaal opgeslagen: gemarkeerde lijn = ${mm} mm`);
     renderRegionList();
     setMeasureTool("length");
     document.getElementById("engineer-tools-bar")?.scrollIntoView({
@@ -1321,7 +1321,7 @@ async function finishScalePick() {
       behavior: "smooth",
       block: "nearest"
     });
-    setStatus(`Scale saved (${mm} mm). Length tool ready \u2014 click two points.`, "ok");
+    setStatus(`Schaal opgeslagen (${mm} mm). Lengtetool klaar \u2014 klik twee punten.`, "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
     updateScaleUi();
@@ -1332,13 +1332,13 @@ function regionKindLabel(kind) {
     case "FACADE":
       return "Gevel";
     case "SECTION":
-      return "Building section";
+      return "Doorsnede";
     case "FLOORMAP":
-      return "Floormap";
+      return "Plattegrond";
     case "CROSS_SECTION":
-      return "Cross-section";
+      return "Dwarsdoorsnede";
     case "OTHER":
-      return "Other";
+      return "Overig";
     default:
       return kind;
   }
@@ -1374,7 +1374,7 @@ function setPendingMarkNorm(mark) {
   const has = Boolean(mark);
   regionSaveBtn.disabled = !has;
   regionClearBtn.disabled = !has;
-  regionPendingHintEl.textContent = has ? "Mark ready \u2014 click Save marked section to store it." : "Drag a rectangle on the PDF, then save \u2014 or auto-discover.";
+  regionPendingHintEl.textContent = has ? "Markering klaar \u2014 klik Gemarkeerde sectie opslaan om op te slaan." : "Sleep een rechthoek op de PDF, sla daarna op \u2014 of ontdek automatisch.";
   drawRegionsOverlay();
 }
 function clearPendingMark() {
@@ -1410,7 +1410,7 @@ function renderRegionList() {
   if (regions.length === 0) {
     const li = document.createElement("li");
     li.className = "hint";
-    li.textContent = kindFilter ? `No ${regionKindLabel(kindFilter).toLowerCase()} sections for this drawing.` : "No sections saved for this drawing.";
+    li.textContent = kindFilter ? `Geen ${regionKindLabel(kindFilter).toLowerCase()}-secties voor deze tekening.` : "Geen secties opgeslagen voor deze tekening.";
     regionListEl.appendChild(li);
     updateScaleUi();
     return;
@@ -1422,7 +1422,7 @@ function renderRegionList() {
     const info = document.createElement("button");
     info.type = "button";
     info.className = "drawing-list-select";
-    const scaleNote = regionSupportsScale(r.region_kind) && r.metres_per_norm_unit != null && r.metres_per_norm_unit > 0 ? " \xB7 scaled" : "";
+    const scaleNote = regionSupportsScale(r.region_kind) && r.metres_per_norm_unit != null && r.metres_per_norm_unit > 0 ? " \xB7 geschaald" : "";
     info.textContent = `p${r.page_index + 1} \xB7 ${regionKindLabel(r.region_kind)} \xB7 ${r.label}${scaleNote}`;
     info.addEventListener("click", () => {
       selectedRegionId = r.id;
@@ -1447,13 +1447,13 @@ function renderRegionList() {
       const analyze = document.createElement("a");
       analyze.className = "secondary-link";
       analyze.href = `/floormap.html?building_id=${encodeURIComponent(activeProject.building_id)}&section_id=${encodeURIComponent(r.id)}`;
-      analyze.textContent = r.region_kind === "FLOORMAP" ? "Analyze rooms" : "Analyze components";
+      analyze.textContent = r.region_kind === "FLOORMAP" ? "Ruimten analyseren" : "Componenten analyseren";
       actions.appendChild(analyze);
     }
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "secondary";
-    btn.textContent = "Remove";
+    btn.textContent = "Verwijderen";
     btn.addEventListener("click", () => {
       void deleteRegion(r.id);
     });
@@ -1473,13 +1473,13 @@ async function loadActiveDocument() {
   pdfDoc = null;
   pdfPageNum = 1;
   pdfTotalPages = 0;
-  if (discoveryCandidates.length > 0) endDiscoveryReview("Discovery cancelled (drawing changed)");
+  if (discoveryCandidates.length > 0) endDiscoveryReview("Ontdekken geannuleerd (tekening gewijzigd)");
   endScalePick();
   selectedRegionId = null;
   clearPendingMark();
   clearOverlay();
   if (doc.file_ext.toLowerCase() !== "pdf") {
-    docHintEl.textContent = `${doc.filename} is DWG \u2014 preview not available; use external CAD tools.`;
+    docHintEl.textContent = `${doc.filename} is DWG \u2014 voorbeeld niet beschikbaar; gebruik externe CAD-software.`;
     const ctx = pdfCanvas.getContext("2d");
     if (ctx) {
       pdfCanvas.width = 640;
@@ -1492,25 +1492,25 @@ async function loadActiveDocument() {
       ctx.fillRect(0, 0, canvasWidth, canvasHeight);
       ctx.fillStyle = "#333";
       ctx.font = "16px sans-serif";
-      ctx.fillText("DWG preview not supported in browser", 24, 60);
+      ctx.fillText("DWG-voorbeeld niet ondersteund in de browser", 24, 60);
     }
     pageLabelEl.textContent = "DWG";
     setPageDisplay(1);
     return;
   }
-  docHintEl.textContent = "Drag a rectangle to mark a section, or click Discover sections.";
+  docHintEl.textContent = "Sleep een rechthoek om een sectie te markeren, of klik Secties ontdekken.";
   const res = await fetch(`/api/drawings/download?document_id=${encodeURIComponent(activeDocumentId)}`, {
     credentials: "include",
     headers: apiAuthHeaders(auth.token)
   });
   if (!res.ok) {
-    docHintEl.textContent = `Failed to load PDF (HTTP ${res.status})`;
+    docHintEl.textContent = `PDF laden mislukt (HTTP ${res.status})`;
     return;
   }
   const buf = await res.arrayBuffer();
   const pdfjsLib = window.pdfjsLib;
   if (!pdfjsLib) {
-    docHintEl.textContent = "PDF.js not loaded";
+    docHintEl.textContent = "PDF.js niet geladen";
     return;
   }
   pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
@@ -1536,7 +1536,7 @@ async function renderPdfPage() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvasWidth, canvasHeight);
   await page.render({ canvasContext: ctx, viewport }).promise;
-  pageLabelEl.textContent = `Page ${pdfPageNum} / ${pdfTotalPages}`;
+  pageLabelEl.textContent = `Pagina ${pdfPageNum} / ${pdfTotalPages}`;
   setPageDisplay(pdfPageNum);
   updateZoomLabel();
   drawRegionsOverlay();
@@ -1595,7 +1595,7 @@ function drawRegionsOverlay() {
         stroke: "#c62828",
         dash: [8, 4],
         fill: "rgba(198,40,40,0.12)",
-        label: `Candidate ${discoveryIndex + 1}`
+        label: `Kandidaat ${discoveryIndex + 1}`
       });
       drawDiscoveryHandles(ctx, current);
     }
@@ -1609,7 +1609,7 @@ function drawRegionsOverlay() {
     };
     drawBox(ctx, box, { stroke: "#c62828", dash: [6, 4] });
   } else if (pendingMarkNorm && pendingMarkNorm.pageIndex === pageIdx) {
-    drawBox(ctx, pendingMarkNorm, { stroke: "#c62828", dash: [6, 4], label: "Pending" });
+    drawBox(ctx, pendingMarkNorm, { stroke: "#c62828", dash: [6, 4], label: "Concept" });
   }
   if (scalePick?.points.length) {
     ctx.fillStyle = "#1565c0";
@@ -1643,14 +1643,14 @@ function overlayPoint(evt) {
 async function savePendingRegion() {
   if (!auth?.token || !activeDocumentId || !pendingMarkNorm || canvasWidth === 0) return;
   const { x_min: xMin, y_min: yMin, x_max: xMax, y_max: yMax, pageIndex } = pendingMarkNorm;
-  const label = regionLabelInput.value.trim() || `Section ${savedRegionCount + 1}`;
+  const label = regionLabelInput.value.trim() || `Sectie ${savedRegionCount + 1}`;
   const kind = regionKindSelect.value;
   if (xMax - xMin < 0.01 || yMax - yMin < 0.01) {
-    setStatus("Mark too small \u2014 drag a larger rectangle", "err");
+    setStatus("Markering te klein \u2014 sleep een grotere rechthoek", "err");
     return;
   }
   regionSaveBtn.disabled = true;
-  setStatus("Saving section\u2026", "busy");
+  setStatus("Sectie opslaan\u2026", "busy");
   const ret = await invokeString("API_SaveDrawingRegion", [
     auth.token,
     activeDocumentId,
@@ -1687,16 +1687,16 @@ async function savePendingRegion() {
   clearPendingMark();
   renderRegionList();
   drawRegionsOverlay();
-  setStatus(`Section saved (${savedRegionCount} total for this drawing)`, "ok");
+  setStatus(`Sectie opgeslagen (${savedRegionCount} totaal voor deze tekening)`, "ok");
 }
 async function deleteRegion(regionId) {
   if (!auth?.token || !activeProject) return;
   if (!regionId) {
-    setStatus("Cannot remove section \u2014 missing id", "err");
+    setStatus("Sectie kan niet worden verwijderd \u2014 id ontbreekt", "err");
     return;
   }
-  if (!window.confirm("Remove this section?")) return;
-  setStatus("Removing section\u2026", "busy");
+  if (!window.confirm("Deze sectie verwijderen?")) return;
+  setStatus("Sectie verwijderen\u2026", "busy");
   const res = await fetch(`/api/drawings/sections?section_id=${encodeURIComponent(regionId)}`, {
     method: "DELETE",
     credentials: "include",
@@ -1708,7 +1708,7 @@ async function deleteRegion(regionId) {
   } catch {
   }
   if (!res.ok || !parsed.ok) {
-    setStatus(parsed.error || `Failed to remove section (HTTP ${res.status})`, "err");
+    setStatus(parsed.error || `Sectie verwijderen mislukt (HTTP ${res.status})`, "err");
     return;
   }
   activeProject.regions = activeProject.regions.filter((r) => r.id !== regionId);
@@ -1718,14 +1718,14 @@ async function deleteRegion(regionId) {
   }
   renderRegionList();
   drawRegionsOverlay();
-  setStatus("Section removed", "ok");
+  setStatus("Sectie verwijderd", "ok");
 }
 async function clearAllSections() {
   if (!auth?.token || !activeProject || !activeDocumentId) return;
   const n = regionsForActiveDoc().length;
   if (n < 1) return;
-  if (!window.confirm(`Remove all ${n} section(s) from this drawing?`)) return;
-  setStatus("Removing all sections\u2026", "busy");
+  if (!window.confirm(`Alle ${n} sectie(s) van deze tekening verwijderen?`)) return;
+  setStatus("Alle secties verwijderen\u2026", "busy");
   const res = await fetch(`/api/drawings/sections?document_id=${encodeURIComponent(activeDocumentId)}`, {
     method: "DELETE",
     credentials: "include",
@@ -1737,7 +1737,7 @@ async function clearAllSections() {
   } catch {
   }
   if (!res.ok || !parsed.ok) {
-    setStatus(parsed.error || `Failed to clear sections (HTTP ${res.status})`, "err");
+    setStatus(parsed.error || `Secties wissen mislukt (HTTP ${res.status})`, "err");
     return;
   }
   activeProject.regions = activeProject.regions.filter((r) => r.document_id !== activeDocumentId);
@@ -1746,7 +1746,7 @@ async function clearAllSections() {
   clearPendingMark();
   renderRegionList();
   drawRegionsOverlay();
-  setStatus(`Removed ${parsed.deleted_count ?? n} section(s)`, "ok");
+  setStatus(`${parsed.deleted_count ?? n} sectie(s) verwijderd`, "ok");
 }
 function discoverRectangularFrames(source) {
   const w = source.width;
@@ -1880,20 +1880,20 @@ function discoverRectangularFrames(source) {
 }
 async function discoverSections() {
   if (!auth?.token || !activeDocumentId || !pdfDoc || canvasWidth === 0) {
-    setStatus("Open a PDF drawing first", "err");
+    setStatus("Open eerst een PDF-tekening", "err");
     return;
   }
-  setStatus("Discovering rectangular sections\u2026", "busy");
+  setStatus("Rechthoekige secties ontdekken\u2026", "busy");
   regionDiscoverBtn.disabled = true;
   try {
     const found = discoverRectangularFrames(pdfCanvas);
     await renderPdfPage();
     if (found.length === 0) {
-      setStatus("No rectangular sections found on this page", "err");
+      setStatus("Geen rechthoekige secties gevonden op deze pagina", "err");
       return;
     }
     startDiscoveryReview(found);
-    setStatus(`Found ${found.length} candidate(s) \u2014 review each below`, "ok");
+    setStatus(`${found.length} kandidaat/kandidaten gevonden \u2014 beoordeel elk hieronder`, "ok");
   } finally {
     regionDiscoverBtn.disabled = false;
   }
@@ -2034,20 +2034,20 @@ function applyDiscoveryDrag(px, py) {
 }
 function showCurrentDiscoveryCandidate() {
   if (discoveryCandidates.length === 0) {
-    endDiscoveryReview("Discovery finished");
+    endDiscoveryReview("Ontdekken afgerond");
     return;
   }
   if (discoveryIndex >= discoveryCandidates.length) {
     endDiscoveryReview(
-      `Discovery finished \u2014 reviewed ${discoveryCandidates.length} candidate(s)`
+      `Ontdekken afgerond \u2014 ${discoveryCandidates.length} kandidaat/kandidaten beoordeeld`
     );
     return;
   }
   const n = discoveryCandidates.length;
   const i = discoveryIndex + 1;
-  discoveryProgressEl.textContent = `(${i} of ${n})`;
-  discoveryHintEl.textContent = "Drag handles on the drawing, or use H/V. Controls stay here \u2014 only the PDF scrolls.";
-  discoveryLabelInput.value = `Section ${savedRegionCount + 1}`;
+  discoveryProgressEl.textContent = `(${i} van ${n})`;
+  discoveryHintEl.textContent = "Sleep handvatten op de tekening, of gebruik H/V. Bediening blijft hier \u2014 alleen de PDF scrollt.";
+  discoveryLabelInput.value = `Sectie ${savedRegionCount + 1}`;
   discoveryAdjust = null;
   drawRegionsOverlay();
   const box = discoveryCandidates[discoveryIndex];
@@ -2065,10 +2065,10 @@ async function acceptDiscoveryCandidate() {
   if (!auth?.token || !activeDocumentId) return;
   if (discoveryIndex >= discoveryCandidates.length) return;
   const box = discoveryCandidates[discoveryIndex];
-  const label = discoveryLabelInput.value.trim() || `Section ${savedRegionCount + 1}`;
+  const label = discoveryLabelInput.value.trim() || `Sectie ${savedRegionCount + 1}`;
   const kind = discoveryKindSelect.value;
   discoveryAcceptBtn.disabled = true;
-  setStatus("Saving section\u2026", "busy");
+  setStatus("Sectie opslaan\u2026", "busy");
   try {
     const ret = await invokeString("API_SaveDrawingRegion", [
       auth.token,
@@ -2106,7 +2106,7 @@ async function acceptDiscoveryCandidate() {
     discoveryIndex += 1;
     showCurrentDiscoveryCandidate();
     if (discoveryCandidates.length > 0 && discoveryIndex < discoveryCandidates.length) {
-      setStatus(`Section saved \u2014 next candidate (${discoveryIndex + 1} of ${discoveryCandidates.length})`, "ok");
+      setStatus(`Sectie opgeslagen \u2014 volgende kandidaat (${discoveryIndex + 1} van ${discoveryCandidates.length})`, "ok");
     }
   } finally {
     discoveryAcceptBtn.disabled = false;
@@ -2116,7 +2116,7 @@ function skipDiscoveryCandidate() {
   discoveryIndex += 1;
   showCurrentDiscoveryCandidate();
   if (discoveryCandidates.length > 0 && discoveryIndex < discoveryCandidates.length) {
-    setStatus(`Skipped \u2014 candidate ${discoveryIndex + 1} of ${discoveryCandidates.length}`, "ok");
+    setStatus(`Overgeslagen \u2014 kandidaat ${discoveryIndex + 1} van ${discoveryCandidates.length}`, "ok");
   }
 }
 async function submitReview(evt) {
@@ -2125,25 +2125,25 @@ async function submitReview(evt) {
   if (discoveryCandidates.length > 0 && discoveryIndex < discoveryCandidates.length) {
     const left = discoveryCandidates.length - discoveryIndex;
     if (!window.confirm(
-      `${left} discovered section(s) are not yet accepted. Continue Save review with only the already saved sections? (remaining candidates will be discarded)`
+      `${left} ontdekte sectie(s) zijn nog niet geaccepteerd. Doorgaan met Review opslaan met alleen de al opgeslagen secties? (resterende kandidaten worden verworpen)`
     )) {
       return;
     }
-    endDiscoveryReview("Discovery closed before review save");
+    endDiscoveryReview("Ontdekken gesloten v\xF3\xF3r review opslaan");
   }
   if (pendingMarkNorm) {
     if (!window.confirm(
-      "There is an unsaved marked section. Save it first, or click OK to discard it and continue with Save review."
+      "Er is een niet-opgeslagen gemarkeerde sectie. Sla die eerst op, of klik OK om deze te verwerpen en door te gaan met Review opslaan."
     )) {
       return;
     }
     clearPendingMark();
   }
   if ((activeProject.regions?.length ?? 0) < 1) {
-    setStatus("Save at least one identified section before saving the review", "err");
+    setStatus("Sla minstens \xE9\xE9n ge\xEFdentificeerde sectie op voordat je de review opslaat", "err");
     return;
   }
-  setStatus("Saving review and committing section objects\u2026", "busy");
+  setStatus("Review opslaan en sectieobjecten vastleggen\u2026", "busy");
   const ret = await invokeString("API_ReviewDrawings", [
     auth.token,
     activeProject.building_id,
@@ -2157,25 +2157,25 @@ async function submitReview(evt) {
   }
   const parsed = JSON.parse(ret);
   activeProject.project_status = parsed.project_status;
-  projectMetaEl.textContent = `${activeProject.customer_name} \xB7 ${statusLabel(activeProject.project_status)} \xB7 ref ${activeProject.external_ref || "\u2014"}`;
+  projectMetaEl.textContent = `${activeProject.customer_name} \xB7 ${statusLabel(activeProject.project_status)} \xB7 werknummer ${activeProject.external_ref || "\u2014"} \xB7 kenmerk ${activeProject.client_ref || "\u2014"}`;
   const n = Number(parsed.section_count ?? parsed.sections?.length ?? 0);
   setStatus(
-    parsed.project_status === "PROJECT_UNDERWAY" ? `Review saved \u2014 ${n} section object(s) committed for analysis \xB7 project underway` : `Review saved \u2014 ${n} section object(s) committed \xB7 awaiting sufficient drawings`,
+    parsed.project_status === "PROJECT_UNDERWAY" ? `Review opgeslagen \u2014 ${n} sectieobject(en) vastgelegd voor analyse \xB7 project in uitvoering` : `Review opgeslagen \u2014 ${n} sectieobject(en) vastgelegd \xB7 wacht op voldoende tekeningen`,
     "ok"
   );
   void loadQueue();
 }
 function connect() {
   setConnLed(false);
-  setStatus("Connecting\u2026", "busy");
+  setStatus("Verbinden\u2026", "busy");
   ws = new WebSocket(BPP_WS);
   ws.onopen = async () => {
     setConnLed(true);
-    setStatus("Connected", "ok");
+    setStatus("Verbonden", "ok");
     await send("session.open", {}, "session.opened");
     try {
       await loadSharedApi();
-      setStatus(`Connected \xB7 session ${sessionId ?? "?"} \xB7 Postgres ready`, "ok");
+      setStatus(`Verbonden \xB7 sessie ${sessionId ?? "?"} \xB7 Postgres gereed`, "ok");
       const stored = loadStoredAuth();
       if (stored) {
         auth = stored;
@@ -2192,7 +2192,7 @@ function connect() {
   ws.onmessage = (ev) => onMessage(String(ev.data));
   ws.onclose = () => {
     setConnLed(false);
-    setStatus("Disconnected \u2014 reconnecting\u2026", "err");
+    setStatus("Verbinding verbroken \u2014 opnieuw verbinden\u2026", "err");
     setTimeout(connect, 1500);
   };
   ws.onerror = () => ws?.close();
@@ -2204,12 +2204,12 @@ loginForm.addEventListener("submit", async (evt) => {
   const password = String(fd.get("password") || "");
   loginBtn.disabled = true;
   try {
-    setStatus("Signing in\u2026", "busy");
+    setStatus("Inloggen\u2026", "busy");
     await bootstrapAndLogin(username, password);
     await loadQueue();
-    setStatus("Signed in", "ok");
+    setStatus("Ingelogd", "ok");
   } catch (err) {
-    setStatus(err instanceof Error ? err.message : "Login failed", "err");
+    setStatus(err instanceof Error ? err.message : "Inloggen mislukt", "err");
     showLogin();
   } finally {
     loginBtn.disabled = false;
@@ -2311,11 +2311,11 @@ document.querySelectorAll(".tool-mode-btn").forEach((btn) => {
 });
 toolClearBtn?.addEventListener("click", () => {
   clearMeasure(true);
-  setStatus("Measure cleared", "ok");
+  setStatus("Meting gewist", "ok");
 });
 toolClearSidebarBtn?.addEventListener("click", () => {
   clearMeasure(true);
-  setStatus("Measure cleared", "ok");
+  setStatus("Meting gewist", "ok");
 });
 (() => {
   const panel = document.getElementById("engineer-tools-bar");
@@ -2347,7 +2347,7 @@ toolClearSidebarBtn?.addEventListener("click", () => {
 window.addEventListener("keydown", (evt) => {
   if (evt.key === "Escape" && measure.tool !== "off") {
     clearMeasure(true);
-    setStatus("Measure cleared", "ok");
+    setStatus("Meting gewist", "ok");
   }
 });
 discoveryAcceptBtn.addEventListener("click", () => {
@@ -2357,7 +2357,7 @@ discoverySkipBtn.addEventListener("click", () => {
   skipDiscoveryCandidate();
 });
 discoveryCancelBtn.addEventListener("click", () => {
-  endDiscoveryReview("Discovery cancelled");
+  endDiscoveryReview("Ontdekken geannuleerd");
 });
 function onDiscAdjustClick(kind, sign) {
   return (evt) => {
@@ -2381,15 +2381,15 @@ overlayCanvas.addEventListener("mousedown", (evt) => {
     drawRegionsOverlay();
     updateScaleUi();
     if (scalePick.points.length === 1) {
-      setStatus("Click second scale point", "busy");
+      setStatus("Klik het tweede schaalpunt", "busy");
     } else if (scalePick.points.length >= 2) {
-      setStatus("Enter distance in mm, then Apply", "ok");
+      setStatus("Vul afstand in mm in, daarna Toepassen", "ok");
     }
     return;
   }
   if (measure.tool !== "off") {
     if (!activeScaleMpu()) {
-      setStatus("Select a scaled section first", "err");
+      setStatus("Selecteer eerst een geschaalde sectie", "err");
       return;
     }
     if (measure.tool === "length") {
@@ -2470,7 +2470,7 @@ overlayCanvas.addEventListener("mouseup", (evt) => {
     applyDiscoveryDrag(overlayPoint(evt).x, overlayPoint(evt).y);
     discoveryAdjust = null;
     overlayCanvas.style.cursor = "crosshair";
-    setStatus("Section box adjusted \u2014 Accept when ready", "ok");
+    setStatus("Sectiekader aangepast \u2014 Accepteer wanneer klaar", "ok");
     return;
   }
   if (!dragStart) return;
@@ -2531,7 +2531,7 @@ if (fileMenuRoot) {
       activeProject.label = meta.label;
       activeProject.external_ref = meta.external_ref;
       projectTitleEl.textContent = activeProject.label || "Project";
-      projectMetaEl.textContent = `${activeProject.customer_name} \xB7 ${statusLabel(activeProject.project_status)} \xB7 ref ${activeProject.external_ref || "\u2014"}`;
+      projectMetaEl.textContent = `${activeProject.customer_name} \xB7 ${statusLabel(activeProject.project_status)} \xB7 werknummer ${activeProject.external_ref || "\u2014"} \xB7 kenmerk ${activeProject.client_ref || "\u2014"}`;
     },
     onProjectDeleted: async () => {
       activeProject = null;
@@ -2544,7 +2544,7 @@ if (fileMenuRoot) {
     },
     onStatus: (state, text) => setStatus(text, state),
     setTitle: (title) => {
-      document.title = title === "Geen project" ? "Geluidwering Gevels \u2014 Engineer review" : `${title} \u2014 Engineer`;
+      document.title = title === "Geen project" ? "Geluidwering Gevels \u2014 Tekeningen beoordelen" : `${title} \u2014 Ingenieur`;
     }
   });
   fileMenuRoot.hidden = true;

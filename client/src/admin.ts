@@ -34,6 +34,7 @@ type AdminCustomer = {
 type AdminProject = {
   building_id: string;
   label: string;
+  client_ref?: string;
   external_ref: string;
   project_status: ProjectStatus;
   created_at: string;
@@ -394,19 +395,27 @@ async function loadCustomerProjects(customerId: string): Promise<void> {
         drawingCount > 0
           ? `Tekeningen: ${p.drawing_names || `${drawingCount} bestand${drawingCount === 1 ? "" : "en"}`}`
           : "Tekeningen: nog geen upload";
+      const refVal = esc(p.external_ref || "");
       return `
-        <section class="panel admin-project-card${outstanding ? "" : " admin-project-finished"}" data-building-id="${p.building_id}">
-          <h3>${p.label || "(geen label)"}${outstanding ? "" : " · afgerond"}</h3>
-          <p class="hint">Ref: ${p.external_ref || "(geen)"} · Aangemaakt: ${p.created_at || "—"}</p>
-          <p class="hint">${drawingLine}</p>
-          <label class="block-label">
-            Projectstatus
-            <select class="admin-project-status">
-              ${statusOptions(p.project_status)}
-            </select>
-          </label>
+        <section class="panel admin-project-card${outstanding ? "" : " admin-project-finished"}" data-building-id="${esc(p.building_id)}">
+          <h3>${esc(p.label || "(geen label)")}${outstanding ? "" : " · afgerond"}</h3>
+          <p class="hint">Kenmerk opdrachtgever: ${esc(p.client_ref || "—")} · Aangemaakt: ${esc(p.created_at || "—")}</p>
+          <p class="hint">${esc(drawingLine)}</p>
+          <div class="admin-project-fields">
+            <label class="block-label">
+              Projectnummer (werknummer)
+              <input type="text" class="admin-project-number" maxlength="80" value="${refVal}" placeholder="bijv. 2026.0123" autocomplete="off" />
+            </label>
+            <label class="block-label">
+              Projectstatus
+              <select class="admin-project-status">
+                ${statusOptions(p.project_status)}
+              </select>
+            </label>
+          </div>
+          <p class="hint">Het projectnummer verschijnt als werknummer op rekenresultaten en in de rapportage.</p>
           <div class="actions">
-            <button type="button" class="admin-save-status">Status bijwerken</button>
+            <button type="button" class="admin-save-status">Opslaan</button>
           </div>
         </section>
       `;
@@ -417,20 +426,22 @@ async function loadCustomerProjects(customerId: string): Promise<void> {
     btn.addEventListener("click", async () => {
       const card = btn.closest<HTMLElement>(".admin-project-card");
       const select = card?.querySelector<HTMLSelectElement>(".admin-project-status");
+      const numberEl = card?.querySelector<HTMLInputElement>(".admin-project-number");
       if (!card || !select || !auth?.token) return;
       btn.disabled = true;
-      setStatus("Projectstatus bijwerken…", "busy");
+      setStatus("Project bijwerken…", "busy");
       try {
         const ret2 = await invokeString("API_AdminUpdateProjectStatus", [
           auth.token,
           card.dataset.buildingId || "",
           select.value,
+          (numberEl?.value || "").trim(),
         ]);
         if (ret2.startsWith("ERROR")) {
           setStatus(ret2, "err");
           return;
         }
-        setStatus("Projectstatus bijgewerkt", "ok");
+        setStatus("Projectnummer en status bijgewerkt", "ok");
         await loadCustomers();
         if (customerSelectEl.value) await loadCustomerProjects(customerSelectEl.value);
       } catch (err) {

@@ -306,6 +306,8 @@ Shared reference catalog for façade sound reduction. One-time seed: DGMR **cata
 | Taxonomy | `rubriek_nr` 1–9, `subrubriek_nr`, `master_category`, `category` | GG taxonomy (`material-taxonomy.mjs`); no separate “custom” rubriek |
 | Spectrum | `r_63_hz` … `r_4000_hz`, `ra_dba`, `rw_db` / `c_db` / `ctr_db` | Octave-band R + single-number ratings |
 
+**Rw / C / Ctr:** berekend of geverifieerd uit R-banden (ISO 717-1) via `sql/app_gevelwering_0_2_23_backfill_rw.py`. Procedure: [material-rw-c-ctr.md](material-rw-c-ctr.md) (`--verify`, `--force`).
+
 **Seed safety:** catalogusGG seed runs only when `material` is empty and `material_catalog_seeded` is unset. DDL `0_2_14` DROP is skipped when the table already has rows.
 
 **Admin CRUD UI:** `/materials.html` — unified list (no eigen/catalog split); editor preselects rubriek/subrubriek; new rows default `source = app`. With `building_id` in query/return-context: checkbox «Meest gebruikt in dit project». Lightweight preset rename/delete.

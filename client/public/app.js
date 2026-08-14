@@ -184,7 +184,7 @@ function statusLabel(status) {
     case "PROJECT_UNDERWAY":
       return "Tekeningen geaccepteerd \u2014 berekening loopt";
     case "PROJECT_NEAR_FINAL":
-      return "Berekening bijna afgerond";
+      return "Uitvoering bezig";
     case "PROJECT_FINISHED":
       return "Rapport gereed (concept v1.0)";
     default:
@@ -195,7 +195,7 @@ var PROGRESS_STEPS = [
   { key: "INITIAL_REQUEST", title: "Project gestart", short: "Gestart" },
   { key: "PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED", title: "Tekeningen ingediend", short: "Ingediend" },
   { key: "PROJECT_UNDERWAY", title: "Tekeningen geaccepteerd", short: "Geaccepteerd" },
-  { key: "PROJECT_NEAR_FINAL", title: "Bijna afgerond", short: "Bijna klaar" },
+  { key: "PROJECT_NEAR_FINAL", title: "Uitvoering bezig", short: "Uitvoering bezig" },
   { key: "PROJECT_FINISHED", title: "Rapport gereed", short: "Rapport" }
 ];
 function progressIndex(status) {
@@ -231,7 +231,7 @@ function renderProjectProgress(status) {
     INITIAL_REQUEST: "Volgende stap: upload tekeningen en dien ze in ter beoordeling.",
     PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED: "Een ingenieur controleert of uw tekeningen als basis voor de berekening kunnen dienen.",
     PROJECT_UNDERWAY: "Uw tekeningen zijn geaccepteerd. De berekening is gestart.",
-    PROJECT_NEAR_FINAL: "De berekening is bijna afgerond. Het conceptrapport volgt binnenkort.",
+    PROJECT_NEAR_FINAL: "Uitvoering bezig \u2014 het conceptrapport volgt binnenkort.",
     PROJECT_FINISHED: "Afgerond \u2014 uw rapportage is vrijgegeven."
   };
   projectProgressCaptionEl.textContent = captions[status] || statusLabel(status);
@@ -270,9 +270,13 @@ async function refreshGlobalInbox() {
   }
   if (!res.ok || !parsed.ok) return;
   cachedInbox = parsed.items ?? [];
+  renderGlobalInboxList(parsed.unread_count);
+}
+function renderGlobalInboxList(unreadCount) {
+  if (!inboxPanelEl || !inboxListEl) return;
   inboxPanelEl.hidden = false;
   inboxListEl.innerHTML = "";
-  const unread = parsed.unread_count ?? cachedInbox.filter((i) => i.unread).length;
+  const unread = unreadCount ?? cachedInbox.filter((i) => i.unread).length;
   if (inboxBadgeEl) {
     if (unread > 0) {
       inboxBadgeEl.hidden = false;
@@ -318,9 +322,20 @@ async function refreshGlobalInbox() {
         setStatus(err instanceof Error ? err.message : String(err), "err");
       });
     });
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "secondary danger";
+    delBtn.textContent = "Verwijderen";
+    delBtn.title = "Inbox-regel en rapport verwijderen";
+    delBtn.addEventListener("click", () => {
+      void deleteInboxItem(item).catch((err) => {
+        setStatus(err instanceof Error ? err.message : String(err), "err");
+      });
+    });
     actions.appendChild(dlBtn);
     actions.appendChild(rapportBtn);
     actions.appendChild(emailBtn);
+    actions.appendChild(delBtn);
     li.appendChild(actions);
     inboxListEl.appendChild(li);
   }
@@ -431,6 +446,51 @@ async function markInboxRead(inboxId) {
   } catch {
   }
 }
+async function deleteInboxItem(item) {
+  if (!auth?.token) throw new Error("Niet ingelogd");
+  const title = item.building_label || item.building_id.slice(0, 8);
+  const label = `${kindLabel(item.report_kind)} v${item.version_label}`;
+  if (!confirm(
+    `Inbox-regel en rapport verwijderen?
+
+${title} \u2014 ${label}
+
+De melding \xE9n het rapportbestand verdwijnen.`
+  )) {
+    return;
+  }
+  const res = await fetch("/api/reports/inbox/delete", {
+    method: "POST",
+    credentials: "include",
+    headers: apiAuthHeaders(auth.token, true),
+    body: JSON.stringify({ inbox_id: item.inbox_id })
+  });
+  let parsed;
+  try {
+    parsed = await res.json();
+  } catch {
+    throw new Error(`Verwijderen mislukt (HTTP ${res.status})`);
+  }
+  if (!res.ok || !parsed.ok) {
+    throw new Error(parsed.error || `Verwijderen mislukt (HTTP ${res.status})`);
+  }
+  if (activeInboxItem?.inbox_id === item.inbox_id) {
+    activeInboxItem = null;
+  }
+  cachedInbox = cachedInbox.filter((i) => i.inbox_id !== item.inbox_id);
+  renderGlobalInboxList();
+  setStatus("Inbox-regel en rapport verwijderd", "ok");
+  try {
+    await refreshGlobalInbox();
+  } catch {
+  }
+  if (activeProjectId() === item.building_id) {
+    try {
+      await refreshProjectInbox();
+    } catch {
+    }
+  }
+}
 function downloadNameFromResponse(res, fallback) {
   const cd = res.headers.get("Content-Disposition") || "";
   const m = /filename="([^"]+)"/i.exec(cd);
@@ -493,6 +553,7 @@ function miniProgressBar(status) {
 }
 function projectTitle(p) {
   if (p.label) return p.label;
+  if (p.client_ref) return p.client_ref;
   if (p.external_ref) return p.external_ref;
   if (p.dwell_street) return p.dwell_street;
   return "Naamloos project";
@@ -678,7 +739,7 @@ function readProjectForm() {
     dwell_municipality: g("dwell_municipality"),
     dwell_country: g("dwell_country") || "NL",
     label: g("label"),
-    external_ref: g("external_ref")
+    client_ref: g("client_ref")
   };
 }
 async function loadCustomerProfile() {
@@ -854,7 +915,7 @@ function setProjectEditingState(status) {
   void refreshProjectDocuments();
 }
 function clearProjectFields() {
-  for (const name of ["dwell_street", "dwell_postal", "dwell_city", "dwell_municipality", "dwell_country", "label", "external_ref"]) {
+  for (const name of ["dwell_street", "dwell_postal", "dwell_city", "dwell_municipality", "dwell_country", "label", "client_ref"]) {
     setFormValue(projectForm, name, name === "dwell_country" ? "NL" : "");
   }
   projectIdInput.value = "";
@@ -884,14 +945,15 @@ function fillProjectFromOpen(data) {
   setFormValue(projectForm, "dwell_municipality", data.dwelling_address.municipality);
   setFormValue(projectForm, "dwell_country", data.dwelling_address.country_code || "NL");
   setFormValue(projectForm, "label", data.building.label);
-  setFormValue(projectForm, "external_ref", data.building.external_ref);
+  setFormValue(projectForm, "client_ref", data.building.client_ref || "");
   projectIdInput.value = data.building.id;
   lastProjectId = data.building.id;
   reloadBtn.disabled = !lastProjectId;
   projectDetailPanel.classList.remove("hidden");
   projectDetailTitle.textContent = projectTitle({
     label: data.building.label,
-    external_ref: data.building.external_ref,
+    client_ref: data.building.client_ref || "",
+    external_ref: data.building.external_ref || "",
     dwell_street: data.dwelling_address.street_line
   });
   highlightSelectedProject(data.building.id);
@@ -1147,7 +1209,7 @@ projectForm.addEventListener("submit", async (ev) => {
       p.dwell_municipality,
       p.dwell_country,
       p.label,
-      p.external_ref,
+      p.client_ref,
       projectId
     ]);
     if (ret.startsWith("ERROR")) {
@@ -1162,7 +1224,8 @@ projectForm.addEventListener("submit", async (ev) => {
     projectDetailPanel.classList.remove("hidden");
     projectDetailTitle.textContent = projectTitle({
       label: p.label,
-      external_ref: p.external_ref,
+      client_ref: p.client_ref,
+      external_ref: "",
       dwell_street: p.dwell_street
     });
     setStatus(projectId ? "Project bijgewerkt" : "Project aangemaakt", "ok");

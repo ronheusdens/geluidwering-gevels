@@ -15,6 +15,7 @@ export type GaComponentLike = {
   id: string;
   vr_nr?: string | null;
   analysis?: GaAnalysis | null;
+  label?: string | null;
 };
 
 function asAnalysis(analysis?: GaAnalysis | null): GaAnalysis {
@@ -72,6 +73,37 @@ export function collectSupersededSourceIds(subsections: GaComponentLike[]): Set<
   return superseded;
 }
 
+function hasMaterialId(analysis?: GaAnalysis | null): boolean {
+  const mid = asAnalysis(analysis).material_id;
+  return mid != null && String(mid).trim().length > 0;
+}
+
+/** Constituenten van een compositie die nog geen materiaal hebben (oranje led). */
+export function composeConstituentsMissingMaterial(
+  component: GaComponentLike,
+  subsections: GaComponentLike[],
+): GaComponentLike[] {
+  const ca = asAnalysis(component.analysis);
+  const src = ca.source_subsection_ids;
+  if (!ca.boolean_op || !Array.isArray(src) || src.length < 2) return [];
+  const byId = new Map(subsections.map((s) => [s.id, s]));
+  const missing: GaComponentLike[] = [];
+  for (const sid of src) {
+    if (typeof sid !== "string" || !sid.trim() || sid === component.id) continue;
+    const child = byId.get(sid.trim());
+    if (!child) continue;
+    if (!hasMaterialId(child.analysis)) missing.push(child);
+  }
+  return missing;
+}
+
+export function composeSourcesMaterialComplete(
+  component: GaComponentLike,
+  subsections: GaComponentLike[],
+): boolean {
+  return composeConstituentsMissingMaterial(component, subsections).length === 0;
+}
+
 /** @deprecated Prefer collectSupersededSourceIds for GA eligibility. */
 export function isBooleanSourceComponent(
   id: string,
@@ -99,6 +131,8 @@ export function isGaEligibleForVr(
     return { eligible: false, ga_ready: false, reason: "vervangen door setbewerking (zelfde materiaal)" };
   }
   const mat = component.analysis?.material_id;
-  const ga_ready = mat != null && String(mat).length > 0;
-  return { eligible: true, ga_ready, reason: ga_ready ? undefined : "geen materiaal" };
+  if (mat == null || !String(mat).length) {
+    return { eligible: true, ga_ready: false, reason: "geen materiaal" };
+  }
+  return { eligible: true, ga_ready: true };
 }

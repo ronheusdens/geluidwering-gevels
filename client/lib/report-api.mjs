@@ -15,6 +15,7 @@
  * GET  /api/reports/download?building_id=&file=
  * GET  /api/reports/inbox?building_id=   (omit building_id → all owner projects)
  * POST /api/reports/inbox/read           JSON: { inbox_id }
+ * POST /api/reports/inbox/delete         JSON: { inbox_id }
  * POST /api/reports/inbox/email-request  JSON: { inbox_id }
  */
 import crypto from "node:crypto";
@@ -38,6 +39,26 @@ const UUID_RE =
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(__dirname, "..", "..");
 const DEFAULT_PROJECTS_ROOT = path.join(APP_ROOT, "data", "projecten");
+const LOGO_PATH = path.join(__dirname, "..", "public", "assets", "stilte-logo.jpg");
+const FIRM_NAME = "Stilte advies en meten";
+
+let cachedLogoDataUri = null;
+
+/** Embed logo so PDF/file:// reports do not depend on the UI server. */
+function stilteLogoDataUri() {
+  if (cachedLogoDataUri != null) return cachedLogoDataUri;
+  try {
+    if (fs.existsSync(LOGO_PATH)) {
+      const buf = fs.readFileSync(LOGO_PATH);
+      cachedLogoDataUri = `data:image/jpeg;base64,${buf.toString("base64")}`;
+      return cachedLogoDataUri;
+    }
+  } catch (err) {
+    console.warn("stilte logo load failed:", err);
+  }
+  cachedLogoDataUri = "";
+  return cachedLogoDataUri;
+}
 
 function projectsRoot() {
   const env = (process.env.GEVELWERING_PROJECTS_ROOT || "").trim();
@@ -115,6 +136,7 @@ async function assertCanAccessBuilding(client, buildingId, session) {
   const { rows } = await client.query(
     `SELECT b.id::text AS id,
             b.label,
+            COALESCE(b.client_ref, '') AS client_ref,
             COALESCE(b.external_ref, '') AS external_ref,
             b.project_status::text AS project_status,
             b.owner_user_id::text AS owner_user_id
@@ -204,6 +226,7 @@ async function loadReportModel(client, buildingId, variantId) {
   const buildingQ = await client.query(
     `SELECT b.id::text AS id,
             b.label,
+            COALESCE(b.client_ref, '') AS client_ref,
             COALESCE(b.external_ref, '') AS external_ref,
             b.project_status::text AS project_status,
             COALESCE(c.name, '') AS customer_name,
@@ -256,7 +279,8 @@ async function loadReportModel(client, buildingId, variantId) {
     const rq = await client.query(
       `SELECT r.id::text AS verblijfsruimte_id, r.omschrijving, r.vloer_m2, r.hoogte_m,
               r.volume_m3, r.t0_s, r.ga_dba, r.lbi_dba, r.gak_dba,
-              COALESCE(s.vr_nr, '') AS vr_nr, COALESCE(s.vg_nr::text, '') AS vg_nr
+              COALESCE(s.vr_nr, '') AS vr_nr, COALESCE(s.vg_nr::text, '') AS vg_nr,
+              COALESCE(s.analysis, '{}'::jsonb) AS room_analysis
        FROM app_gevelwering.verblijfsruimte r
        LEFT JOIN app_gevelwering.drawing_subsection s ON s.id = r.subsection_id
        WHERE r.verblijfsgebied_id = $1::uuid
@@ -317,33 +341,34 @@ async function loadReportModel(client, buildingId, variantId) {
          ORDER BY v.sort_order ASC, v.created_at ASC`,
         [r.verblijfsruimte_id],
       );
-      vrs.push({ ...r, vg_omschrijving: g.omschrijving, vlakken: vlQ.rows });
-    }
-  }
-
-  // Unique catalog materials applied on façade components in this variant.
-  const materialsById = new Map();
-  for (const r of vrs) {
-    for (const v of r.vlakken || []) {
-      if (!v.material_id || materialsById.has(v.material_id)) continue;
-      materialsById.set(v.material_id, {
-        material_id: v.material_id,
-        catalog_id: v.catalog_id,
-        name: v.material_name,
-        master_category: v.master_category,
-        source: v.material_source,
-        ra_dba: v.ra_dba,
-        rw_db: v.rw_db,
-        c_db: v.c_db,
-        ctr_db: v.ctr_db,
-        r_63_hz: v.r_63_hz,
-        r_125_hz: v.r_125_hz,
-        r_250_hz: v.r_250_hz,
-        r_500_hz: v.r_500_hz,
-        r_1000_hz: v.r_1000_hz,
-        r_2000_hz: v.r_2000_hz,
-        r_4000_hz: v.r_4000_hz,
-        spectrum_ok: v.spectrum_ok,
+      const roomAnalysis =
+        r.room_analysis && typeof r.room_analysis === "object" && !Array.isArray(r.room_analysis)
+          ? r.room_analysis
+          : {};
+      const expectedRaw = Array.isArray(roomAnalysis.expected_orientaties)
+        ? roomAnalysis.expected_orientaties
+        : [];
+      const ORI = ["N", "NO", "O", "ZO", "Z", "ZW", "W", "NW"];
+      const expectedOrientaties = [
+        ...new Set(
+          expectedRaw
+            .map((c) => String(c || "").trim().toUpperCase())
+            .filter((c) => ORI.includes(c)),
+        ),
+      ];
+      const fromVlakken = [
+        ...new Set(
+          (vlQ.rows || [])
+            .map((v) => String(v.orientatie || "").trim().toUpperCase())
+            .filter((c) => ORI.includes(c)),
+        ),
+      ];
+      const { room_analysis: _ra, ...roomRest } = r;
+      vrs.push({
+        ...roomRest,
+        vg_omschrijving: g.omschrijving,
+        vlakken: vlQ.rows,
+        expected_orientaties: expectedOrientaties.length ? expectedOrientaties : fromVlakken,
       });
     }
   }
@@ -353,7 +378,6 @@ async function loadReportModel(client, buildingId, variantId) {
     variant,
     verblijfsgebieden: vgQ.rows,
     verblijfsruimten: vrs,
-    materials: [...materialsById.values()],
   };
 }
 
@@ -382,8 +406,23 @@ function spectrumBandCells(m) {
   return bands.map((b) => `<td class="num">${esc(fmtNum(b, 0))}</td>`).join("");
 }
 
+function dominantClCg(vlakken) {
+  let best = null;
+  let bestArea = -1;
+  for (const v of vlakken || []) {
+    const a = Number(v.area_m2);
+    if (!(a > bestArea)) continue;
+    bestArea = a;
+    best = v;
+  }
+  return {
+    cl: best ? best.cl_db : null,
+    cg: best ? best.cg_db : null,
+  };
+}
+
 function renderReportHtml(model, opts) {
-  const { building, variant, verblijfsruimten, materials = [] } = model;
+  const { building, variant, verblijfsruimten } = model;
   const status = opts.status || "concept";
   const generatedAt = opts.generatedAt || new Date().toISOString();
   const generatedLabel = new Date(generatedAt).toLocaleString("nl-NL");
@@ -399,7 +438,11 @@ function renderReportHtml(model, opts) {
       const ok = voldoet(lb, r.gak_dba, grens);
       const label = r.vr_nr ? `VR ${esc(r.vr_nr)} · ${esc(r.omschrijving)}` : esc(r.omschrijving);
       const toets =
-        ok == null ? '<td class="center missing">—</td>' : ok ? '<td class="center ok">Ja</td>' : '<td class="center fail">Nee</td>';
+        ok == null
+          ? '<td class="center missing">—</td>'
+          : ok
+            ? '<td class="center ok">Ja</td>'
+            : '<td class="center fail">Nee</td>';
       return `<tr>
         <td>${label}</td>
         <td class="num">${esc(fmtNum(r.vloer_m2, 2))}</td>
@@ -419,18 +462,28 @@ function renderReportHtml(model, opts) {
           ? fmtNum(lb - Number(r.gak_dba), 1)
           : "—";
       const label = r.vr_nr ? `VR ${esc(r.vr_nr)} · ${esc(r.omschrijving)}` : esc(r.omschrijving);
+      const oris = Array.isArray(r.expected_orientaties) ? r.expected_orientaties : [];
+      const oriTxt = oris.length ? oris.join(", ") : "—";
+      const corr = dominantClCg(r.vlakken);
       const vlakRows = (r.vlakken || [])
         .map((v) => {
-          const mat =
-            v.material_name || v.catalog_id
-              ? `${esc(v.material_name || "—")}${v.catalog_id ? ` <span class="muted">(${esc(v.catalog_id)})</span>` : ""}`
-              : '<span class="missing">geen materiaal</span>';
+          const matLabel = v.material_name || v.catalog_id
+            ? `${esc(v.material_name || "—")}${
+                v.catalog_id ? ` <span class="muted">(${esc(v.catalog_id)})</span>` : ""
+              }`
+            : '<span class="missing">geen materiaal</span>';
+          const cat = v.master_category
+            ? `<div class="muted">${esc(v.master_category)}</div>`
+            : "";
           return `<tr>
-          <td>${esc(v.omschrijving)}</td>
-          <td class="center">${esc(v.orientatie || "—")}</td>
-          <td>${mat}</td>
+          <td>${esc(v.omschrijving)}${cat}</td>
+          <td>${matLabel}</td>
           <td class="num">${esc(fmtNum(v.area_m2, 2))}</td>
           <td class="num">${esc(fmtNum(v.ra_dba, 1))}</td>
+          <td class="num">${esc(fmtNum(v.rw_db, 0))}</td>
+          ${spectrumBandCells(v)}
+          <td class="num">${esc(fmtNum(v.c_db, 0))}</td>
+          <td class="num">${esc(fmtNum(v.ctr_db, 0))}</td>
           <td class="num">${esc(fmtNum(v.cl_db, 1))}</td>
           <td class="num">${esc(fmtNum(v.cg_db, 1))}</td>
           <td class="center">${v.meenemen_gak ? "ja" : "nee"}</td>
@@ -445,6 +498,7 @@ function renderReportHtml(model, opts) {
           <div class="row"><span class="lab">Vertrekhoogte</span><span class="val">${esc(fmtNum(r.hoogte_m, 2))}</span><span class="unit">m</span></div>
           <div class="row"><span class="lab">Volume</span><span class="val">${esc(fmtNum(r.volume_m3, 2))}</span><span class="unit">m³</span></div>
           <div class="row"><span class="lab">Nagalmtijd T₀</span><span class="val">${esc(fmtNum(r.t0_s, 2))}</span><span class="unit">s</span></div>
+          <div class="row"><span class="lab">Geveloriëntaties (VR)</span><span class="val">${esc(oriTxt)}</span><span class="unit"></span></div>
         </div>
         <div>
           <div class="row"><span class="lab">Max. geluidsbelasting</span><span class="val">${esc(fmtNum(lb, 1))}</span><span class="unit">dB</span></div>
@@ -455,39 +509,13 @@ function renderReportHtml(model, opts) {
           <div class="row"><span class="lab">Voldoet</span><span class="val ${ok === true ? "ok" : ok === false ? "fail" : ""}">${ok == null ? "—" : ok ? "Ja" : "Nee"}</span><span class="unit"></span></div>
         </div>
       </div>
-      <table>
+      <p class="vlak-head">Vlakken / materialen</p>
+      <p class="corr">CL = ${esc(fmtNum(corr.cl, 1))} dB · Cg = ${esc(fmtNum(corr.cg, 1))} dB (maatgevend via grootste geveloppervlak → GA;k) · oriëntaties op VR-niveau</p>
+      <table class="spectrum">
         <thead><tr>
-          <th>Vlak</th><th class="center">Oriëntatie</th><th>Materiaal (catalogus)</th><th class="num">S [m²]</th><th class="num">RA [dB]</th>
-          <th class="num">CL</th><th class="num">Cg</th><th class="center">In GA;k</th>
-        </tr></thead>
-        <tbody>${vlakRows || '<tr><td colspan="8" class="missing">Geen vlakken</td></tr>'}</tbody>
-      </table>`;
-    })
-    .join("\n");
-
-  const materialRows = materials
-    .map((m) => {
-      const src = m.source === "eigen" ? "eigen" : m.source || "catalogus";
-      return `<tr>
-        <td>${esc(m.catalog_id || "—")}</td>
-        <td>${esc(m.name || "—")}<div class="muted">${esc(m.master_category || "")}${m.master_category ? " · " : ""}${esc(src)}</div></td>
-        <td class="num">${esc(fmtNum(m.ra_dba, 1))}</td>
-        <td class="num">${esc(fmtNum(m.rw_db, 0))}</td>
-        ${spectrumBandCells(m)}
-        <td class="num">${esc(fmtNum(m.c_db, 0))}</td>
-        <td class="num">${esc(fmtNum(m.ctr_db, 0))}</td>
-      </tr>`;
-    })
-    .join("\n");
-
-  const materialsBlock = `
-    <h2>Toegepaste materialen — catalogusspectra</h2>
-    <p class="note">Octaafband-R [dB] uit <code>app_gevelwering.material</code> voor materialen gekoppeld aan gevelvlakken in deze variant. De A-gewogen rekenkern gebruikt RA; spectra zijn bijlage/documentatie.</p>
-    <table class="spectrum">
-      <thead>
-        <tr>
-          <th>Cat.id</th>
+          <th>Omschrijving</th>
           <th>Materiaal</th>
+          <th class="num">S [m²]</th>
           <th class="num">RA</th>
           <th class="num">Rw</th>
           <th class="num">63</th>
@@ -499,15 +527,14 @@ function renderReportHtml(model, opts) {
           <th class="num">4k</th>
           <th class="num">C</th>
           <th class="num">Ctr</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${
-          materialRows ||
-          '<tr><td colspan="13" class="missing">Geen catalogusmaterialen gekoppeld aan vlakken</td></tr>'
-        }
-      </tbody>
-    </table>`;
+          <th class="num">CL</th>
+          <th class="num">Cg</th>
+          <th class="center">GA;k</th>
+        </tr></thead>
+        <tbody>${vlakRows || '<tr><td colspan="17" class="missing">Geen vlakken</td></tr>'}</tbody>
+      </table>`;
+    })
+    .join("\n");
 
   return `<!DOCTYPE html>
 <html lang="nl">
@@ -518,10 +545,11 @@ function renderReportHtml(model, opts) {
     @page { size: A4; margin: 14mm; }
     body { margin: 0; color: #111; font: 10.5pt/1.35 Helvetica, Arial, sans-serif; }
     .sheet { padding: 0; }
-    .page-head { display: grid; grid-template-columns: 1fr auto; gap: 1rem; border-bottom: 1px solid #bbb; padding-bottom: .55rem; margin-bottom: .75rem; }
+    .page-head { display: grid; grid-template-columns: 1fr auto; gap: 1rem; align-items: start; border-bottom: 1px solid #bbb; padding-bottom: .55rem; margin-bottom: .75rem; }
     h1 { margin: 0; font-size: 13pt; }
     .werknummer { margin: .25rem 0 0; color: #444; font-size: 9.5pt; }
-    .logo { width: 72px; height: auto; }
+    .logo { width: 72px; height: auto; display: block; object-fit: contain; }
+    .logo-fallback { width: 72px; min-height: 36px; border: 1px dashed #bbb; color: #888; font-size: 7.5pt; text-align: center; padding: .35rem; box-sizing: border-box; }
     .meta { display: grid; grid-template-columns: 9.5rem 1fr; gap: .15rem .75rem; font-size: 9.5pt; margin: .5rem 0 .85rem; }
     .meta dt { color: #444; } .meta dd { margin: 0; font-weight: 600; }
     .badge { display: inline-block; padding: .1rem .45rem; background: #f3e5ab; font-size: 8.5pt; font-weight: 700; text-transform: uppercase; }
@@ -529,13 +557,15 @@ function renderReportHtml(model, opts) {
     h2 { margin: .85rem 0 .35rem; font-size: 10.5pt; border-bottom: 1px solid #bbb; }
     h3 { margin: .75rem 0 .3rem; font-size: 10pt; }
     table { width: 100%; border-collapse: collapse; font-size: 8.8pt; margin: .35rem 0 .65rem; }
-    table.spectrum { font-size: 7.8pt; }
-    th, td { border: 1px solid #bbb; padding: .22rem .35rem; }
+    table.spectrum { font-size: 7.4pt; }
+    th, td { border: 1px solid #bbb; padding: .18rem .28rem; vertical-align: top; }
     th { background: #f2f2f2; text-align: left; }
-    .num { text-align: right; } .center { text-align: center; }
+    .num { text-align: right; white-space: nowrap; } .center { text-align: center; }
     .ok { color: #1b5e20; font-weight: 700; } .fail { color: #b71c1c; font-weight: 700; } .missing { color: #888; font-style: italic; }
-    .muted { color: #666; font-size: 8pt; font-weight: 400; }
+    .muted { color: #666; font-size: 7.5pt; font-weight: 400; }
     .note { font-size: 8.5pt; color: #444; margin: .2rem 0 .45rem; }
+    .vlak-head { margin: .45rem 0 .15rem; font-weight: 650; font-size: 9.5pt; }
+    .corr { font-size: 8.5pt; margin: .1rem 0 .35rem; color: #444; }
     .vr-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .25rem 1.25rem; font-size: 9.5pt; margin: .35rem 0 .55rem; }
     .vr-grid .row { display: grid; grid-template-columns: 1fr auto auto; gap: .35rem; }
     .lab { color: #444; } .val { font-weight: 650; text-align: right; } .unit { color: #444; min-width: 1.6rem; }
@@ -549,9 +579,15 @@ function renderReportHtml(model, opts) {
         <h1>${esc(title)}</h1>
         <p class="werknummer">Werknummer: ${esc(building.external_ref || "—")} · <span class="badge">${esc(status)}</span></p>
       </div>
-      <img class="logo" src="/assets/stilte-logo.jpg" alt="Stilte" />
+      ${
+        stilteLogoDataUri()
+          ? `<img class="logo" src="${stilteLogoDataUri()}" alt="${esc(FIRM_NAME)}" />`
+          : `<div class="logo-fallback">${esc(FIRM_NAME)}</div>`
+      }
     </header>
     <dl class="meta">
+      <dt>Werknummer</dt><dd>${esc(building.external_ref || "—")}</dd>
+      <dt>Kenmerk opdrachtgever</dt><dd>${esc(building.client_ref || "—")}</dd>
       <dt>Project / omschrijving</dt><dd>${esc(title)}${adres ? ` — ${esc(adres)}` : ""}</dd>
       <dt>Opdrachtgever</dt><dd>${esc(building.customer_name || "—")}</dd>
       <dt>Rekenmethode</dt><dd>NPR 5272 / NEN 5077</dd>
@@ -577,9 +613,8 @@ function renderReportHtml(model, opts) {
       </tbody>
     </table>
     ${detailBlocks}
-    ${materialsBlock}
     <footer class="page-foot">
-      <span>Geluidwering gevels · Stilte</span>
+      <span>Geluidwering gevels · ${esc(FIRM_NAME)}</span>
       <span>Gegenereerd: ${esc(generatedLabel)}</span>
     </footer>
   </article>
@@ -1213,6 +1248,99 @@ export async function handleReportInboxRead(req, res) {
   } finally {
     client.release();
   }
+}
+
+/** Owner/staff: remove inbox row + bijbehorend rapportbestand (pdf/html/hash). */
+export async function handleReportInboxDelete(req, res) {
+  if (requireHttpsOrReject(req, res)) return;
+  const token = parseSessionToken(req);
+  if (!token) {
+    json(req, res, 401, { ok: false, error: "login required" });
+    return;
+  }
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    json(req, res, 400, { ok: false, error: "invalid JSON body" });
+    return;
+  }
+  const inboxId = String(body.inbox_id || "").trim();
+  if (!UUID_RE.test(inboxId)) {
+    json(req, res, 400, { ok: false, error: "inbox_id required" });
+    return;
+  }
+
+  const pool = getPool();
+  const client = await pool.connect();
+  let building = null;
+  let filename = "";
+  try {
+    const session = await resolveSession(client, token);
+    if (!session) {
+      json(req, res, 401, { ok: false, error: "session invalid or expired" });
+      return;
+    }
+    const found = await client.query(
+      `SELECT building_id::text AS building_id,
+              filename
+       FROM app_gevelwering.customer_report_inbox
+       WHERE id = $1::uuid`,
+      [inboxId],
+    );
+    if (!found.rows[0]) {
+      json(req, res, 404, { ok: false, error: "inbox-item niet gevonden" });
+      return;
+    }
+    filename = String(found.rows[0].filename || "").trim();
+    const access = await assertCanAccessBuilding(client, found.rows[0].building_id, session);
+    if (!access) {
+      json(req, res, 403, { ok: false, error: "geen toegang" });
+      return;
+    }
+    building = access;
+    const del = await client.query(
+      `DELETE FROM app_gevelwering.customer_report_inbox
+       WHERE id = $1::uuid
+       RETURNING id::text AS inbox_id`,
+      [inboxId],
+    );
+    if (!del.rows[0]) {
+      json(req, res, 404, { ok: false, error: "inbox-item niet gevonden" });
+      return;
+    }
+  } finally {
+    client.release();
+  }
+
+  const removedFiles = [];
+  if (building && filename && !filename.includes("..") && !filename.includes("/") && !filename.includes("\\")) {
+    const dir = reportsDir(building);
+    const base = filename.replace(/\.(pdf|html)$/i, "");
+    const candidates = [
+      `${base}.pdf`,
+      `${base}.html`,
+      `${base}.html.sha256`,
+      `${base}.sha256`,
+      filename,
+    ];
+    const seen = new Set();
+    for (const name of candidates) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const full = path.join(dir, name);
+      try {
+        if (fs.existsSync(full)) {
+          await fsp.unlink(full);
+          removedFiles.push(name);
+        }
+      } catch (err) {
+        console.error("inbox delete file failed:", full, err);
+      }
+    }
+  }
+
+  json(req, res, 200, { ok: true, inbox_id: inboxId, removed_files: removedFiles });
 }
 
 /**

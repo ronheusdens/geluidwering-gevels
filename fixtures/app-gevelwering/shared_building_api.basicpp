@@ -340,7 +340,7 @@ END PROCEDURE
 
 PROCEDURE API_AdminListCustomerProjects(session_token$, customer_id$) AS STRING
     DIM sql$, rid%, n%, i%, out$, t$, username$, cid$
-    DIM b_id$, b_label$, b_ref$, project_status$, created_at$, drawing_count$, drawing_names$
+    DIM b_id$, b_label$, b_ref$, b_client$, project_status$, created_at$, drawing_count$, drawing_names$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -367,7 +367,7 @@ PROCEDURE API_AdminListCustomerProjects(session_token$, customer_id$) AS STRING
     END IF
 
     sql$ = "SELECT b.id::text AS building_id, COALESCE(b.label,'') AS label, " + _
-        "COALESCE(b.external_ref,'') AS external_ref, b.project_status::text AS project_status, " + _
+        "COALESCE(b.client_ref,'') AS client_ref, COALESCE(b.external_ref,'') AS external_ref, b.project_status::text AS project_status, " + _
         "b.created_at::text AS created_at, " + _
         "(SELECT COUNT(*)::text FROM app_gevelwering.document d WHERE d.building_id = b.id) AS drawing_count, " + _
         "(SELECT COALESCE(string_agg(d.filename, ', ' ORDER BY d.created_at), '') FROM app_gevelwering.document d WHERE d.building_id = b.id) AS drawing_names " + _
@@ -385,6 +385,7 @@ PROCEDURE API_AdminListCustomerProjects(session_token$, customer_id$) AS STRING
         END IF
         b_id$ = POSTGRES_GET_BY_NAME$(rid%, i%, "building_id")
         b_label$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "label"), CHR$(34), "")
+        b_client$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "client_ref"), CHR$(34), "")
         b_ref$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "external_ref"), CHR$(34), "")
         project_status$ = POSTGRES_GET_BY_NAME$(rid%, i%, "project_status")
         created_at$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "created_at"), CHR$(34), "")
@@ -392,6 +393,7 @@ PROCEDURE API_AdminListCustomerProjects(session_token$, customer_id$) AS STRING
         drawing_names$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "drawing_names"), CHR$(34), "")
         out$ = out$ + "{" + CHR$(34) + "building_id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "label" + CHR$(34) + ":" + CHR$(34) + b_label$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "client_ref" + CHR$(34) + ":" + CHR$(34) + b_client$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "external_ref" + CHR$(34) + ":" + CHR$(34) + b_ref$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "project_status" + CHR$(34) + ":" + CHR$(34) + project_status$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "created_at" + CHR$(34) + ":" + CHR$(34) + created_at$ + CHR$(34)
@@ -403,8 +405,8 @@ PROCEDURE API_AdminListCustomerProjects(session_token$, customer_id$) AS STRING
     RETURN out$
 END PROCEDURE
 
-PROCEDURE API_AdminUpdateProjectStatus(session_token$, building_id$, project_status$) AS STRING
-    DIM sql$, rid%, t$, username$, b_id$, ps$
+PROCEDURE API_AdminUpdateProjectStatus(session_token$, building_id$, project_status$, external_ref$) AS STRING
+    DIM sql$, rid%, t$, username$, b_id$, ps$, ref$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -416,6 +418,7 @@ PROCEDURE API_AdminUpdateProjectStatus(session_token$, building_id$, project_sta
     t$ = SUBSTITUTE$(session_token$, "'", "''")
     b_id$ = SUBSTITUTE$(building_id$, "'", "''")
     ps$ = SUBSTITUTE$(project_status$, "'", "''")
+    ref$ = SUBSTITUTE$(external_ref$, "'", "''")
 
     IF ps$ <> "INITIAL_REQUEST" AND ps$ <> "PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED" AND ps$ <> "PROJECT_UNDERWAY" AND ps$ <> "PROJECT_NEAR_FINAL" AND ps$ <> "PROJECT_FINISHED" THEN
         RETURN "ERROR: invalid project_status"
@@ -436,15 +439,17 @@ PROCEDURE API_AdminUpdateProjectStatus(session_token$, building_id$, project_sta
     END IF
 
     sql$ = "UPDATE app_gevelwering.building " + _
-        "SET project_status = '" + ps$ + "'::app_gevelwering.project_status, updated_at = now() " + _
+        "SET project_status = '" + ps$ + "'::app_gevelwering.project_status, " + _
+        "external_ref = '" + ref$ + "', updated_at = now() " + _
         "WHERE id = '" + b_id$ + "'::uuid " + _
-        "RETURNING id::text AS id"
+        "RETURNING id::text AS id, COALESCE(external_ref,'') AS external_ref"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
     IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
         RETURN "ERROR: building not found"
     END IF
 
-    RETURN "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "building_id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34) + "," + CHR$(34) + "project_status" + CHR$(34) + ":" + CHR$(34) + ps$ + CHR$(34) + "}"
+    ref$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "external_ref"), CHR$(34), "")
+    RETURN "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "building_id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34) + "," + CHR$(34) + "project_status" + CHR$(34) + ":" + CHR$(34) + ps$ + CHR$(34) + "," + CHR$(34) + "external_ref" + CHR$(34) + ":" + CHR$(34) + ref$ + CHR$(34) + "}"
 END PROCEDURE
 
 REM --- Admin opdrachtgever accounts (service_user, non-engineer) ---
@@ -1156,6 +1161,23 @@ PROCEDURE API_AdminSaveMaterial(session_token$, material_id$, catalog_id$, maste
     at1$ = SUBSTITUTE$(glass_t1$, "'", "''")
     acav$ = SUBSTITUTE$(glass_cavity$, "'", "''")
     at2$ = SUBSTITUTE$(glass_t2$, "'", "''")
+    REM NL decimal comma → period before VAL/atof (anders wordt 42,6 → 42)
+    thick$ = SUBSTITUTE$(thick$, ",", ".")
+    wt$ = SUBSTITUTE$(wt$, ",", ".")
+    ra$ = SUBSTITUTE$(ra$, ",", ".")
+    a63$ = SUBSTITUTE$(a63$, ",", ".")
+    a125$ = SUBSTITUTE$(a125$, ",", ".")
+    a250$ = SUBSTITUTE$(a250$, ",", ".")
+    a500$ = SUBSTITUTE$(a500$, ",", ".")
+    a1k$ = SUBSTITUTE$(a1k$, ",", ".")
+    a2k$ = SUBSTITUTE$(a2k$, ",", ".")
+    a4k$ = SUBSTITUTE$(a4k$, ",", ".")
+    arw$ = SUBSTITUTE$(arw$, ",", ".")
+    ac$ = SUBSTITUTE$(ac$, ",", ".")
+    actr$ = SUBSTITUTE$(actr$, ",", ".")
+    at1$ = SUBSTITUTE$(at1$, ",", ".")
+    acav$ = SUBSTITUTE$(acav$, ",", ".")
+    at2$ = SUBSTITUTE$(at2$, ",", ".")
     src$ = SUBSTITUTE$(source$, "'", "''")
     IF src$ = "" OR src$ = "eigen" THEN
         src$ = "app"
@@ -1539,7 +1561,7 @@ END PROCEDURE
 
 PROCEDURE API_ListBuildings(session_token$) AS STRING
     DIM sql$, rid%, n%, i%, out$, t$, owner_id$
-    DIM b_id$, b_label$, b_ref$, c_name$, project_status$
+    DIM b_id$, b_label$, b_ref$, b_client$, c_name$, project_status$
     DIM d_street$, d_postal$, d_city$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
@@ -1560,7 +1582,7 @@ PROCEDURE API_ListBuildings(session_token$) AS STRING
     END IF
     owner_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "user_id")
 
-    sql$ = "SELECT b.id::text AS building_id, COALESCE(b.label,'') AS label, COALESCE(b.external_ref,'') AS external_ref, " + _
+    sql$ = "SELECT b.id::text AS building_id, COALESCE(b.label,'') AS label, COALESCE(b.client_ref,'') AS client_ref, COALESCE(b.external_ref,'') AS external_ref, " + _
         "c.name AS customer_name, b.project_status::text AS project_status, " + _
         "a.street_line AS dwell_street, a.postal_code AS dwell_postal, a.city AS dwell_city " + _
         "FROM app_gevelwering.building b " + _
@@ -1581,6 +1603,7 @@ PROCEDURE API_ListBuildings(session_token$) AS STRING
         END IF
         b_id$ = POSTGRES_GET_BY_NAME$(rid%, i%, "building_id")
         b_label$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "label"), CHR$(34), "")
+        b_client$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "client_ref"), CHR$(34), "")
         b_ref$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "external_ref"), CHR$(34), "")
         c_name$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "customer_name"), CHR$(34), "")
         project_status$ = POSTGRES_GET_BY_NAME$(rid%, i%, "project_status")
@@ -1589,6 +1612,7 @@ PROCEDURE API_ListBuildings(session_token$) AS STRING
         d_city$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "dwell_city"), CHR$(34), "")
         out$ = out$ + "{" + CHR$(34) + "id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "label" + CHR$(34) + ":" + CHR$(34) + b_label$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "client_ref" + CHR$(34) + ":" + CHR$(34) + b_client$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "external_ref" + CHR$(34) + ":" + CHR$(34) + b_ref$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "customer_name" + CHR$(34) + ":" + CHR$(34) + c_name$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "project_status" + CHR$(34) + ":" + CHR$(34) + project_status$ + CHR$(34)
@@ -1601,7 +1625,7 @@ PROCEDURE API_ListBuildings(session_token$) AS STRING
     RETURN out$
 END PROCEDURE
 
-PROCEDURE API_SaveBuildingEntry(session_token$, name$, email$, phone$, notes$, cust_street$, cust_postal$, cust_city$, cust_municipality$, cust_country$, dwell_street$, dwell_postal$, dwell_city$, dwell_municipality$, dwell_country$, label$, external_ref$, building_id$) AS STRING
+PROCEDURE API_SaveBuildingEntry(session_token$, name$, email$, phone$, notes$, cust_street$, cust_postal$, cust_city$, cust_municipality$, cust_country$, dwell_street$, dwell_postal$, dwell_city$, dwell_municipality$, dwell_country$, label$, client_ref$, building_id$) AS STRING
     DIM sql$, customer_id$, cust_addr_id$, dwell_addr_id$, building_id_out$, out$, cc$, dc$, owner_id$, t$
     DIM rid%, n%, bid$
 
@@ -1654,7 +1678,7 @@ PROCEDURE API_SaveBuildingEntry(session_token$, name$, email$, phone$, notes$, c
     dwell_city$ = SUBSTITUTE$(dwell_city$, "'", "''")
     dwell_municipality$ = SUBSTITUTE$(dwell_municipality$, "'", "''")
     label$ = SUBSTITUTE$(label$, "'", "''")
-    external_ref$ = SUBSTITUTE$(external_ref$, "'", "''")
+    client_ref$ = SUBSTITUTE$(client_ref$, "'", "''")
     bid$ = SUBSTITUTE$(building_id$, "'", "''")
 
     cust_addr_id$ = ""
@@ -1703,7 +1727,7 @@ PROCEDURE API_SaveBuildingEntry(session_token$, name$, email$, phone$, notes$, c
         sql$ = "UPDATE app_gevelwering.address SET street_line = '" + dwell_street$ + "', postal_code = '" + dwell_postal$ + "', city = '" + dwell_city$ + "', municipality = '" + dwell_municipality$ + "', country_code = '" + dc$ + "', updated_at = now() WHERE id = '" + dwell_addr_id$ + "'::uuid"
         rid% = POSTGRES_QUERY(g_conn%, sql$)
 
-        sql$ = "UPDATE app_gevelwering.building SET label = '" + label$ + "', external_ref = '" + external_ref$ + "', updated_at = now() WHERE id = '" + building_id_out$ + "'::uuid"
+        sql$ = "UPDATE app_gevelwering.building SET label = '" + label$ + "', client_ref = '" + client_ref$ + "', updated_at = now() WHERE id = '" + building_id_out$ + "'::uuid"
         rid% = POSTGRES_QUERY(g_conn%, sql$)
     ELSE
         sql$ = "INSERT INTO app_gevelwering.address (customer_id, kind, street_line, postal_code, city, municipality, country_code) VALUES ('" + customer_id$ + "'::uuid, 'DWELLING'::app_gevelwering.address_kind, '" + dwell_street$ + "', '" + dwell_postal$ + "', '" + dwell_city$ + "', '" + dwell_municipality$ + "', '" + dc$ + "') RETURNING id::text AS id"
@@ -1713,7 +1737,7 @@ PROCEDURE API_SaveBuildingEntry(session_token$, name$, email$, phone$, notes$, c
         END IF
         dwell_addr_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "id")
 
-        sql$ = "INSERT INTO app_gevelwering.building (customer_id, dwelling_address_id, label, external_ref, status, owner_user_id, project_status) VALUES ('" + customer_id$ + "'::uuid, '" + dwell_addr_id$ + "'::uuid, '" + label$ + "', '" + external_ref$ + "', 'DRAFT'::app_gevelwering.building_status, '" + owner_id$ + "'::uuid, 'INITIAL_REQUEST'::app_gevelwering.project_status) RETURNING id::text AS id"
+        sql$ = "INSERT INTO app_gevelwering.building (customer_id, dwelling_address_id, label, client_ref, status, owner_user_id, project_status) VALUES ('" + customer_id$ + "'::uuid, '" + dwell_addr_id$ + "'::uuid, '" + label$ + "', '" + client_ref$ + "', 'DRAFT'::app_gevelwering.building_status, '" + owner_id$ + "'::uuid, 'INITIAL_REQUEST'::app_gevelwering.project_status) RETURNING id::text AS id"
         rid% = POSTGRES_QUERY(g_conn%, sql$)
         IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
             RETURN "ERROR: project insert failed: " + POSTGRES_GET_ERROR$(g_conn%)
@@ -1729,7 +1753,7 @@ END PROCEDURE
 
 PROCEDURE API_OpenBuilding(session_token$, building_id$) AS STRING
     DIM sql$, rid%, out$, t$, owner_id$
-    DIM b_id$, b_label$, b_ref$, b_status$, c_id$, c_name$, c_email$, c_phone$, c_notes$, project_status$
+    DIM b_id$, b_label$, b_ref$, b_client$, b_status$, c_id$, c_name$, c_email$, c_phone$, c_notes$, project_status$
     DIM d_street$, d_postal$, d_city$, d_muni$, d_country$
     DIM ca_street$, ca_postal$, ca_city$, ca_muni$, ca_country$
 
@@ -1754,7 +1778,7 @@ PROCEDURE API_OpenBuilding(session_token$, building_id$) AS STRING
     END IF
     owner_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "user_id")
 
-    sql$ = "SELECT b.id::text AS building_id, COALESCE(b.label,'') AS label, COALESCE(b.external_ref,'') AS external_ref, b.status::text AS status, b.project_status::text AS project_status, " + _
+    sql$ = "SELECT b.id::text AS building_id, COALESCE(b.label,'') AS label, COALESCE(b.client_ref,'') AS client_ref, COALESCE(b.external_ref,'') AS external_ref, b.status::text AS status, b.project_status::text AS project_status, " + _
         "c.id::text AS customer_id, c.name AS customer_name, COALESCE(c.email,'') AS email, COALESCE(c.phone,'') AS phone, COALESCE(c.notes,'') AS notes, " + _
         "a.street_line, a.postal_code, a.city, COALESCE(a.municipality,'') AS municipality, a.country_code, " + _
         "COALESCE(ca.street_line,'') AS cust_street, COALESCE(ca.postal_code,'') AS cust_postal, " + _
@@ -1774,6 +1798,7 @@ PROCEDURE API_OpenBuilding(session_token$, building_id$) AS STRING
 
     b_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "building_id")
     b_label$ = POSTGRES_GET_BY_NAME$(rid%, 0, "label")
+    b_client$ = POSTGRES_GET_BY_NAME$(rid%, 0, "client_ref")
     b_ref$ = POSTGRES_GET_BY_NAME$(rid%, 0, "external_ref")
     b_status$ = POSTGRES_GET_BY_NAME$(rid%, 0, "status")
     project_status$ = POSTGRES_GET_BY_NAME$(rid%, 0, "project_status")
@@ -1794,7 +1819,7 @@ PROCEDURE API_OpenBuilding(session_token$, building_id$) AS STRING
     ca_country$ = POSTGRES_GET_BY_NAME$(rid%, 0, "cust_country")
 
     out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true,"
-    out$ = out$ + CHR$(34) + "building" + CHR$(34) + ":{" + CHR$(34) + "id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34) + "," + CHR$(34) + "label" + CHR$(34) + ":" + CHR$(34) + b_label$ + CHR$(34) + "," + CHR$(34) + "external_ref" + CHR$(34) + ":" + CHR$(34) + b_ref$ + CHR$(34) + "," + CHR$(34) + "status" + CHR$(34) + ":" + CHR$(34) + b_status$ + CHR$(34) + "," + CHR$(34) + "project_status" + CHR$(34) + ":" + CHR$(34) + project_status$ + CHR$(34) + "},"
+    out$ = out$ + CHR$(34) + "building" + CHR$(34) + ":{" + CHR$(34) + "id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34) + "," + CHR$(34) + "label" + CHR$(34) + ":" + CHR$(34) + b_label$ + CHR$(34) + "," + CHR$(34) + "client_ref" + CHR$(34) + ":" + CHR$(34) + b_client$ + CHR$(34) + "," + CHR$(34) + "external_ref" + CHR$(34) + ":" + CHR$(34) + b_ref$ + CHR$(34) + "," + CHR$(34) + "status" + CHR$(34) + ":" + CHR$(34) + b_status$ + CHR$(34) + "," + CHR$(34) + "project_status" + CHR$(34) + ":" + CHR$(34) + project_status$ + CHR$(34) + "},"
     out$ = out$ + CHR$(34) + "customer" + CHR$(34) + ":{" + CHR$(34) + "id" + CHR$(34) + ":" + CHR$(34) + c_id$ + CHR$(34) + "," + CHR$(34) + "name" + CHR$(34) + ":" + CHR$(34) + c_name$ + CHR$(34) + "," + CHR$(34) + "email" + CHR$(34) + ":" + CHR$(34) + c_email$ + CHR$(34) + "," + CHR$(34) + "phone" + CHR$(34) + ":" + CHR$(34) + c_phone$ + CHR$(34) + "," + CHR$(34) + "notes" + CHR$(34) + ":" + CHR$(34) + c_notes$ + CHR$(34) + "},"
     out$ = out$ + CHR$(34) + "customer_address" + CHR$(34) + ":{" + CHR$(34) + "street_line" + CHR$(34) + ":" + CHR$(34) + ca_street$ + CHR$(34) + "," + CHR$(34) + "postal_code" + CHR$(34) + ":" + CHR$(34) + ca_postal$ + CHR$(34) + "," + CHR$(34) + "city" + CHR$(34) + ":" + CHR$(34) + ca_city$ + CHR$(34) + "," + CHR$(34) + "municipality" + CHR$(34) + ":" + CHR$(34) + ca_muni$ + CHR$(34) + "," + CHR$(34) + "country_code" + CHR$(34) + ":" + CHR$(34) + ca_country$ + CHR$(34) + "},"
     out$ = out$ + CHR$(34) + "dwelling_address" + CHR$(34) + ":{" + CHR$(34) + "street_line" + CHR$(34) + ":" + CHR$(34) + d_street$ + CHR$(34) + "," + CHR$(34) + "postal_code" + CHR$(34) + ":" + CHR$(34) + d_postal$ + CHR$(34) + "," + CHR$(34) + "city" + CHR$(34) + ":" + CHR$(34) + d_city$ + CHR$(34) + "," + CHR$(34) + "municipality" + CHR$(34) + ":" + CHR$(34) + d_muni$ + CHR$(34) + "," + CHR$(34) + "country_code" + CHR$(34) + ":" + CHR$(34) + d_country$ + CHR$(34) + "}}"
@@ -1851,7 +1876,7 @@ END PROCEDURE
 REM Engineer/admin: list open projects (broader than review queue) for Bestand → Openen
 PROCEDURE API_EngineerListProjects(session_token$) AS STRING
     DIM sql$, rid%, n%, i%, out$, t$, username$, is_eng$
-    DIM b_id$, b_label$, b_ref$, c_name$, project_status$, updated_at$
+    DIM b_id$, b_label$, b_ref$, b_client$, c_name$, project_status$, updated_at$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -1877,7 +1902,7 @@ PROCEDURE API_EngineerListProjects(session_token$) AS STRING
     END IF
 
     sql$ = "SELECT b.id::text AS building_id, COALESCE(b.label,'') AS label, "
-    sql$ = sql$ + "COALESCE(b.external_ref,'') AS external_ref, c.name AS customer_name, "
+    sql$ = sql$ + "COALESCE(b.client_ref,'') AS client_ref, COALESCE(b.external_ref,'') AS external_ref, c.name AS customer_name, "
     sql$ = sql$ + "b.project_status::text AS project_status, b.updated_at::text AS updated_at "
     sql$ = sql$ + "FROM app_gevelwering.building b "
     sql$ = sql$ + "JOIN app_gevelwering.customer c ON c.id = b.customer_id "
@@ -1894,12 +1919,14 @@ PROCEDURE API_EngineerListProjects(session_token$) AS STRING
         END IF
         b_id$ = POSTGRES_GET_BY_NAME$(rid%, i%, "building_id")
         b_label$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "label"), CHR$(34), "")
+        b_client$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "client_ref"), CHR$(34), "")
         b_ref$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "external_ref"), CHR$(34), "")
         c_name$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "customer_name"), CHR$(34), "")
         project_status$ = POSTGRES_GET_BY_NAME$(rid%, i%, "project_status")
         updated_at$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "updated_at"), CHR$(34), "")
         out$ = out$ + "{" + CHR$(34) + "building_id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "label" + CHR$(34) + ":" + CHR$(34) + b_label$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "client_ref" + CHR$(34) + ":" + CHR$(34) + b_client$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "external_ref" + CHR$(34) + ":" + CHR$(34) + b_ref$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "customer_name" + CHR$(34) + ":" + CHR$(34) + c_name$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "project_status" + CHR$(34) + ":" + CHR$(34) + project_status$ + CHR$(34)
@@ -2283,7 +2310,7 @@ END PROCEDURE
 
 PROCEDURE API_EngineerListReviewQueue(session_token$) AS STRING
     DIM sql$, rid%, n%, i%, out$, t$, username$, is_eng$
-    DIM b_id$, b_label$, c_name$, project_status$, drawing_count$, reviewed_at$
+    DIM b_id$, b_label$, b_client$, c_name$, project_status$, drawing_count$, reviewed_at$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -2309,7 +2336,7 @@ PROCEDURE API_EngineerListReviewQueue(session_token$) AS STRING
     END IF
 
     REM Active engineer work: status from admin/customer path; drawings optional (LEFT JOIN)
-    sql$ = "SELECT b.id::text AS building_id, COALESCE(b.label,'') AS label, c.name AS customer_name, "
+    sql$ = "SELECT b.id::text AS building_id, COALESCE(b.label,'') AS label, COALESCE(b.client_ref,'') AS client_ref, c.name AS customer_name, "
     sql$ = sql$ + "b.project_status::text AS project_status, COUNT(d.id)::text AS drawing_count, "
     sql$ = sql$ + "COALESCE(MAX(dr.reviewed_at)::text,'') AS reviewed_at "
     sql$ = sql$ + "FROM app_gevelwering.building b "
@@ -2320,7 +2347,7 @@ PROCEDURE API_EngineerListReviewQueue(session_token$) AS STRING
     sql$ = sql$ + "'PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED'::app_gevelwering.project_status, "
     sql$ = sql$ + "'PROJECT_UNDERWAY'::app_gevelwering.project_status, "
     sql$ = sql$ + "'PROJECT_NEAR_FINAL'::app_gevelwering.project_status) "
-    sql$ = sql$ + "GROUP BY b.id, b.label, c.name, b.project_status "
+    sql$ = sql$ + "GROUP BY b.id, b.label, b.client_ref, c.name, b.project_status "
     sql$ = sql$ + "ORDER BY b.updated_at DESC"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
     n% = POSTGRES_NUM_ROWS(rid%)
@@ -2333,12 +2360,14 @@ PROCEDURE API_EngineerListReviewQueue(session_token$) AS STRING
         END IF
         b_id$ = POSTGRES_GET_BY_NAME$(rid%, i%, "building_id")
         b_label$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "label"), CHR$(34), "")
+        b_client$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "client_ref"), CHR$(34), "")
         c_name$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "customer_name"), CHR$(34), "")
         project_status$ = POSTGRES_GET_BY_NAME$(rid%, i%, "project_status")
         drawing_count$ = POSTGRES_GET_BY_NAME$(rid%, i%, "drawing_count")
         reviewed_at$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "reviewed_at"), CHR$(34), "")
         out$ = out$ + "{" + CHR$(34) + "building_id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "label" + CHR$(34) + ":" + CHR$(34) + b_label$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "client_ref" + CHR$(34) + ":" + CHR$(34) + b_client$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "customer_name" + CHR$(34) + ":" + CHR$(34) + c_name$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "project_status" + CHR$(34) + ":" + CHR$(34) + project_status$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "drawing_count" + CHR$(34) + ":" + CHR$(34) + drawing_count$ + CHR$(34)
@@ -2351,7 +2380,7 @@ END PROCEDURE
 
 PROCEDURE API_EngineerGetProject(session_token$, building_id$) AS STRING
     DIM sql$, rid%, n%, i%, out$, t$, username$, is_eng$, b_id$
-    DIM b_label$, b_ref$, project_status$, c_name$, d_id$, d_name$, d_ext$, d_size$, d_created$
+    DIM b_label$, b_ref$, b_client$, project_status$, c_name$, d_id$, d_name$, d_ext$, d_size$, d_created$
     DIM rev_suff$, rev_leg$, rev_notes$, rev_at$
     DIM r_id$, r_doc$, r_page$, r_label$, r_kind$, r_xmin$, r_ymin$, r_xmax$, r_ymax$
     DIM r_ratio$, r_mpu$, r_scale_src$, r_aspect$
@@ -2381,7 +2410,7 @@ PROCEDURE API_EngineerGetProject(session_token$, building_id$) AS STRING
         RETURN "ERROR: engineer access required"
     END IF
 
-    sql$ = "SELECT b.label, COALESCE(b.external_ref,'') AS external_ref, b.project_status::text AS project_status, c.name AS customer_name "
+    sql$ = "SELECT b.label, COALESCE(b.client_ref,'') AS client_ref, COALESCE(b.external_ref,'') AS external_ref, b.project_status::text AS project_status, c.name AS customer_name "
     sql$ = sql$ + "FROM app_gevelwering.building b JOIN app_gevelwering.customer c ON c.id = b.customer_id "
     sql$ = sql$ + "WHERE b.id = '" + b_id$ + "'::uuid"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
@@ -2389,6 +2418,7 @@ PROCEDURE API_EngineerGetProject(session_token$, building_id$) AS STRING
         RETURN "ERROR: project not found"
     END IF
     b_label$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "label"), CHR$(34), "")
+    b_client$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "client_ref"), CHR$(34), "")
     b_ref$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "external_ref"), CHR$(34), "")
     project_status$ = POSTGRES_GET_BY_NAME$(rid%, 0, "project_status")
     c_name$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "customer_name"), CHR$(34), "")
@@ -2415,6 +2445,7 @@ PROCEDURE API_EngineerGetProject(session_token$, building_id$) AS STRING
 
     out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "building_id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34)
     out$ = out$ + "," + CHR$(34) + "label" + CHR$(34) + ":" + CHR$(34) + b_label$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "client_ref" + CHR$(34) + ":" + CHR$(34) + b_client$ + CHR$(34)
     out$ = out$ + "," + CHR$(34) + "external_ref" + CHR$(34) + ":" + CHR$(34) + b_ref$ + CHR$(34)
     out$ = out$ + "," + CHR$(34) + "project_status" + CHR$(34) + ":" + CHR$(34) + project_status$ + CHR$(34)
     out$ = out$ + "," + CHR$(34) + "customer_name" + CHR$(34) + ":" + CHR$(34) + c_name$ + CHR$(34)

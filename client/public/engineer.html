@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="nl">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Geluidwering Gevels — Engineer review</title>
-  <link rel="stylesheet" href="/styles.css?v=about-menu" />
+  <title>Geluidwering Gevels — Tekeningen beoordelen</title>
+  <link rel="stylesheet" href="/styles.css?v=sidebar-fill" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body class="engineer-body">
@@ -14,7 +14,7 @@
         <img class="brand-logo" src="/assets/stilte-logo.jpg" alt="" width="52" height="52" />
         <div class="brand-copy">
           <p class="brand-name">Geluidwering Gevels</p>
-          <h1 class="page-heading">Engineer drawing review</h1>
+          <h1 class="page-heading">Tekeningen beoordelen</h1>
         </div>
       </div>
       <nav class="file-menu" id="engineer-file-menu" aria-label="Bestand en Over" hidden></nav>
@@ -22,27 +22,27 @@
 
     <section class="panel conn-bar" id="engineer-conn-bar" aria-live="polite">
       <span class="conn-led disconnected" id="engineer-conn-led" aria-hidden="true"></span>
-      <span id="engineer-conn-status">Connecting…</span>
+      <span id="engineer-conn-status">Verbinden…</span>
     </section>
 
     <section class="panel" id="engineer-login-panel">
       <form id="engineer-login-form" class="form" novalidate>
         <fieldset>
-          <legend>Engineer login</legend>
-          <label>Username <input name="username" required autocomplete="username" value="engineer" /></label>
-          <label>Password <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
+          <legend>Ingenieur-login</legend>
+          <label>Gebruikersnaam <input name="username" required autocomplete="username" value="engineer" /></label>
+          <label>Wachtwoord <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
         </fieldset>
         <div class="actions">
-          <button type="submit" id="engineer-login-btn">Sign in</button>
+          <button type="submit" id="engineer-login-btn">Inloggen</button>
         </div>
-        <p class="hint"><a href="/handleiding.html">Engineer-gebruikershandleiding</a> (NL)</p>
+        <p class="hint"><a href="/handleiding.html">Gebruikershandleiding (ingenieur)</a></p>
       </form>
     </section>
 
     <section id="engineer-panel" class="hidden">
       <div class="panel user-bar">
         <span id="engineer-user-label"></span>
-        <button type="button" id="engineer-logout-btn" class="secondary">Sign out</button>
+        <button type="button" id="engineer-logout-btn" class="secondary">Uitloggen</button>
         <button type="button" id="engineer-refresh-btn" class="secondary">Ververs projecten</button>
         <a id="engineer-ga-link" class="secondary-link hidden" href="/ga.html">Berekening gevelwering</a>
         <a class="secondary-link" href="/handleiding.html">Handleiding</a>
@@ -72,102 +72,102 @@
         <div class="engineer-layout">
           <div class="engineer-viewer-wrap">
             <div class="engineer-viewer-toolbar">
-              <button type="button" id="engineer-page-prev" class="secondary">Prev</button>
-              <span id="engineer-page-label">Page 1 / 1</span>
-              <button type="button" id="engineer-page-next" class="secondary">Next</button>
+              <button type="button" id="engineer-page-prev" class="secondary">Vorige</button>
+              <span id="engineer-page-label">Pagina 1 / 1</span>
+              <button type="button" id="engineer-page-next" class="secondary">Volgende</button>
               <span class="toolbar-sep" aria-hidden="true"></span>
-              <button type="button" id="engineer-zoom-out" class="secondary" title="Zoom out">−</button>
+              <button type="button" id="engineer-zoom-out" class="secondary" title="Uitzoomen">−</button>
               <button type="button" id="engineer-zoom-btn">Zoom</button>
-              <button type="button" id="engineer-zoom-in" class="secondary" title="Zoom in">+</button>
+              <button type="button" id="engineer-zoom-in" class="secondary" title="Inzoomen">+</button>
               <span id="engineer-zoom-label">100%</span>
-              <button type="button" id="engineer-zoom-fit" class="secondary">Fit</button>
+              <button type="button" id="engineer-zoom-fit" class="secondary">Passend</button>
               <span class="toolbar-sep" aria-hidden="true"></span>
-              <button type="button" id="engineer-scale-btn" class="secondary">Set scale</button>
+              <button type="button" id="engineer-scale-btn" class="secondary">Schaal instellen</button>
             </div>
 
             <section class="scale-bar panel-inset" id="engineer-scale-bar">
-              <strong>Drawing scale</strong>
-              <span id="engineer-scale-status">Select a section, then Set scale</span>
+              <strong>Tekenschalen</strong>
+              <span id="engineer-scale-status">Selecteer een sectie, daarna Schaal instellen</span>
               <div class="scale-mm-popup hidden" id="engineer-scale-mm-wrap">
                 <label class="discovery-inline">
-                  Real length of marked line (mm)
+                  Werkelijke lengte van gemarkeerde lijn (mm)
                   <input id="engineer-scale-mm" type="number" min="1" step="1" value="1000" />
                 </label>
-                <button type="button" id="engineer-scale-apply-btn">Apply</button>
-                <button type="button" id="engineer-scale-repick-btn" class="secondary">Repick points</button>
+                <button type="button" id="engineer-scale-apply-btn">Toepassen</button>
+                <button type="button" id="engineer-scale-repick-btn" class="secondary">Punten opnieuw kiezen</button>
               </div>
               <p class="hint" id="engineer-scale-hint">Klik Schaal instellen om een plattegrond, gevel of doorsnede te kalibreren.</p>
             </section>
 
             <details class="tools-panel panel-inset" id="engineer-tools-bar" open>
               <summary class="tools-panel-toggle">
-                <strong>Tools</strong>
+                <strong>Gereedschap</strong>
                 <span class="tools-panel-chevron" aria-hidden="true"></span>
               </summary>
               <div class="tools-panel-main" id="engineer-tools-main">
                 <div class="tools-panel-head">
-                  <div class="tools-mode-btns" role="group" aria-label="Measure tools">
-                    <button type="button" id="tool-btn-off" class="secondary tool-mode-btn active" data-tool="off">Off</button>
-                    <button type="button" id="tool-btn-length" class="secondary tool-mode-btn" data-tool="length">1. Length (m)</button>
-                    <button type="button" id="tool-btn-polyline" class="secondary tool-mode-btn" data-tool="polyline">2. Circumference (m)</button>
-                    <button type="button" id="tool-btn-polyline-area" class="secondary tool-mode-btn" data-tool="polyline">3. Area (m²)</button>
+                  <div class="tools-mode-btns" role="group" aria-label="Meetgereedschap">
+                    <button type="button" id="tool-btn-off" class="secondary tool-mode-btn active" data-tool="off">Uit</button>
+                    <button type="button" id="tool-btn-length" class="secondary tool-mode-btn" data-tool="length">1. Lengte (m)</button>
+                    <button type="button" id="tool-btn-polyline" class="secondary tool-mode-btn" data-tool="polyline">2. Omtrek (m)</button>
+                    <button type="button" id="tool-btn-polyline-area" class="secondary tool-mode-btn" data-tool="polyline">3. Oppervlakte (m²)</button>
                   </div>
-                  <button type="button" id="engineer-tool-clear-btn" class="secondary">Clear measure</button>
+                  <button type="button" id="engineer-tool-clear-btn" class="secondary">Meting wissen</button>
                 </div>
                 <!-- Hidden selects kept for sync / programmatic control -->
                 <select id="engineer-tool-select" class="hidden" aria-hidden="true">
-                  <option value="off">Off</option>
-                  <option value="length">Length</option>
-                  <option value="polyline">Polyline</option>
+                  <option value="off">Uit</option>
+                  <option value="length">Lengte</option>
+                  <option value="polyline">Polylijn</option>
                 </select>
                 <div class="tools-readouts">
-                  <label class="discovery-inline">Length (m)
+                  <label class="discovery-inline">Lengte (m)
                     <input id="tool-length-mm" type="text" readonly value="—" />
                   </label>
-                  <label class="discovery-inline">Circumference (m)
+                  <label class="discovery-inline">Omtrek (m)
                     <input id="tool-circ-mm" type="text" readonly value="—" />
                   </label>
-                  <label class="discovery-inline">Area (m²)
+                  <label class="discovery-inline">Oppervlakte (m²)
                     <input id="tool-area-mm2" type="text" readonly value="—" />
                   </label>
                 </div>
-                <p class="hint" id="engineer-tool-hint">Select a scaled section, then click a tool button above.</p>
+                <p class="hint" id="engineer-tool-hint">Selecteer een geschaalde sectie, klik daarna op een meettool hierboven.</p>
               </div>
             </details>
 
             <!-- Stays fixed under toolbar; only the PDF pane scrolls -->
             <section class="discovery-dock hidden" id="discovery-review-panel">
               <div class="discovery-dock-top">
-                <strong>Discovered section <span id="discovery-progress"></span></strong>
-                <p class="hint" id="discovery-hint">Adjust on the drawing or with H/V controls. Accept when ready.</p>
+                <strong>Ontdekte sectie <span id="discovery-progress"></span></strong>
+                <p class="hint" id="discovery-hint">Pas aan op de tekening of met H/V-bediening. Accepteer wanneer klaar.</p>
               </div>
               <div class="discovery-dock-body">
-                <label class="discovery-inline">Label <input id="discovery-label-input" /></label>
-                <label class="discovery-inline">Type
+                <label class="discovery-inline">Omschrijving <input id="discovery-label-input" /></label>
+                <label class="discovery-inline">Soort
                   <select id="discovery-kind-select">
                     <option value="FACADE">Gevel</option>
-                    <option value="CROSS_SECTION">Cross-section</option>
-                    <option value="FLOORMAP">Floormap</option>
-                    <option value="SECTION">Building section</option>
-                    <option value="OTHER">Other</option>
+                    <option value="CROSS_SECTION">Dwarsdoorsnede</option>
+                    <option value="FLOORMAP">Plattegrond</option>
+                    <option value="SECTION">Doorsnede</option>
+                    <option value="OTHER">Overig</option>
                   </select>
                 </label>
-                <div class="discovery-adjust compact" aria-label="Adjust box">
+                <div class="discovery-adjust compact" aria-label="Kader aanpassen">
                   <span class="discovery-adjust-label">H</span>
-                  <button type="button" id="disc-nudge-left" class="secondary" title="Move left">←</button>
-                  <button type="button" id="disc-nudge-right" class="secondary" title="Move right">→</button>
-                  <button type="button" id="disc-shrink-h" class="secondary" title="Narrow">−</button>
-                  <button type="button" id="disc-grow-h" class="secondary" title="Widen">+</button>
+                  <button type="button" id="disc-nudge-left" class="secondary" title="Naar links">←</button>
+                  <button type="button" id="disc-nudge-right" class="secondary" title="Naar rechts">→</button>
+                  <button type="button" id="disc-shrink-h" class="secondary" title="Versmallen">−</button>
+                  <button type="button" id="disc-grow-h" class="secondary" title="Breder">+</button>
                   <span class="discovery-adjust-label">V</span>
-                  <button type="button" id="disc-nudge-up" class="secondary" title="Move up">↑</button>
-                  <button type="button" id="disc-nudge-down" class="secondary" title="Move down">↓</button>
-                  <button type="button" id="disc-shrink-v" class="secondary" title="Shorter">−</button>
-                  <button type="button" id="disc-grow-v" class="secondary" title="Taller">+</button>
+                  <button type="button" id="disc-nudge-up" class="secondary" title="Omhoog">↑</button>
+                  <button type="button" id="disc-nudge-down" class="secondary" title="Omlaag">↓</button>
+                  <button type="button" id="disc-shrink-v" class="secondary" title="Lager">−</button>
+                  <button type="button" id="disc-grow-v" class="secondary" title="Hoger">+</button>
                 </div>
                 <div class="discovery-dock-actions">
-                  <button type="button" id="discovery-accept-btn">Accept</button>
-                  <button type="button" id="discovery-skip-btn" class="secondary">Skip</button>
-                  <button type="button" id="discovery-cancel-btn" class="secondary">Cancel</button>
+                  <button type="button" id="discovery-accept-btn">Accepteren</button>
+                  <button type="button" id="discovery-skip-btn" class="secondary">Overslaan</button>
+                  <button type="button" id="discovery-cancel-btn" class="secondary">Annuleren</button>
                 </div>
               </div>
             </section>
@@ -190,90 +190,90 @@
 
           <aside class="engineer-sidebar">
             <fieldset id="engineer-tools-fieldset">
-              <legend>Tools</legend>
-              <div class="tools-mode-btns tools-mode-btns-stack" role="group" aria-label="Measure tools sidebar">
-                <button type="button" class="secondary tool-mode-btn active" data-tool="off" id="tool-btn-off-side">Off</button>
-                <button type="button" class="secondary tool-mode-btn" data-tool="length" id="tool-btn-length-side">1. Length (m)</button>
-                <button type="button" class="secondary tool-mode-btn" data-tool="polyline" id="tool-btn-polyline-side">2. Circumference (m)</button>
-                <button type="button" class="secondary tool-mode-btn" data-tool="polyline" id="tool-btn-area-side">3. Area (m²)</button>
+              <legend>Gereedschap</legend>
+              <div class="tools-mode-btns tools-mode-btns-stack" role="group" aria-label="Meetgereedschap zijbalk">
+                <button type="button" class="secondary tool-mode-btn active" data-tool="off" id="tool-btn-off-side">Uit</button>
+                <button type="button" class="secondary tool-mode-btn" data-tool="length" id="tool-btn-length-side">1. Lengte (m)</button>
+                <button type="button" class="secondary tool-mode-btn" data-tool="polyline" id="tool-btn-polyline-side">2. Omtrek (m)</button>
+                <button type="button" class="secondary tool-mode-btn" data-tool="polyline" id="tool-btn-area-side">3. Oppervlakte (m²)</button>
               </div>
               <select id="engineer-tool-select-sidebar" class="hidden" aria-hidden="true">
-                <option value="off">Off</option>
-                <option value="length">Length</option>
-                <option value="polyline">Polyline</option>
+                <option value="off">Uit</option>
+                <option value="length">Lengte</option>
+                <option value="polyline">Polylijn</option>
               </select>
-              <button type="button" id="engineer-tool-clear-btn-sidebar" class="secondary" style="width:100%;margin-top:0.4rem">Clear measure</button>
-              <p class="hint">Needs a selected section with scale. Readouts are above the drawing.</p>
+              <button type="button" id="engineer-tool-clear-btn-sidebar" class="secondary" style="width:100%;margin-top:0.4rem">Meting wissen</button>
+              <p class="hint">Vereist een geselecteerde sectie met schaal. Meetwaarden staan boven de tekening.</p>
             </fieldset>
 
             <fieldset id="analyze-components-fieldset" class="hidden">
-              <legend id="analyze-components-legend">Components</legend>
+              <legend id="analyze-components-legend">Componenten</legend>
               <p class="hint" id="analyze-components-hint">
-                Draw, discover, and <strong>save</strong> marked planes on the cropped section — same menu as floormap rooms.
+                Teken, ontdek en <strong>sla op</strong> gemarkeerde vlakken op de bijgesneden sectie — zelfde menu als plattegrondruimten.
               </p>
               <div class="actions actions-stack">
-                <button type="button" id="analyze-open-btn">Open analysis workspace</button>
-                <button type="button" id="analyze-discover-btn" class="secondary">Discover…</button>
-                <button type="button" id="analyze-draw-btn" class="secondary">Draw &amp; save…</button>
+                <button type="button" id="analyze-open-btn">Analysewerkruimte openen</button>
+                <button type="button" id="analyze-discover-btn" class="secondary">Ontdekken…</button>
+                <button type="button" id="analyze-draw-btn" class="secondary">Teken &amp; opslaan…</button>
               </div>
             </fieldset>
 
             <label class="block-label">
-              Drawing
+              Tekening
               <select id="engineer-doc-select"></select>
             </label>
-            <p class="hint" id="engineer-doc-hint">Select a PDF. DWG preview is not supported in-browser.</p>
+            <p class="hint" id="engineer-doc-hint">Selecteer een PDF. DWG-voorbeeld wordt in de browser niet ondersteund.</p>
 
             <fieldset id="mark-section-fieldset">
-              <legend>Mark a section</legend>
-              <label>Label <input id="region-label-input" placeholder="bijv. Noordgevel" /></label>
-              <label>Type
+              <legend>Sectie markeren</legend>
+              <label>Omschrijving <input id="region-label-input" placeholder="bijv. Noordgevel" /></label>
+              <label>Soort
                 <select id="region-kind-select">
                   <option value="FACADE">Gevel</option>
-                  <option value="CROSS_SECTION">Cross-section</option>
-                  <option value="FLOORMAP">Floormap</option>
-                  <option value="SECTION">Building section</option>
-                  <option value="OTHER">Other</option>
+                  <option value="CROSS_SECTION">Dwarsdoorsnede</option>
+                  <option value="FLOORMAP">Plattegrond</option>
+                  <option value="SECTION">Doorsnede</option>
+                  <option value="OTHER">Overig</option>
                 </select>
               </label>
-              <p class="hint">Page <strong id="region-page-display">1</strong></p>
+              <p class="hint">Pagina <strong id="region-page-display">1</strong></p>
               <input type="hidden" id="region-page-input" value="1" />
-              <p class="hint" id="region-pending-hint">Drag on the PDF, or Discover.</p>
+              <p class="hint" id="region-pending-hint">Sleep op de PDF, of Ontdekken.</p>
               <div class="actions actions-stack">
-                <button type="button" id="region-discover-btn" class="secondary">Discover sections</button>
-                <button type="button" id="region-save-btn" disabled>Save marked section</button>
-                <button type="button" id="region-clear-btn" class="secondary" disabled>Clear mark</button>
+                <button type="button" id="region-discover-btn" class="secondary">Secties ontdekken</button>
+                <button type="button" id="region-save-btn" disabled>Gemarkeerde sectie opslaan</button>
+                <button type="button" id="region-clear-btn" class="secondary" disabled>Markering wissen</button>
               </div>
             </fieldset>
 
             <div class="saved-sections-block">
-              <h3>Saved sections <span id="region-count-badge" class="region-count-badge">0</span></h3>
+              <h3>Opgeslagen secties <span id="region-count-badge" class="region-count-badge">0</span></h3>
               <label class="block-label">
-                Filter type
+                Filter soort
                 <select id="region-filter-kind">
-                  <option value="">All types</option>
-                  <option value="FLOORMAP">Floormaps</option>
+                  <option value="">Alle soorten</option>
+                  <option value="FLOORMAP">Plattegronden</option>
                   <option value="FACADE">Gevels</option>
-                  <option value="CROSS_SECTION">Cross-sections</option>
-                  <option value="SECTION">Building sections</option>
-                  <option value="OTHER">Other</option>
+                  <option value="CROSS_SECTION">Dwarsdoorsneden</option>
+                  <option value="SECTION">Doorsneden</option>
+                  <option value="OTHER">Overig</option>
                 </select>
               </label>
               <div class="actions" style="margin-bottom: 0.5rem">
-                <button type="button" id="region-clear-all-btn" class="secondary" disabled>Remove all</button>
+                <button type="button" id="region-clear-all-btn" class="secondary" disabled>Alles verwijderen</button>
               </div>
               <ul id="engineer-region-list" class="drawing-list"></ul>
             </div>
 
             <form id="engineer-review-form" class="form engineer-review-form">
               <fieldset>
-                <legend>Drawing review</legend>
-                <label><input type="checkbox" id="review-legible" /> Legible</label>
-                <label><input type="checkbox" id="review-sufficient" /> Sufficient to proceed</label>
-                <label>Notes <textarea id="review-notes" rows="2" placeholder="Missing scale, unclear labels…"></textarea></label>
+                <legend>Tekeningreview</legend>
+                <label><input type="checkbox" id="review-legible" /> Leesbaar</label>
+                <label><input type="checkbox" id="review-sufficient" /> Voldoende om door te gaan</label>
+                <label>Notities <textarea id="review-notes" rows="2" placeholder="Schaal ontbreekt, onduidelijke labels…"></textarea></label>
               </fieldset>
               <div class="actions">
-                <button type="submit" id="engineer-submit-review-btn">Save review</button>
+                <button type="submit" id="engineer-submit-review-btn">Review opslaan</button>
               </div>
             </form>
           </aside>
@@ -281,6 +281,6 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/engineer.js?v=file-menu"></script>
+  <script type="module" src="/engineer.js?v=client-ref"></script>
 </body>
 </html>

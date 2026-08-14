@@ -31,8 +31,12 @@ import {
   type BooleanPolygon,
   type ComposeSign,
 } from "./polygon-boolean";
-import { collectBooleanSourceIds, collectSupersededSourceIds } from "./ga-vr-components";
-import { isLengthQuantityRubriek } from "../lib/material-taxonomy.mjs";
+import {
+  collectBooleanSourceIds,
+  collectSupersededSourceIds,
+  composeConstituentsMissingMaterial,
+} from "./ga-vr-components";
+import { isLengthQuantityRubriek, MATERIAL_RUBRIEKEN } from "../lib/material-taxonomy.mjs";
 import { discoverRoomPolylines, pixelsToSectionNorm } from "./room-discover";
 import { loadAuth, storeAuth as persistAuth, syncSessionCookie, apiAuthHeaders } from "./auth-store";
 import { resolveBppWsUrl } from "./ws-url";
@@ -114,10 +118,16 @@ type SubsectionAnalysis = {
   area_m2?: number;
   /** Rubriek 9 (kierdichting): length in metres, not area. */
   quantity_kind?: "area" | "length" | string;
+  /** Kierdichtingscomponent afgeleid van de omtrek van dit gesloten vlak. */
+  seal_for_subsection_id?: string;
   length_m?: number;
   length_norm?: number;
   open_path?: boolean;
   rubriek_nr?: number;
+  /** Compass codes expected for this VR’s gevelvlakken (floormap room definition). */
+  expected_orientaties?: string[];
+  /** CL/Cg per geveloriëntatie (dB) — vast op plattegrond, read-only in GA. */
+  orientatie_correcties?: Record<string, { cl_db?: number; cg_db?: number }>;
 };
 
 type RoomSubsection = {
@@ -219,6 +229,9 @@ const roomVgInput = document.getElementById("fm-room-vg") as HTMLInputElement;
 const roomVrInput = document.getElementById("fm-room-vr") as HTMLInputElement;
 const vgVrRowEl = document.getElementById("fm-vg-vr-row") as HTMLElement | null;
 const vgVrHintEl = document.getElementById("fm-vg-vr-hint") as HTMLElement | null;
+const expectedOriBlockEl = document.getElementById("fm-expected-ori-block") as HTMLElement | null;
+const expectedOriRowEl = document.getElementById("fm-expected-ori-row") as HTMLElement | null;
+const expectedOriCorrEl = document.getElementById("fm-ori-corr-rows") as HTMLElement | null;
 const roomLevelSelect = document.getElementById("fm-room-level") as HTMLSelectElement;
 const roomPendingHintEl = document.getElementById("fm-room-pending-hint") as HTMLElement;
 const roomDrawBtn = document.getElementById("fm-room-draw-btn") as HTMLButtonElement;
@@ -231,6 +244,11 @@ const roomDeleteBtn = document.getElementById("fm-room-delete-btn") as HTMLButto
 const discoverBtnSide = document.getElementById("fm-discover-btn-side") as HTMLButtonElement | null;
 const setOpsFieldset = document.getElementById("fm-set-ops-fieldset") as HTMLElement | null;
 const materialBlockEl = document.getElementById("fm-material-block") as HTMLElement | null;
+const kierSuggestEl = document.getElementById("fm-kier-suggest") as HTMLElement | null;
+const kierSuggestCb = document.getElementById("fm-kier-suggest-cb") as HTMLInputElement | null;
+const kierSuggestHintEl = document.getElementById("fm-kier-suggest-hint") as HTMLElement | null;
+const kierSuggestMatEl = document.getElementById("fm-kier-suggest-mat") as HTMLSelectElement | null;
+const kierSuggestNewBtn = document.getElementById("fm-kier-suggest-new") as HTMLButtonElement | null;
 const composePartsEl = document.getElementById("fm-compose-parts") as HTMLUListElement | null;
 const composeFeedbackEl = document.getElementById("fm-compose-feedback") as HTMLElement | null;
 const materialCategoryEl = document.getElementById("fm-material-category") as HTMLSelectElement | null;
@@ -280,6 +298,9 @@ const gaLinkEl = document.getElementById("fm-ga-link") as HTMLAnchorElement | nu
 const fileMenuRoot = document.getElementById("fm-file-menu") as HTMLElement | null;
 const markRoomLegendEl = document.querySelector("#fm-mark-room-fieldset legend") as HTMLElement | null;
 const savedRoomsHeadingEl = document.getElementById("fm-saved-heading") as HTMLElement | null;
+const savedHeadingTextEl = document.getElementById("fm-saved-heading-text") as HTMLElement | null;
+const roomVrFilterEl = document.getElementById("fm-room-vr-filter") as HTMLSelectElement | null;
+const savedVrFilterWrapEl = document.querySelector(".saved-vr-filter") as HTMLElement | null;
 const pickerHeadingEl = document.querySelector("#fm-picker-panel h2") as HTMLElement | null;
 const pickerHintEl = document.querySelector("#fm-picker-panel > .hint") as HTMLElement | null;
 const pageTitleEl = document.querySelector("h1") as HTMLElement | null;
@@ -338,6 +359,111 @@ function isFloormapKind(kind?: string | null): boolean {
   return String(kind || activeSection?.region_kind || "FLOORMAP").toUpperCase() === "FLOORMAP";
 }
 
+const ORIENTATIE_CODES = ["N", "NO", "O", "ZO", "Z", "ZW", "W", "NW"] as const;
+
+function normalizeOrientatieCode(raw: string | null | undefined): string {
+  return String(raw || "")
+    .trim()
+    .toUpperCase();
+}
+
+function readExpectedOrientaties(): string[] {
+  if (!expectedOriRowEl) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const input of expectedOriRowEl.querySelectorAll("input[type=checkbox]")) {
+    const el = input as HTMLInputElement;
+    if (!el.checked) continue;
+    const code = normalizeOrientatieCode(el.value);
+    if (!(ORIENTATIE_CODES as readonly string[]).includes(code) || seen.has(code)) continue;
+    seen.add(code);
+    out.push(code);
+  }
+  return out;
+}
+
+function readOrientatieCorrecties(): Record<string, { cl_db: number; cg_db: number }> {
+  const out: Record<string, { cl_db: number; cg_db: number }> = {};
+  for (const code of readExpectedOrientaties()) {
+    const clEl = document.getElementById(`fm-ori-cl-${code}`) as HTMLInputElement | null;
+    const cgEl = document.getElementById(`fm-ori-cg-${code}`) as HTMLInputElement | null;
+    const cl = clEl?.value.trim() === "" ? 0 : Number(clEl?.value);
+    const cg = cgEl?.value.trim() === "" ? 0 : Number(cgEl?.value);
+    out[code] = {
+      cl_db: Number.isFinite(cl) ? cl : 0,
+      cg_db: Number.isFinite(cg) ? cg : 0,
+    };
+  }
+  return out;
+}
+
+function syncOriCorrRows(
+  preserve?: Record<string, { cl_db?: number; cg_db?: number }> | null,
+): void {
+  if (!expectedOriCorrEl) return;
+  const codes = readExpectedOrientaties();
+  const prev: Record<string, { cl_db: number; cg_db: number }> = {};
+  for (const code of ORIENTATIE_CODES) {
+    const clEl = document.getElementById(`fm-ori-cl-${code}`) as HTMLInputElement | null;
+    const cgEl = document.getElementById(`fm-ori-cg-${code}`) as HTMLInputElement | null;
+    if (!clEl && !cgEl) continue;
+    prev[code] = {
+      cl_db: Number(clEl?.value) || 0,
+      cg_db: Number(cgEl?.value) || 0,
+    };
+  }
+  expectedOriCorrEl.innerHTML = "";
+  if (!codes.length) {
+    expectedOriCorrEl.classList.add("hidden");
+    return;
+  }
+  expectedOriCorrEl.classList.remove("hidden");
+  const head = document.createElement("p");
+  head.className = "fm-ori-corr-label";
+  head.textContent = "CL / Cg per oriëntatie (dB) — vast voor GA;k";
+  expectedOriCorrEl.appendChild(head);
+  for (const code of codes) {
+    const fromPreserve = preserve?.[code];
+    const fromDom = prev[code];
+    const cl =
+      fromPreserve?.cl_db != null && Number.isFinite(Number(fromPreserve.cl_db))
+        ? Number(fromPreserve.cl_db)
+        : fromDom?.cl_db ?? 0;
+    const cg =
+      fromPreserve?.cg_db != null && Number.isFinite(Number(fromPreserve.cg_db))
+        ? Number(fromPreserve.cg_db)
+        : fromDom?.cg_db ?? 0;
+    const row = document.createElement("div");
+    row.className = "fm-ori-corr-row";
+    row.innerHTML = `
+      <span class="fm-ori-corr-code">${code}</span>
+      <label>CL <input id="fm-ori-cl-${code}" type="text" inputmode="decimal" value="${cl}" aria-label="CL ${code}" /></label>
+      <label>Cg <input id="fm-ori-cg-${code}" type="text" inputmode="decimal" value="${cg}" aria-label="Cg ${code}" /></label>
+    `;
+    expectedOriCorrEl.appendChild(row);
+  }
+}
+
+function setExpectedOrientaties(
+  codes: string[] | null | undefined,
+  correcties?: Record<string, { cl_db?: number; cg_db?: number }> | null,
+): void {
+  if (!expectedOriRowEl) return;
+  const want = new Set(
+    (codes || [])
+      .map((c) => normalizeOrientatieCode(c))
+      .filter((c) => (ORIENTATIE_CODES as readonly string[]).includes(c)),
+  );
+  for (const input of expectedOriRowEl.querySelectorAll("input[type=checkbox]")) {
+    const el = input as HTMLInputElement;
+    el.checked = want.has(normalizeOrientatieCode(el.value));
+  }
+  syncOriCorrRows(correcties || null);
+}
+
+function clearExpectedOrientaties(): void {
+  setExpectedOrientaties([], {});
+}
 
 function parseVgVrInputs(): { vg_nr: number | null; vr_nr: string | null; error?: string } {
   const vgRaw = roomVgInput.value.trim();
@@ -461,22 +587,26 @@ function syncWorkspaceLabels(kind?: string | null): void {
   roomSaveBtn.textContent = "Opslaan";
   roomLabelInput.placeholder =
     floormap ? "bijv. slaapkamer 1" : "bijv. raamstrook / paneel";
-  roomPendingHintEl.textContent = `Gebruik Teken ${n.singular} in Tools, klik hoekpunten, sluit af en sla op. Dubbelklik een anker om te verwijderen; Vereenvoudig dunt de omtrek.`;
+  roomPendingHintEl.textContent = `Gebruik Teken ${n.singular} in Gereedschap, klik hoekpunten, sluit af en sla op. Dubbelklik een anker om te verwijderen; Vereenvoudig dunt de omtrek.`;
   if (roomDeleteBtn) {
     roomDeleteBtn.textContent = "Verwijderen";
     roomDeleteBtn.title = `Opgeslagen ${n.singular} permanent verwijderen`;
   }
   // Never pass a null node into replaceChildren — that aborts openSection before loadRooms.
-  if (savedRoomsHeadingEl) {
-    const badge =
-      (roomCountEl && document.body.contains(roomCountEl) ? roomCountEl : null) ||
-      (document.getElementById("fm-room-count") as HTMLElement | null);
+  if (savedHeadingTextEl) {
+    savedHeadingTextEl.textContent = `Opgeslagen ${n.plural}`;
+  } else if (savedRoomsHeadingEl) {
     savedRoomsHeadingEl.textContent = `Opgeslagen ${n.plural} `;
-    if (badge) {
-      badge.className = "region-count-badge";
-      badge.id = "fm-room-count";
-      savedRoomsHeadingEl.appendChild(badge);
+  }
+  if (savedRoomsHeadingEl && roomCountEl && document.body.contains(roomCountEl)) {
+    const main = savedRoomsHeadingEl.querySelector(".saved-list-heading-main");
+    if (main && !main.contains(roomCountEl)) {
+      main.appendChild(roomCountEl);
+    } else if (!main && !savedRoomsHeadingEl.contains(roomCountEl)) {
+      savedRoomsHeadingEl.appendChild(roomCountEl);
     }
+    roomCountEl.className = "region-count-badge";
+    roomCountEl.id = "fm-room-count";
   }
   if (roomsHintEl) {
     roomsHintEl.textContent = floormap
@@ -490,8 +620,11 @@ function syncWorkspaceLabels(kind?: string | null): void {
       ? "Zelfde VG + andere VR = ruimten in hetzelfde verblijfsgebied. VR is uniek per project (bijv. 1, 3A)."
       : "Koppel aan een VR (zelfde als plattegrond). Meerdere composities (materialen) binnen dezelfde buitencontour zijn mogelijk.";
   }
+  expectedOriBlockEl?.classList.toggle("hidden", !floormap);
+  if (!floormap) clearExpectedOrientaties();
   setOpsFieldset?.classList.toggle("hidden", floormap);
   materialBlockEl?.classList.toggle("hidden", floormap);
+  if (floormap) kierSuggestEl?.classList.add("hidden");
   if (floormap) {
     selectedSetIds.clear();
     constituentSigns.clear();
@@ -501,6 +634,64 @@ function syncWorkspaceLabels(kind?: string | null): void {
     void ensureMaterialCategories();
   }
   renderComposeParts();
+}
+
+let roomListVrFilter = "";
+
+function normalizeVrNr(v: unknown): string | null {
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s || null;
+}
+
+function compareVrNr(a: string, b: string): number {
+  const na = /^\d+$/.test(a) ? Number(a) : NaN;
+  const nb = /^\d+$/.test(b) ? Number(b) : NaN;
+  if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+  return a.localeCompare(b, "nl", { numeric: true });
+}
+
+function collectAvailableVrNrs(items: RoomSubsection[]): string[] {
+  const set = new Set<string>();
+  for (const r of items) {
+    const vr = normalizeVrNr(r.vr_nr);
+    if (vr) set.add(vr);
+  }
+  return [...set].sort(compareVrNr);
+}
+
+function roomMatchesVrFilter(r: RoomSubsection, filter: string): boolean {
+  if (!filter) return true;
+  return normalizeVrNr(r.vr_nr) === filter;
+}
+
+function syncRoomListVrFilterOptions(items: RoomSubsection[]): void {
+  if (!roomVrFilterEl) return;
+  const vrs = collectAvailableVrNrs(items);
+  const prev = roomListVrFilter;
+  roomVrFilterEl.replaceChildren();
+  const allOpt = document.createElement("option");
+  allOpt.value = "";
+  allOpt.textContent = "Alle VR's";
+  roomVrFilterEl.appendChild(allOpt);
+  for (const vr of vrs) {
+    const opt = document.createElement("option");
+    opt.value = vr;
+    opt.textContent = `VR ${vr}`;
+    roomVrFilterEl.appendChild(opt);
+  }
+  roomListVrFilter = prev && vrs.includes(prev) ? prev : "";
+  roomVrFilterEl.value = roomListVrFilter;
+  savedVrFilterWrapEl?.classList.toggle("hidden", vrs.length === 0);
+}
+
+function visibleTopLevelRooms(items: RoomSubsection[], nestedIds: Set<string>): RoomSubsection[] {
+  return items.filter((r) => !nestedIds.has(r.id) && roomMatchesVrFilter(r, roomListVrFilter));
+}
+
+function roomListCountLabel(visible: number, total: number): string {
+  if (roomListVrFilter && visible !== total) return `${visible}/${total}`;
+  return String(total);
 }
 
 let ws: WebSocket | null = null;
@@ -521,6 +712,8 @@ let selectedSetIds = new Set<string>();
 /** Per selected id: + include / − subtract. Defaults applied when selecting. */
 let constituentSigns = new Map<string, ComposeSign>();
 let booleanPreview: BooleanPolygon | null = null;
+/** Samengestelde componenten waarvan de constituenten uitgeklapt zijn. */
+const expandedComposeIds = new Set<string>();
 type MaterialCategoryOpt = {
   rubriek_nr?: number | null;
   master_category: string;
@@ -534,6 +727,11 @@ let materialCategoryMeta: MaterialCategoryOpt[] = [];
 let catalogMaterials: CatalogMaterial[] = [];
 /** Favorites for the current building ("meest gebruikt"). */
 let favoriteMaterials: CatalogMaterial[] = [];
+const DEFAULT_KIER_CATALOG_ID = "D02408";
+const KIER_RUBRIEK_NAME =
+  MATERIAL_RUBRIEKEN.find((r) => r.nr === 9)?.name || "Kier- en naaddichtingsprofielen";
+let kierMaterials: CatalogMaterial[] = [];
+let kierMaterialsLoaded = false;
 let materialFilterTimer: ReturnType<typeof setTimeout> | null = null;
 /** subsection_id → VR omschrijving when linked in GA model */
 let linkedRooms = new Map<string, string>();
@@ -585,6 +783,123 @@ let pdfDoc: PdfDocument | null = null;
 /** Cropped floormap bitmap at base resolution (before display zoom). */
 let cropBitmap: HTMLCanvasElement | null = null;
 let cropWidthPdfPts = 0;
+
+const SECTION_THUMB_W = 128;
+const SECTION_THUMB_H = 96;
+const sectionThumbUrlCache = new Map<string, string>();
+const pdfDocByDocumentId = new Map<string, PdfDocument>();
+const pdfDocLoadPromises = new Map<string, Promise<PdfDocument>>();
+let thumbCacheBuildingId = "";
+
+function ensurePdfjsWorker(): void {
+  const pdfjsLib = window.pdfjsLib;
+  if (!pdfjsLib) throw new Error("PDF.js not loaded");
+  if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  }
+}
+
+function clearSectionThumbnailCachesForBuilding(bid: string): void {
+  if (thumbCacheBuildingId === bid) return;
+  sectionThumbUrlCache.clear();
+  pdfDocByDocumentId.clear();
+  pdfDocLoadPromises.clear();
+  thumbCacheBuildingId = bid;
+}
+
+async function loadPdfDocumentCached(documentId: string): Promise<PdfDocument> {
+  ensurePdfjsWorker();
+  const cached = pdfDocByDocumentId.get(documentId);
+  if (cached) return cached;
+  let pending = pdfDocLoadPromises.get(documentId);
+  if (!pending) {
+    pending = (async () => {
+      const res = await fetch(`/api/drawings/download?document_id=${encodeURIComponent(documentId)}`, {
+        credentials: "include",
+        headers: apiAuthHeaders(auth!.token),
+      });
+      if (!res.ok) throw new Error(`PDF laden mislukt (HTTP ${res.status})`);
+      const buf = await res.arrayBuffer();
+      const doc = await window.pdfjsLib!.getDocument({ data: buf }).promise;
+      pdfDocByDocumentId.set(documentId, doc);
+      pdfDocLoadPromises.delete(documentId);
+      return doc;
+    })();
+    pdfDocLoadPromises.set(documentId, pending);
+  }
+  return pending;
+}
+
+async function sectionThumbnailDataUrl(sec: FloormapSection): Promise<string | null> {
+  const hit = sectionThumbUrlCache.get(sec.id);
+  if (hit) return hit;
+  if (!auth?.token) return null;
+  try {
+    const pdf = await loadPdfDocumentCached(sec.document_id);
+    const pageNum = Math.min(pdf.numPages, Math.max(1, sec.page_index + 1));
+    const page = await pdf.getPage(pageNum);
+    const rotation = typeof page.rotate === "number" ? page.rotate : 0;
+    const baseVp = page.getViewport({ scale: 1, rotation });
+    const cropWNorm = Math.max(0.001, sec.x_max - sec.x_min);
+    const cropPxW = cropWNorm * baseVp.width;
+    const renderScale = Math.min(2.5, Math.max(1, (SECTION_THUMB_W * 2) / cropPxW));
+    const viewport = page.getViewport({ scale: renderScale, rotation });
+    const off = document.createElement("canvas");
+    off.width = Math.floor(viewport.width);
+    off.height = Math.floor(viewport.height);
+    const octx = off.getContext("2d");
+    if (!octx) return null;
+    octx.setTransform(1, 0, 0, 1, 0, 0);
+    await page.render({ canvasContext: octx, viewport }).promise;
+
+    const x0 = Math.floor(sec.x_min * off.width);
+    const y0 = Math.floor(sec.y_min * off.height);
+    const x1 = Math.ceil(sec.x_max * off.width);
+    const y1 = Math.ceil(sec.y_max * off.height);
+    const cw = Math.max(1, x1 - x0);
+    const ch = Math.max(1, y1 - y0);
+
+    const thumb = document.createElement("canvas");
+    thumb.width = SECTION_THUMB_W;
+    thumb.height = SECTION_THUMB_H;
+    const tctx = thumb.getContext("2d");
+    if (!tctx) return null;
+    tctx.fillStyle = "#fff";
+    tctx.fillRect(0, 0, SECTION_THUMB_W, SECTION_THUMB_H);
+    const fit = Math.min(SECTION_THUMB_W / cw, SECTION_THUMB_H / ch);
+    const dw = cw * fit;
+    const dh = ch * fit;
+    tctx.drawImage(off, x0, y0, cw, ch, (SECTION_THUMB_W - dw) / 2, (SECTION_THUMB_H - dh) / 2, dw, dh);
+
+    const dataUrl = thumb.toDataURL("image/jpeg", 0.82);
+    sectionThumbUrlCache.set(sec.id, dataUrl);
+    return dataUrl;
+  } catch (err) {
+    console.warn("section thumbnail failed", sec.id, err);
+    return null;
+  }
+}
+
+function mountSectionThumbnail(sec: FloormapSection, img: HTMLImageElement): void {
+  const cached = sectionThumbUrlCache.get(sec.id);
+  if (cached) {
+    img.src = cached;
+    img.classList.remove("is-loading");
+    return;
+  }
+  void sectionThumbnailDataUrl(sec).then((url) => {
+    if (!img.isConnected) return;
+    if (!url) {
+      img.classList.remove("is-loading");
+      img.classList.add("is-error");
+      img.alt = "Voorbeeld niet beschikbaar";
+      return;
+    }
+    img.src = url;
+    img.classList.remove("is-loading");
+  });
+}
 let canvasWidth = 0;
 let canvasHeight = 0;
 const ZOOM_MIN = 0.5;
@@ -715,7 +1030,7 @@ function showPanel(info: AuthInfo): void {
   storeAuth(info);
   loginPanelEl.classList.add("hidden");
   panelEl.classList.remove("hidden");
-  userLabelEl.textContent = `Signed in as ${info.display_name || info.username}`;
+  userLabelEl.textContent = `Ingelogd als ${info.display_name || info.username}`;
   if (fileMenuRoot) fileMenuRoot.hidden = false;
   projectMenu?.setEnabled(true);
   projectMenu?.refreshTitle();
@@ -740,7 +1055,7 @@ async function refreshBuildingMeta(): Promise<void> {
 
 function send(type: string, payload: Record<string, unknown>, wantType: string): Promise<Envelope> {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    return Promise.reject(new Error("WebSocket not open"));
+    return Promise.reject(new Error("WebSocket niet open"));
   }
   const request_id = nextRequestId(type.replace(".", "_"));
   const env: Envelope = { v: 1, type, request_id, payload };
@@ -784,7 +1099,7 @@ function onMessage(raw: string): void {
 async function invokeString(target: string, args: unknown[]): Promise<string> {
   const inv = await send("invoke.request", { target_kind: "procedure", target, args }, "invoke.completed");
   const ret = inv.payload?.return;
-  if (typeof ret !== "string") throw new Error(`Unexpected return from ${target}`);
+  if (typeof ret !== "string") throw new Error(`Onverwacht antwoord van ${target}`);
   return ret;
 }
 
@@ -808,7 +1123,7 @@ async function bootstrapAndLogin(username: string, password: string): Promise<vo
     username?: string;
     display_name?: string;
   };
-  if (!parsed.ok || !parsed.token) throw new Error("Login failed");
+  if (!parsed.ok || !parsed.token) throw new Error("Inloggen mislukt");
   showPanel({
     token: parsed.token,
     username: parsed.username || username,
@@ -862,9 +1177,9 @@ async function apiDelete<T>(url: string): Promise<T> {
 function updateScaleUi(): void {
   const n = activePartNoun();
   if (!activeSection) {
-    scaleStatusEl.textContent = "Not set";
-    calibrateHintEl.textContent = "Click Calibrate scale when you are ready.";
-    if (roomsHintEl) roomsHintEl.textContent = `Set drawing scale to get ${n.singular} areas in m².`;
+    scaleStatusEl.textContent = "Niet gezet";
+    calibrateHintEl.textContent = "Klik op Schaal kalibreren wanneer u klaar bent.";
+    if (roomsHintEl) roomsHintEl.textContent = `Zet de tekeningsschaal om ${n.singular}-oppervlakten in m² te krijgen.`;
     setCalibrateLed(false);
     return;
   }
@@ -873,25 +1188,25 @@ function updateScaleUi(): void {
   const src = (activeSection.scale_source || "NONE").toUpperCase();
   if (mpu != null && mpu > 0) {
     if (ratio != null && ratio > 0) {
-      const from = src === "PDF_TEXT" ? " (from drawing text)" : src === "CALIBRATED" ? " (calibrated)" : "";
-      scaleStatusEl.textContent = `Paper scale 1:${ratio}${from}`;
+      const from = src === "PDF_TEXT" ? " (uit tekeningtekst)" : src === "CALIBRATED" ? " (gekalibreerd)" : "";
+      scaleStatusEl.textContent = `Papierschaal 1:${ratio}${from}`;
     } else {
       scaleStatusEl.textContent =
         src === "CALIBRATED"
-          ? "Scale set from marked length"
-          : `Scale set — ${n.singular} sizes in m² / m`;
+          ? "Schaal gezet via gemarkeerde lengte"
+          : `Schaal gezet — ${n.singular}-maten in m² / m`;
     }
-    calibrateHintEl.textContent = `Scale is ready. Use Length to check a distance, or Draw ${n.singular} — circ/area update from the polygon.`;
+    calibrateHintEl.textContent = `Schaal is klaar. Gebruik Lengte om een afstand te controleren, of Teken ${n.singular} — omtrek/oppervlakte volgen uit de polygoon.`;
     if (roomsHintEl) {
-      roomsHintEl.textContent = `${n.singular.charAt(0).toUpperCase() + n.singular.slice(1)} area (m²) and perimeter (m) use this scale.`;
+      roomsHintEl.textContent = `Oppervlakte (m²) en omtrek (m) van de ${n.singular} gebruiken deze schaal.`;
     }
-    calibrateBtn.textContent = "Recalibrate scale";
+    calibrateBtn.textContent = "Schaal opnieuw kalibreren";
     setCalibrateLed(true, src === "PDF_TEXT" ? "Schaal gezet (uit tekeningtekst)" : "Kalibratie uitgevoerd");
   } else {
-    scaleStatusEl.textContent = "Not set — mark a known length, or use detected 1:N";
-    calibrateHintEl.textContent = "Click Calibrate scale, mark two points, then enter that length in mm.";
-    if (roomsHintEl) roomsHintEl.textContent = "Without scale, only relative sizes are shown.";
-    calibrateBtn.textContent = "Calibrate scale";
+    scaleStatusEl.textContent = "Niet gezet — markeer een bekende lengte, of gebruik gedetecteerde 1:N";
+    calibrateHintEl.textContent = "Klik Schaal kalibreren, markeer twee punten, en voer die lengte in mm in.";
+    if (roomsHintEl) roomsHintEl.textContent = "Zonder schaal worden alleen relatieve maten getoond.";
+    calibrateBtn.textContent = "Schaal kalibreren";
     setCalibrateLed(false);
   }
   updateToolHint();
@@ -982,28 +1297,28 @@ function updateToolHint(): void {
   if (!toolHintEl) return;
   const n = activePartNoun();
   if (!activeScaleMpu()) {
-    toolHintEl.textContent = `Set scale first, then measure a length or draw a ${n.singular}.`;
+    toolHintEl.textContent = `Zet eerst de schaal, meet daarna een lengte of teken een ${n.singular}.`;
     return;
   }
   if (pendingRoom?.drawing && !pendingRoom.closed) {
     toolHintEl.textContent =
       pendingRoom.points.length === 0
-        ? `Click ${n.singular} corners. Circumference updates as you go; area after 3 points.`
-        : `${pendingRoom.points.length} vertex(es). Close polygon (≥3) or click near start.`;
+        ? `Klik hoeken van de ${n.singular}. Omtrek wordt onderweg bijgewerkt; oppervlakte vanaf 3 punten.`
+        : `${pendingRoom.points.length} hoekpunt(en). Sluit polygoon (≥3) of klik bij het startpunt.`;
     return;
   }
   if (pendingRoom?.closed) {
-    toolHintEl.textContent = `${n.singular.charAt(0).toUpperCase() + n.singular.slice(1)} polygon ready — circ/area shown. Drag vertices or Save ${n.singular}.`;
+    toolHintEl.textContent = `Polygoon van ${n.singular} klaar — omtrek/oppervlakte getoond. Sleep hoeken of sla ${n.singular} op.`;
     return;
   }
   if (measure.tool === "length") {
     toolHintEl.textContent =
       measure.points.length < 2
-        ? "Click two points to measure length (updates live while moving)."
-        : "Length ready. Clear or click again to start over.";
+        ? "Klik twee punten om lengte te meten (live bij bewegen)."
+        : "Lengte klaar. Wissen of opnieuw klikken om opnieuw te beginnen.";
     return;
   }
-  toolHintEl.textContent = `Choose Length or Draw ${n.singular}. Circumference and area come from the polygon.`;
+  toolHintEl.textContent = `Kies Lengte of Teken ${n.singular}. Omtrek en oppervlakte komen uit de polygoon.`;
 }
 
 function activeToolMode(): ToolMode {
@@ -1047,12 +1362,12 @@ function setMeasureTool(tool: ToolMode): void {
   if (tool !== "off") {
     if (calibrate) endCalibrate();
     if (discovery) {
-      setStatus("Finish or cancel room discovery before measuring", "err");
+      setStatus("Rond ontdekken eerst af of annuleer voordat u meet", "err");
       syncToolButtons();
       return;
     }
     if (!activeScaleMpu()) {
-      setStatus("Set scale first", "err");
+      setStatus("Zet eerst de schaal", "err");
       measure.tool = "off";
       syncToolButtons();
       updateToolHint();
@@ -1066,7 +1381,7 @@ function setMeasureTool(tool: ToolMode): void {
   updateMeasureReadouts();
   updateToolHint();
   drawOverlay();
-  if (tool === "length") setStatus("Measure length: click two points", "busy");
+  if (tool === "length") setStatus("Lengte meten: klik twee punten", "busy");
 }
 
 function renderSectionList(): void {
@@ -1093,12 +1408,22 @@ function renderSectionList(): void {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = hasComponents ? "section-open-btn section-open-btn--filled" : "section-open-btn section-open-btn--empty";
-    btn.textContent = `Open ${n.title.toLowerCase()}`;
+    btn.textContent = `${n.title} openen`;
     btn.addEventListener("click", () => {
       void openSection(s.id);
     });
-    card.appendChild(btn);
+    const row = document.createElement("div");
+    row.className = "section-open-row";
+    const thumb = document.createElement("img");
+    thumb.className = "section-thumb is-loading";
+    thumb.alt = s.label || n.title;
+    thumb.width = SECTION_THUMB_W;
+    thumb.height = SECTION_THUMB_H;
+    row.appendChild(thumb);
+    row.appendChild(btn);
+    card.appendChild(row);
     sectionListEl.appendChild(card);
+    mountSectionThumbnail(s, thumb);
   }
 }
 
@@ -1106,6 +1431,298 @@ function selectedIsKierdichting(): boolean {
   const mat = selectedCatalogMaterial();
   if (!mat) return false;
   return isLengthQuantityRubriek(mat.rubriek_nr ?? mat.master_category);
+}
+
+function pendingIsLengthComponent(): boolean {
+  if (selectedIsKierdichting()) return true;
+  if (!pendingRoom?.editingId) return false;
+  const r = rooms.find((x) => x.id === pendingRoom!.editingId);
+  return Boolean(r && componentIsLengthQuantity(r));
+}
+
+function perimeterMOfRing(points: Pt[]): number | null {
+  const mpu = activeScaleMpu();
+  if (!mpu || !points || points.length < 2) return null;
+  const ring = points.length >= 3 ? closeRing(points) : points;
+  return Math.round(scaledPathLength(ring, mpu, activeScaleAspect(), ring.length >= 3) * 100) / 100;
+}
+
+function existingSealFor(parentId: string): RoomSubsection | undefined {
+  if (!parentId) return undefined;
+  return rooms.find((r) => (r.analysis?.seal_for_subsection_id || "") === parentId);
+}
+
+function renderKierMaterialOptions(selectedId?: string | null): void {
+  if (!kierSuggestMatEl) return;
+  const keep = selectedId ?? kierSuggestMatEl.value;
+  kierSuggestMatEl.replaceChildren();
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = kierMaterials.length
+    ? `— ${DEFAULT_KIER_CATALOG_ID} (standaard) —`
+    : `— ${DEFAULT_KIER_CATALOG_ID} —`;
+  kierSuggestMatEl.appendChild(ph);
+  const sorted = [...kierMaterials].sort((a, b) => {
+    const aDef = (a.catalog_id || "") === DEFAULT_KIER_CATALOG_ID ? 0 : 1;
+    const bDef = (b.catalog_id || "") === DEFAULT_KIER_CATALOG_ID ? 0 : 1;
+    if (aDef !== bDef) return aDef - bDef;
+    return (a.catalog_id || a.name).localeCompare(b.catalog_id || b.name, "nl");
+  });
+  for (const m of sorted) {
+    const opt = document.createElement("option");
+    opt.value = m.material_id;
+    const code = (m.catalog_id || "").trim();
+    const ra = m.ra_dba != null ? ` · RA ${m.ra_dba}` : "";
+    opt.textContent = code ? `${code} · ${m.name}${ra}` : `${m.name}${ra}`;
+    kierSuggestMatEl.appendChild(opt);
+  }
+  const def = kierMaterials.find((m) => (m.catalog_id || "") === DEFAULT_KIER_CATALOG_ID);
+  if (keep && kierMaterials.some((m) => m.material_id === keep)) {
+    kierSuggestMatEl.value = keep;
+  } else if (def) {
+    kierSuggestMatEl.value = def.material_id;
+  } else {
+    kierSuggestMatEl.value = "";
+  }
+}
+
+async function ensureKierMaterials(): Promise<void> {
+  if (!auth?.token || kierMaterialsLoaded) {
+    renderKierMaterialOptions();
+    return;
+  }
+  try {
+    const data = await apiGet<{ materials: CatalogMaterial[] }>(
+      `/api/floormap/materials?master_category=${encodeURIComponent(KIER_RUBRIEK_NAME)}&limit=1000`,
+    );
+    kierMaterials = data.materials || [];
+    if (!kierMaterials.some((m) => (m.catalog_id || "") === DEFAULT_KIER_CATALOG_ID)) {
+      const extra = await apiGet<{ materials: CatalogMaterial[] }>(
+        `/api/floormap/materials?q=${encodeURIComponent(DEFAULT_KIER_CATALOG_ID)}&limit=20`,
+      );
+      for (const m of extra.materials || []) {
+        if ((m.catalog_id || "") === DEFAULT_KIER_CATALOG_ID) {
+          kierMaterials = [m, ...kierMaterials];
+          break;
+        }
+      }
+    }
+    kierMaterialsLoaded = true;
+  } catch (err) {
+    console.warn("kier materials load failed", err);
+    kierMaterials = [];
+  }
+  renderKierMaterialOptions();
+}
+
+function resolveKierSuggestMaterial(preferredId?: string | null): CatalogMaterial | null {
+  const id = (preferredId || kierSuggestMatEl?.value || "").trim();
+  if (id) return kierMaterials.find((m) => m.material_id === id) || null;
+  return (
+    kierMaterials.find((m) => (m.catalog_id || "") === DEFAULT_KIER_CATALOG_ID) ||
+    kierMaterials[0] ||
+    null
+  );
+}
+
+function sealMaterialKey(a?: SubsectionAnalysis | null): string {
+  if (!a) return "";
+  if ((a.material_id || "").trim()) return `id:${a.material_id!.trim()}`;
+  if ((a.catalog_id || "").trim()) return `cat:${a.catalog_id!.trim().toUpperCase()}`;
+  return "";
+}
+
+/** Sum length_m of all length seals with the same kierdichting type (material). */
+function sumSealLengthsForType(materialKey: string): number {
+  if (!materialKey) return 0;
+  let sum = 0;
+  for (const r of rooms) {
+    if (!componentIsLengthQuantity(r)) continue;
+    if (sealMaterialKey(r.analysis) !== materialKey) continue;
+    const live = pendingRoom?.editingId === r.id ? pendingRoom : null;
+    const pts = live ? live.points : r.points;
+    const closed = live ? live.closed : !r.analysis?.open_path;
+    const mpu =
+      r.metres_per_norm_unit != null && r.metres_per_norm_unit > 0
+        ? r.metres_per_norm_unit
+        : activeScaleMpu();
+    if (pts?.length >= 2 && mpu) {
+      sum += scaledPathLength(pts, mpu, activeScaleAspect(), closed);
+    } else if (r.analysis?.length_m != null && Number.isFinite(r.analysis.length_m)) {
+      sum += Number(r.analysis.length_m);
+    }
+  }
+  return Math.round(sum * 100) / 100;
+}
+
+function syncKierSuggestUi(): void {
+  if (!kierSuggestEl) return;
+  const editing = pendingRoom?.editingId
+    ? rooms.find((r) => r.id === pendingRoom!.editingId)
+    : undefined;
+  const closedArea =
+    Boolean(pendingRoom?.closed && pendingRoom.points.length >= 3) &&
+    !selectedIsKierdichting() &&
+    !(editing && componentIsLengthQuantity(editing));
+  const show = !isFloormapKind() && closedArea;
+  kierSuggestEl.classList.toggle("hidden", !show);
+  if (!show) return;
+  void ensureKierMaterials();
+  const peri = pendingRoom ? perimeterMOfRing(pendingRoom.points) : null;
+  const existing = editing ? existingSealFor(editing.id) : undefined;
+  if (existing && kierSuggestCb && !kierSuggestCb.dataset.userTouched) {
+    kierSuggestCb.checked = true;
+    if (existing.analysis?.material_id) {
+      renderKierMaterialOptions(existing.analysis.material_id);
+    }
+  }
+  if (kierSuggestHintEl) {
+    const periBit = peri != null ? ` Omtrek ≈ ${peri.toFixed(2)} m.` : " Zet eerst de schaal voor een omtrek in meters.";
+    const mat = resolveKierSuggestMaterial(existing?.analysis?.material_id);
+    const key = mat
+      ? sealMaterialKey({
+          material_id: mat.material_id,
+          catalog_id: mat.catalog_id,
+        } as SubsectionAnalysis)
+      : sealMaterialKey(existing?.analysis);
+    const typeSum = key ? sumSealLengthsForType(key) : 0;
+    const typeBit =
+      typeSum > 0
+        ? ` Totaal ${(mat?.catalog_id || DEFAULT_KIER_CATALOG_ID)} ≈ ${typeSum.toFixed(2)} m.`
+        : "";
+    kierSuggestHintEl.textContent = existing
+      ? `Al toegevoegd. Opslaan werkt de omtreklengte bij.${periBit}${typeBit}`
+      : `Optioneel. Standaard ${DEFAULT_KIER_CATALOG_ID}. Bij aanvinken: extra component met de omtreklengte; lengtes van hetzelfde type worden opgeteld.${periBit}${typeBit}`;
+  }
+}
+
+async function upsertPerimeterSeal(
+  parentId: string,
+  points: Pt[],
+  parentLabel: string,
+  vgNr: number | null,
+  vrNr: string | null,
+  level: string,
+  material?: CatalogMaterial | null,
+): Promise<{ length_m: number | null; created: boolean; material: CatalogMaterial } | null> {
+  if (!activeSection || !auth) return null;
+  await ensureKierMaterials();
+  const mat = material || resolveKierSuggestMaterial();
+  if (!mat) {
+    throw new Error(`Kierdichtingsmateriaal ${DEFAULT_KIER_CATALOG_ID} niet gevonden in de catalogus`);
+  }
+  const ring = closeRing(points);
+  const mpu = activeScaleMpu();
+  const lengthM = perimeterMOfRing(ring);
+  const existing = existingSealFor(parentId);
+  const label = `Kierdichting · ${parentLabel || "vlak"}`;
+  const analysis: Record<string, unknown> = {
+    material_id: mat.material_id,
+    master_category: mat.master_category,
+    material_name: mat.name,
+    catalog_id: mat.catalog_id,
+    category: mat.category || undefined,
+    rubriek_nr: mat.rubriek_nr ?? 9,
+    quantity_kind: "length",
+    open_path: false,
+    seal_for_subsection_id: parentId,
+  };
+  if (lengthM != null) analysis.length_m = lengthM;
+  const saved = await apiPost<{
+    subsection_id: string;
+    analysis?: SubsectionAnalysis;
+  }>("/api/floormap/subsections", {
+    section_id: activeSection.id,
+    subsection_id: existing?.id || undefined,
+    label: existing?.label || label,
+    level_hint: level || "OTHER",
+    vg_nr: vgNr,
+    vr_nr: vrNr,
+    points: ring,
+    holes: [],
+    metres_per_norm_unit: mpu ?? undefined,
+    scale_aspect_yx: activeScaleAspect(),
+    analysis,
+  });
+  markRoomTouched(saved.subsection_id);
+  const len =
+    saved.analysis?.length_m != null
+      ? Number(saved.analysis.length_m)
+      : lengthM;
+  return {
+    length_m: len != null && Number.isFinite(len) ? len : null,
+    created: !existing,
+    material: mat,
+  };
+}
+
+async function removeSealForParent(parentId: string, { confirm: ask = true } = {}): Promise<boolean> {
+  const seal = existingSealFor(parentId);
+  if (!seal) return false;
+  if (ask) {
+    const label = seal.label || "kierdichting";
+    if (!confirm(`«${label}» verwijderen?`)) return false;
+  }
+  await apiDelete(`/api/floormap/subsections?subsection_id=${encodeURIComponent(seal.id)}`);
+  if (pendingRoom?.editingId === seal.id) clearPendingRoom();
+  if (touchedRoomIds.delete(seal.id)) persistTouchedRoomIds();
+  selectedSetIds.delete(seal.id);
+  constituentSigns.delete(seal.id);
+  return true;
+}
+
+async function toggleKierSealForRoom(room: RoomSubsection, want: boolean): Promise<void> {
+  if (isFloormapKind() || componentIsLengthQuantity(room)) return;
+  if (!Array.isArray(room.points) || room.points.length < 3) {
+    setStatus("Gesloten vlak nodig voor kierdichting (omtrek)", "err");
+    return;
+  }
+  try {
+    if (!want) {
+      setStatus("Kierdichting verwijderen…", "busy");
+      const removed = await removeSealForParent(room.id, { confirm: false });
+      await loadRooms();
+      setStatus(removed ? "Kierdichting verwijderd" : "Geen kierdichting gekoppeld", "ok");
+      return;
+    }
+    setStatus("Kierdichting toevoegen…", "busy");
+    await ensureKierMaterials();
+    const mat = resolveKierSuggestMaterial();
+    if (!mat) {
+      setStatus(
+        `Kierdichtingsmateriaal ${DEFAULT_KIER_CATALOG_ID} niet gevonden in de catalogus`,
+        "err",
+      );
+      return;
+    }
+    const seal = await upsertPerimeterSeal(
+      room.id,
+      room.points,
+      room.label || "vlak",
+      room.vg_nr,
+      room.vr_nr,
+      room.level_hint || "OTHER",
+      mat,
+    );
+    await loadRooms();
+    const key = sealMaterialKey({
+      material_id: mat.material_id,
+      catalog_id: mat.catalog_id,
+    } as SubsectionAnalysis);
+    const typeSum = sumSealLengthsForType(key);
+    const code = mat.catalog_id || DEFAULT_KIER_CATALOG_ID;
+    const lenTxt = seal?.length_m != null ? ` · ${seal.length_m.toFixed(2)} m` : "";
+    const sumTxt = typeSum > 0 ? ` · totaal ${code} ${typeSum.toFixed(2)} m` : "";
+    setStatus(
+      seal?.created
+        ? `Kierdichting (${code}) toegevoegd aan «${room.label || "vlak"}»${lenTxt}${sumTxt}`
+        : `Kierdichting (${code}) bijgewerkt${lenTxt}${sumTxt}`,
+      "ok",
+    );
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+    renderRoomList();
+  }
 }
 
 function componentIsLengthQuantity(r: RoomSubsection): boolean {
@@ -1140,7 +1757,14 @@ function roomMetricsLabel(r: RoomSubsection): string {
       } else if (r.perimeter_m != null && Number.isFinite(r.perimeter_m) && !live) {
         len = `${r.perimeter_m.toFixed(2)} m`;
       }
-      return len ? `lengte ${len}` : "lengte —";
+      const key = sealMaterialKey(r.analysis);
+      const typeSum = key ? sumSealLengthsForType(key) : 0;
+      const code = (r.analysis?.catalog_id || "").trim() || DEFAULT_KIER_CATALOG_ID;
+      const sumBit =
+        typeSum > 0 && (!len || Math.abs(typeSum - Number.parseFloat(len)) > 0.005)
+          ? ` · Σ ${code} ${typeSum.toFixed(2)} m`
+          : "";
+      return len ? `lengte ${len}${sumBit}` : "lengte —";
     }
 
     let area = "—";
@@ -1159,7 +1783,7 @@ function roomMetricsLabel(r: RoomSubsection): string {
     } else if (r.area_norm != null && mpu) {
       area = `${scaledAreaM2(r.area_norm, mpu, aspect).toFixed(2)} m²`;
     } else if (r.area_norm != null) {
-      area = `${r.area_norm.toFixed(4)} (no scale)`;
+      area = `${r.area_norm.toFixed(4)} (geen schaal)`;
     }
 
     return `${area} · circ ${circ}`;
@@ -1205,7 +1829,7 @@ function syncPendingRoomButtons(): void {
   if (!pendingRoom) {
     roomPendingHintEl.textContent = kier
       ? `Kierdichting: teken een pad (≥2 punten) of gesloten omtrek; lengte in meters wordt opgeslagen.`
-      : `Gebruik Teken ${n.singular} (Tools of hier), klik hoekpunten. Dubbelklik een anker om te verwijderen; Vereenvoudig dunt de omtrek.`;
+      : `Gebruik Teken ${n.singular} (Gereedschap of hier), klik hoekpunten. Dubbelklik een anker om te verwijderen; Vereenvoudig dunt de omtrek.`;
     roomDrawBtn.textContent = `Teken ${n.singular}`;
     roomSaveBtn.textContent = "Opslaan";
     return;
@@ -1229,6 +1853,7 @@ function syncPendingRoomButtons(): void {
     markRoomLegendEl.textContent = cap;
   }
   syncEditDock();
+  syncKierSuggestUi();
 }
 
 function syncEditDock(): void {
@@ -1239,6 +1864,10 @@ function syncEditDock(): void {
 
 function clearPendingRoom(): void {
   pendingRoom = null;
+  if (kierSuggestCb) {
+    kierSuggestCb.checked = false;
+    delete kierSuggestCb.dataset.userTouched;
+  }
   syncPendingRoomButtons();
   syncEditDock();
   syncToolButtons();
@@ -1263,6 +1892,7 @@ function beginDrawRoom(): void {
   };
   roomLabelInput.value = `${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} ${rooms.length + 1}`;
   fillVgVrSuggestions();
+  clearExpectedOrientaties();
   syncPendingRoomButtons();
   syncToolButtons();
   updateMeasureReadouts();
@@ -1501,6 +2131,46 @@ function assignBooleanListGroups(items: RoomSubsection[]): Map<string, BoolListR
   return map;
 }
 
+function isComposeResultRoom(r: RoomSubsection): boolean {
+  const op = parseBooleanOp(r.analysis?.boolean_op);
+  return op === "compose" || op === "difference";
+}
+
+/**
+ * Constituenten van een zichtbaar samengesteld component: nesten onder het
+ * resultaat (standaard ingeklapt). Zelf samengestelde bronnen blijven top-level.
+ */
+function collectComposeChildMap(items: RoomSubsection[]): {
+  childrenByParent: Map<string, RoomSubsection[]>;
+  nestedIds: Set<string>;
+} {
+  const byId = new Map(items.map((r) => [r.id, r]));
+  const nestedIds = new Set<string>();
+  const childrenByParent = new Map<string, RoomSubsection[]>();
+  for (const r of items) {
+    if (!isComposeResultRoom(r)) continue;
+    const src = r.analysis?.source_subsection_ids;
+    if (!Array.isArray(src) || src.length < 2) continue;
+    const kids: RoomSubsection[] = [];
+    for (const sid of src) {
+      if (!sid || sid === r.id || nestedIds.has(sid)) continue;
+      const child = byId.get(sid);
+      if (!child || isComposeResultRoom(child)) continue;
+      kids.push(child);
+      nestedIds.add(sid);
+    }
+    if (kids.length) childrenByParent.set(r.id, kids);
+  }
+  return { childrenByParent, nestedIds };
+}
+
+function composeGroupExpanded(parentId: string, kids: RoomSubsection[]): boolean {
+  if (expandedComposeIds.has(parentId)) return true;
+  const editId = pendingRoom?.editingId;
+  if (editId && kids.some((k) => k.id === editId)) return true;
+  return false;
+}
+
 function applyBooleanListColors(li: HTMLElement, role: BoolListRole): void {
   const pal = BOOL_LIST_PALETTE[role.group % BOOL_LIST_PALETTE.length];
   if (role.role === "result") {
@@ -1663,10 +2333,36 @@ async function savePendingRoom(): Promise<void> {
     setStatus("Vul VG- en VR-nummer in", "err");
     return;
   }
+  if (isFloormapKind()) {
+    const oris = readExpectedOrientaties();
+    if (!oris.length) {
+      setStatus(
+        "Vink minstens één geveloriëntatie aan (N…NW) — verplicht voor deze VR voordat je opslaat",
+        "err",
+      );
+      expectedOriBlockEl?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      return;
+    }
+  }
   const mat = !isFloormapKind() ? selectedCatalogMaterial() : null;
   if (kier && !mat) {
     setStatus("Kies een kierdichtingsmateriaal (rubriek 9)", "err");
     return;
+  }
+  const wantSeal =
+    !isFloormapKind() &&
+    !kier &&
+    Boolean(pendingRoom.closed) &&
+    Boolean(kierSuggestCb?.checked);
+  if (wantSeal) {
+    await ensureKierMaterials();
+    if (!resolveKierSuggestMaterial()) {
+      setStatus(
+        `Kierdichting aangevinkt, maar ${DEFAULT_KIER_CATALOG_ID} (of een ander kierprofiel) is niet beschikbaar`,
+        "err",
+      );
+      return;
+    }
   }
   roomSaveBtn.disabled = true;
   setStatus(pendingRoom.editingId ? "Geometrie bijwerken…" : "Opslaan…", "busy");
@@ -1711,6 +2407,11 @@ async function savePendingRoom(): Promise<void> {
       if (!editingId && !roomLabelInput.value.trim()) {
         body.label = `${mat.master_category}: ${mat.name}`;
       }
+    } else if (isFloormapKind()) {
+      body.analysis = {
+        expected_orientaties: readExpectedOrientaties(),
+        orientatie_correcties: readOrientatieCorrecties(),
+      };
     }
     const saved = await apiPost<{
       subsection_id: string;
@@ -1721,13 +2422,42 @@ async function savePendingRoom(): Promise<void> {
     const wasEdit = Boolean(editingId);
     const savedId = saved.subsection_id;
     markRoomTouched(savedId);
+    let sealBit = "";
+    let sealMatForSum: CatalogMaterial | null = null;
+    if (wantSeal) {
+      const seal = await upsertPerimeterSeal(
+        savedId,
+        points,
+        String(body.label || label),
+        vgVr.vg_nr,
+        vgVr.vr_nr,
+        level,
+      );
+      if (seal) {
+        sealMatForSum = seal.material;
+        const lenTxt = seal.length_m != null ? ` ${seal.length_m.toFixed(2)} m` : "";
+        sealBit = seal.created
+          ? ` · kierdichting toegevoegd${lenTxt}`
+          : ` · kierdichting bijgewerkt${lenTxt}`;
+      }
+    }
     clearPendingRoom();
     // Keep VG/VR on gevel/section so successive components can share the same VR.
     if (isFloormapKind()) {
       roomVgInput.value = "";
       roomVrInput.value = "";
+      clearExpectedOrientaties();
     }
     await loadRooms();
+    if (sealMatForSum && sealBit) {
+      const key = sealMaterialKey({
+        material_id: sealMatForSum.material_id,
+        catalog_id: sealMatForSum.catalog_id,
+      } as SubsectionAnalysis);
+      const typeSum = sumSealLengthsForType(key);
+      const code = sealMatForSum.catalog_id || DEFAULT_KIER_CATALOG_ID;
+      if (typeSum > 0) sealBit += ` · totaal ${code} ${typeSum.toFixed(2)} m`;
+    }
     let depCount = 0;
     if (wasEdit && editingId) {
       setStatus("Afgeleide setbewerkingen herberekenen…", "busy");
@@ -1750,15 +2480,15 @@ async function savePendingRoom(): Promise<void> {
     setStatus(
       wasEdit
         ? kier && lenM != null
-          ? `Geometrie bijgewerkt · lengte ${lenM.toFixed(2)} m${depBit}`
+          ? `Geometrie bijgewerkt · lengte ${lenM.toFixed(2)} m${depBit}${sealBit}`
           : m2 != null
-            ? `Geometrie bijgewerkt · ${m2.toFixed(2)} m²${depBit}${noMatBit}`
-            : `Geometrie bijgewerkt${depBit}${noMatBit}`
+            ? `Geometrie bijgewerkt · ${m2.toFixed(2)} m²${depBit}${noMatBit}${sealBit}`
+            : `Geometrie bijgewerkt${depBit}${noMatBit}${sealBit}`
         : kier && lenM != null
           ? `Opgeslagen ${String(body.label)} · lengte ${lenM.toFixed(2)} m`
           : m2 != null
-            ? `Opgeslagen ${String(body.label)} · ${m2.toFixed(2)} m²${noMatBit}`
-            : `Opgeslagen ${String(body.label)}${noMatBit}`,
+            ? `Opgeslagen ${String(body.label)} · ${m2.toFixed(2)} m²${noMatBit}${sealBit}`
+            : `Opgeslagen ${String(body.label)}${noMatBit}${sealBit}`,
       "ok",
     );
   } catch (err) {
@@ -1783,13 +2513,26 @@ function ringBBox(points: Pt[]): { minX: number; minY: number; maxX: number; max
 }
 
 /** Offsets around the original so copies sit in a ring (1 copy → to the right). */
-function copyOffsetsAround(points: Pt[], count: number): Array<{ dx: number; dy: number }> {
+function copyOffsetsAround(
+  points: Pt[],
+  count: number,
+  mode: "around" | "nudge" = "around",
+): Array<{ dx: number; dy: number }> {
   const n = Math.max(1, Math.min(20, Math.floor(count)));
   const box = ringBBox(points);
   const w = Math.max(0.01, box.maxX - box.minX);
   const h = Math.max(0.01, box.maxY - box.minY);
   const span = Math.max(w, h);
   const gap = Math.max(0.012, span * 0.12);
+  if (mode === "nudge") {
+    const step = Math.max(0.012, Math.min(0.028, span * 0.08));
+    const out: Array<{ dx: number; dy: number }> = [];
+    for (let i = 0; i < n; i++) {
+      const k = i + 1;
+      out.push({ dx: step * k, dy: step * k * 0.35 });
+    }
+    return out;
+  }
   if (n === 1) return [{ dx: w + gap, dy: 0 }];
   const radius = span * 0.55 + gap;
   const out: Array<{ dx: number; dy: number }> = [];
@@ -1817,18 +2560,30 @@ function copyLabelBase(label: string): string {
 }
 
 function analysisForDuplicate(src?: SubsectionAnalysis | null): Record<string, unknown> | undefined {
-  if (!src?.material_id && !src?.catalog_id && !src?.master_category) return undefined;
+  const oris = Array.isArray(src?.expected_orientaties)
+    ? src!.expected_orientaties!.map((c) => normalizeOrientatieCode(c)).filter((c) =>
+        (ORIENTATIE_CODES as readonly string[]).includes(c),
+      )
+    : [];
+  if (!src?.material_id && !src?.catalog_id && !src?.master_category && !oris.length) {
+    return undefined;
+  }
   const analysis: Record<string, unknown> = {};
-  if (src.material_id) analysis.material_id = src.material_id;
-  if (src.master_category) analysis.master_category = src.master_category;
-  if (src.material_name) analysis.material_name = src.material_name;
-  if (src.catalog_id) analysis.catalog_id = src.catalog_id;
-  if (src.category) analysis.category = src.category;
-  if (src.rubriek_nr != null) analysis.rubriek_nr = src.rubriek_nr;
-  if (src.quantity_kind === "length") {
+  if (src?.material_id) analysis.material_id = src.material_id;
+  if (src?.master_category) analysis.master_category = src.master_category;
+  if (src?.material_name) analysis.material_name = src.material_name;
+  if (src?.catalog_id) analysis.catalog_id = src.catalog_id;
+  if (src?.category) analysis.category = src.category;
+  if (src?.rubriek_nr != null) analysis.rubriek_nr = src.rubriek_nr;
+  if (src?.quantity_kind === "length") {
     analysis.quantity_kind = "length";
     if (src.length_m != null) analysis.length_m = src.length_m;
     if (src.length_norm != null) analysis.length_norm = src.length_norm;
+    if (src.open_path) analysis.open_path = true;
+  }
+  if (oris.length) analysis.expected_orientaties = oris;
+  if (src?.orientatie_correcties && typeof src.orientatie_correcties === "object") {
+    analysis.orientatie_correcties = src.orientatie_correcties;
   }
   // Standalone geometry copy — do not keep boolean provenance.
   return analysis;
@@ -1851,16 +2606,27 @@ async function duplicateClosedComponent(opts: {
   vr_nr: string | null;
   analysis?: SubsectionAnalysis | null;
   count: number;
+  offsetMode?: "around" | "nudge";
 }): Promise<string | null> {
   if (!activeSection || !auth) throw new Error("Geen actieve sectie");
-  const points = closeRing(opts.points);
-  if (points.length < 4 || shoelaceArea(points) < 1e-8) {
+  const asLength =
+    opts.analysis?.quantity_kind === "length" ||
+    isLengthQuantityRubriek(opts.analysis?.rubriek_nr ?? opts.analysis?.master_category);
+  const openPath = Boolean(asLength && opts.analysis?.open_path);
+  const points = openPath
+    ? opts.points.map((p) => ({ ...p }))
+    : closeRing(opts.points);
+  if (openPath) {
+    if (points.length < 2) throw new Error("Kierdichting heeft minstens 2 punten nodig om te kopiëren");
+  } else if (points.length < 4 || (!asLength && shoelaceArea(points) < 1e-8)) {
     throw new Error("Alleen gesloten componenten met oppervlak kunnen worden gekopieerd");
   }
-  const holesSrc = (opts.holes || [])
-    .map((h) => closeRing(h))
-    .filter((h) => h.length >= 4 && shoelaceArea(h) >= 1e-8);
-  const offsets = copyOffsetsAround(points, opts.count);
+  const holesSrc = asLength
+    ? []
+    : (opts.holes || [])
+        .map((h) => closeRing(h))
+        .filter((h) => h.length >= 4 && shoelaceArea(h) >= 1e-8);
+  const offsets = copyOffsetsAround(points, opts.count, opts.offsetMode ?? (asLength ? "nudge" : "around"));
   const mpu = activeScaleMpu();
   const base = copyLabelBase(opts.label);
   const analysisBase = analysisForDuplicate(opts.analysis);
@@ -1869,7 +2635,9 @@ async function duplicateClosedComponent(opts: {
 
   for (let i = 0; i < offsets.length; i++) {
     const { dx, dy } = offsets[i];
-    const copyPoints = translateRing(points, dx, dy);
+    const copyPoints = openPath
+      ? points.map((p) => ({ x: p.x + dx, y: p.y + dy }))
+      : translateRing(points, dx, dy);
     const copyHoles = holesSrc.map((h) => translateRing(h, dx, dy));
     let vg = opts.vg_nr;
     let vr = opts.vr_nr;
@@ -1920,6 +2688,7 @@ async function duplicateFromRoom(room: RoomSubsection, count?: number): Promise<
     : [];
   setStatus(`Kopiëren (${n})…`, "busy");
   try {
+    const lengthDup = componentIsLengthQuantity(room);
     const lastId = await duplicateClosedComponent({
       points: room.points,
       holes,
@@ -1929,6 +2698,7 @@ async function duplicateFromRoom(room: RoomSubsection, count?: number): Promise<
       vr_nr: room.vr_nr,
       analysis: room.analysis,
       count: n,
+      offsetMode: lengthDup ? "nudge" : "around",
     });
     await loadRooms();
     if (lastId) {
@@ -1937,7 +2707,9 @@ async function duplicateFromRoom(room: RoomSubsection, count?: number): Promise<
     }
     setStatus(
       n === 1
-        ? `1 kopie geplaatst naast «${copyLabelBase(room.label)}» — sleep het groene vlak of witte ankers; pijltjes om te schuiven; daarna opslaan`
+        ? lengthDup
+          ? `1 kopie van «${copyLabelBase(room.label)}» — sleep de groene lijn of ankers naar de juiste plaats; daarna opslaan`
+          : `1 kopie geplaatst naast «${copyLabelBase(room.label)}» — sleep het groene vlak of witte ankers; pijltjes om te schuiven; daarna opslaan`
         : `${n} kopieën rond «${copyLabelBase(room.label)}» — klik een kopie in de lijst om te slepen`,
       "ok",
     );
@@ -1947,12 +2719,13 @@ async function duplicateFromRoom(room: RoomSubsection, count?: number): Promise<
 }
 
 async function duplicateFromPending(count?: number): Promise<void> {
-  if (!pendingRoom?.closed || !activeSection) {
+  if (!pendingRoom || !activeSection) {
     setStatus("Sluit eerst een polygoon (of selecteer een opgeslagen component)", "err");
     return;
   }
-  if (!isFloormapKind() && selectedIsKierdichting()) {
-    setStatus("Dupliceren geldt voor vlakcomponenten (oppervlak), niet voor open kierdichtingspaden", "err");
+  const kierDup = !isFloormapKind() && (selectedIsKierdichting() || pendingIsLengthComponent());
+  if (!pendingRoom.closed && !kierDup) {
+    setStatus("Sluit eerst een polygoon (of selecteer een opgeslagen component)", "err");
     return;
   }
   const n = count ?? promptCopyCount(1);
@@ -1980,6 +2753,21 @@ async function duplicateFromPending(count?: number): Promise<void> {
       };
     }
   }
+  if (isFloormapKind()) {
+    const oris = readExpectedOrientaties();
+    analysis = {
+      ...(analysis || {}),
+      expected_orientaties: oris,
+      orientatie_correcties: readOrientatieCorrecties(),
+    };
+  }
+  if (kierDup) {
+    analysis = {
+      ...(analysis || {}),
+      quantity_kind: "length",
+    };
+    if (!pendingRoom.closed) analysis.open_path = true;
+  }
 
   const vgVr = parseVgVrInputs();
   if (vgVr.error) {
@@ -1988,6 +2776,14 @@ async function duplicateFromPending(count?: number): Promise<void> {
   }
   if (isFloormapKind() && (vgVr.vg_nr == null || vgVr.vr_nr == null)) {
     setStatus("Vul VG- en VR-nummer in vóór dupliceren", "err");
+    return;
+  }
+  if (isFloormapKind() && !readExpectedOrientaties().length) {
+    setStatus(
+      "Vink minstens één geveloriëntatie aan vóór dupliceren",
+      "err",
+    );
+    expectedOriBlockEl?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     return;
   }
 
@@ -2013,6 +2809,7 @@ async function duplicateFromPending(count?: number): Promise<void> {
       vr_nr: vr,
       analysis,
       count: n,
+      offsetMode: kierDup ? "nudge" : "around",
     });
     await loadRooms();
     if (lastId) {
@@ -2074,6 +2871,14 @@ function editRoom(room: RoomSubsection): void {
   roomLevelSelect.value = room.level_hint || "OTHER";
   roomVgInput.value = room.vg_nr != null ? String(room.vg_nr) : "";
   roomVrInput.value = room.vr_nr != null ? String(room.vr_nr) : "";
+  if (isFloormapKind()) {
+    setExpectedOrientaties(
+      room.analysis?.expected_orientaties,
+      room.analysis?.orientatie_correcties,
+    );
+  } else {
+    clearExpectedOrientaties();
+  }
   void applyMaterialSelectionFromAnalysis(room.analysis);
   syncPendingRoomButtons();
   syncEditDock();
@@ -2190,9 +2995,9 @@ function updateBooleanPreview(): void {
   drawOverlay();
 }
 
-function materialAnalysisLabel(a?: SubsectionAnalysis | null): string {
+function materialAnalysisLabel(a?: SubsectionAnalysis | null, opts?: { skipOp?: boolean }): string {
   if (!a) return "";
-  const op = booleanOpSymbol(a.boolean_op);
+  const op = opts?.skipOp ? "" : booleanOpSymbol(a.boolean_op);
   const code = (a.catalog_id || "").trim();
   const name = a.material_name || a.material_kind || "";
   const mat = code && name ? `${code} · ${name}` : code || name;
@@ -2204,9 +3009,13 @@ function materialAnalysisLabel(a?: SubsectionAnalysis | null): string {
 }
 
 function selectedCatalogMaterial(): CatalogMaterial | null {
-  const id = (materialIdEl?.value || "").trim();
+  const id = (materialIdEl?.value || materialFavoriteEl?.value || "").trim();
   if (!id) return null;
-  return catalogMaterials.find((m) => m.material_id === id) || null;
+  return (
+    catalogMaterials.find((m) => m.material_id === id) ||
+    favoriteMaterials.find((m) => m.material_id === id) ||
+    null
+  );
 }
 
 function fmtSpectrumDb(v: number | null | undefined): string {
@@ -2385,11 +3194,27 @@ async function removeMaterialFavorite(materialId: string): Promise<void> {
   setStatus("Verwijderd uit meest gebruikt", "ok");
 }
 
+function ensureMaterialOption(mat: CatalogMaterial): void {
+  if (!catalogMaterials.some((m) => m.material_id === mat.material_id)) {
+    catalogMaterials = [mat, ...catalogMaterials];
+  }
+  if (!materialIdEl) return;
+  if (![...materialIdEl.options].some((o) => o.value === mat.material_id)) {
+    renderMaterialNameOptions(catalogMaterials, mat.material_id);
+  }
+  materialIdEl.value = mat.material_id;
+  materialIdEl.disabled = false;
+}
+
 async function selectMaterialById(materialId: string, fromFavorite = false): Promise<void> {
-  const fromFav = favoriteMaterials.find((m) => m.material_id === materialId);
-  const fromCat = catalogMaterials.find((m) => m.material_id === materialId);
-  const mat = fromFav || fromCat;
-  if (!mat) return;
+  const mat =
+    favoriteMaterials.find((m) => m.material_id === materialId) ||
+    catalogMaterials.find((m) => m.material_id === materialId);
+  if (!mat) {
+    setStatus("Materiaal niet gevonden in meest gebruikt", "err");
+    return;
+  }
+  if (materialFilterEl) materialFilterEl.value = "";
   if (mat.master_category && materialCategoryEl) {
     await ensureMaterialCategories();
     if (![...materialCategoryEl.options].some((o) => o.value === mat.master_category)) {
@@ -2400,29 +3225,71 @@ async function selectMaterialById(materialId: string, fromFavorite = false): Pro
     }
     materialCategoryEl.value = mat.master_category;
     renderMaterialSubcategoryOptions();
-    if (mat.category && materialSubcategoryEl) {
-      if (![...materialSubcategoryEl.options].some((o) => o.value === mat.category)) {
-        const opt = document.createElement("option");
-        opt.value = mat.category;
-        opt.textContent = mat.category;
-        materialSubcategoryEl.appendChild(opt);
-      }
-      materialSubcategoryEl.value = mat.category;
-    }
-    if (!fromCat) {
-      await loadMaterialsForCategory(mat.master_category, "");
-    }
+    // Hele rubriek laden (niet eerst subrubriek filteren) zodat het favoriet altijd in de lijst staat.
+    if (materialSubcategoryEl) materialSubcategoryEl.value = "";
+    await loadMaterialsForCategory(mat.master_category, "");
   }
-  if (!catalogMaterials.some((m) => m.material_id === mat.material_id)) {
-    catalogMaterials = [mat, ...catalogMaterials];
-    renderMaterialNameOptions(catalogMaterials, mat.material_id);
-  } else if (materialIdEl) {
-    materialIdEl.value = mat.material_id;
+  ensureMaterialOption(mat);
+  if (mat.category && materialSubcategoryEl) {
+    if (![...materialSubcategoryEl.options].some((o) => o.value === mat.category)) {
+      const opt = document.createElement("option");
+      opt.value = mat.category;
+      opt.textContent = mat.category;
+      materialSubcategoryEl.appendChild(opt);
+    }
+    materialSubcategoryEl.value = mat.category;
   }
   if (fromFavorite && materialFavoriteEl) materialFavoriteEl.value = materialId;
   updateMaterialSpectrumPreview(mat);
   syncFavoriteButtons();
   syncPendingRoomButtons();
+  updateMaterialQuantityHint();
+  await applyMaterialToEditingComponent(mat);
+}
+
+/** Favorite/cataloguskeuze tijdens bewerken: materiaal direct op het component zetten. */
+async function applyMaterialToEditingComponent(mat: CatalogMaterial): Promise<void> {
+  const editingId = pendingRoom?.editingId || "";
+  if (!editingId || isFloormapKind() || !auth?.token) {
+    setStatus(`Materiaal «${mat.name}» geselecteerd`, "ok");
+    return;
+  }
+  try {
+    await apiPost("/api/floormap/subsection-material", {
+      subsection_id: editingId,
+      material_id: mat.material_id,
+    });
+    const room = rooms.find((r) => r.id === editingId);
+    if (room) {
+      const prev =
+        room.analysis && typeof room.analysis === "object" ? { ...room.analysis } : {};
+      room.analysis = {
+        ...prev,
+        material_id: mat.material_id,
+        catalog_id: mat.catalog_id || prev.catalog_id,
+        material_name: mat.name,
+        master_category: mat.master_category || prev.master_category,
+        category: mat.category || prev.category,
+        rubriek_nr: mat.rubriek_nr ?? prev.rubriek_nr,
+        ra_dba: mat.ra_dba ?? prev.ra_dba,
+      };
+    }
+    markRoomTouched(editingId);
+    renderRoomList();
+    drawOverlay();
+    const missing = room ? composeConstituentsMissingMaterial(room, rooms) : [];
+    setStatus(
+      missing.length
+        ? `Materiaal «${mat.name}» toegepast — led blijft oranje tot bronnen materiaal hebben: ${missing.map((s) => s.label || "?").join(", ")}`
+        : `Materiaal «${mat.name}» toegepast op component`,
+      "ok",
+    );
+  } catch (err) {
+    setStatus(
+      `Materiaal geselecteerd — opslaan mislukt: ${err instanceof Error ? err.message : String(err)}`,
+      "err",
+    );
+  }
 }
 
 async function ensureMaterialCategories(): Promise<void> {
@@ -2586,10 +3453,14 @@ async function applyBooleanSet(): Promise<void> {
     updateBooleanPreview();
     markRoomTouched(saved.subsection_id);
     const savedM2 = saved.area_m2 != null ? Number(saved.area_m2) : areaM2;
+    const orangeParts = selected.filter((r) => !(r.analysis?.material_id || "").trim());
+    const orangeBit = orangeParts.length
+      ? ` Led blijft oranje tot bronnen materiaal hebben: ${orangeParts.map((r) => r.label || "?").join(", ")}.`
+      : "";
     const okMsg =
       savedM2 != null
-        ? `Opgeslagen: ${label} (netto ${savedM2.toFixed(2)} m²). Selectie blijft staan voor een volgende compositie.`
-        : `Opgeslagen: ${label}. Selectie blijft staan voor een volgende compositie.`;
+        ? `Opgeslagen: ${label} (netto ${savedM2.toFixed(2)} m²).${orangeBit} Selectie blijft staan voor een volgende compositie.`
+        : `Opgeslagen: ${label}.${orangeBit} Selectie blijft staan voor een volgende compositie.`;
     setComposeFeedback(okMsg, "ok");
     setStatus(okMsg, "ok");
   } catch (err) {
@@ -2644,8 +3515,21 @@ function renderRoomList(): void {
   if (items.length !== rooms.length) {
     rooms = items;
   }
+  const allowSetSelect = !isFloormapKind();
+  const { childrenByParent, nestedIds } = allowSetSelect
+    ? collectComposeChildMap(items)
+    : { childrenByParent: new Map<string, RoomSubsection[]>(), nestedIds: new Set<string>() };
   listEl.replaceChildren();
-  if (countEl) countEl.textContent = String(items.length);
+  syncRoomListVrFilterOptions(items);
+  const topLevelTotal = items.filter((r) => !nestedIds.has(r.id)).length;
+  const visibleTopLevel = visibleTopLevelRooms(items, nestedIds);
+  if (countEl) {
+    countEl.textContent = roomListCountLabel(visibleTopLevel.length, topLevelTotal);
+    countEl.title =
+      roomListVrFilter && visibleTopLevel.length !== topLevelTotal
+        ? `${visibleTopLevel.length} van ${topLevelTotal} zichtbaar (filter VR ${roomListVrFilter})`
+        : "";
+  }
   if (items.length === 0) {
     const li = document.createElement("li");
     li.className = "hint drawing-list-empty";
@@ -2653,10 +3537,16 @@ function renderRoomList(): void {
     listEl.appendChild(li);
     return;
   }
+  if (visibleTopLevel.length === 0) {
+    const li = document.createElement("li");
+    li.className = "hint drawing-list-empty";
+    li.textContent = `Geen ${activePartNoun().plural} voor VR ${roomListVrFilter}.`;
+    listEl.appendChild(li);
+    return;
+  }
   let booleanSourceIds = new Set<string>();
   let supersededIds = new Set<string>();
   let boolGroups = new Map<string, BoolListRole>();
-  const allowSetSelect = !isFloormapKind();
   try {
     if (allowSetSelect) {
       booleanSourceIds = collectBooleanSourceIds(items);
@@ -2666,13 +3556,20 @@ function renderRoomList(): void {
   } catch (err) {
     console.warn("renderRoomList: boolean metadata failed", err);
   }
+  for (const id of [...expandedComposeIds]) {
+    if (!childrenByParent.has(id)) expandedComposeIds.delete(id);
+  }
   items.forEach((r, index) => {
+    if (nestedIds.has(r.id)) return;
+    if (!roomMatchesVrFilter(r, roomListVrFilter)) return;
     try {
       renderRoomListItem(listEl, r, index, items.length, {
         allowSetSelect,
         booleanSourceIds,
         supersededIds,
         boolGroups,
+        allItems: items,
+        childRooms: childrenByParent.get(r.id) || [],
       });
     } catch (err) {
       console.warn("renderRoomList: item failed", r.id, err);
@@ -2715,9 +3612,13 @@ function renderRoomListItem(
     booleanSourceIds: Set<string>;
     supersededIds: Set<string>;
     boolGroups: Map<string, BoolListRole>;
+    allItems: RoomSubsection[];
+    childRooms?: RoomSubsection[];
+    nested?: boolean;
   },
 ): void {
-  const { allowSetSelect, booleanSourceIds, supersededIds, boolGroups } = meta;
+  const { allowSetSelect, booleanSourceIds, supersededIds, boolGroups, allItems } = meta;
+  const childRooms = meta.childRooms || [];
     const li = document.createElement("li");
     li.className = "drawing-list-item";
     li.dataset.roomId = r.id;
@@ -2728,6 +3629,11 @@ function renderRoomListItem(
     if (allowSetSelect && booleanSourceIds.has(r.id)) li.classList.add("drawing-list-item--ga-source");
     const boolRole = boolGroups.get(r.id);
     if (boolRole) applyBooleanListColors(li, boolRole);
+    const boolOp = parseBooleanOp(r.analysis?.boolean_op);
+    if (boolOp === "compose" || boolOp === "difference") {
+      li.classList.add("drawing-list-item--composed");
+    }
+    if (meta.nested) li.classList.add("drawing-list-item--compose-child");
 
     if (allowSetSelect) {
       const cb = document.createElement("input");
@@ -2753,17 +3659,33 @@ function renderRoomListItem(
     info.className = "drawing-list-select";
     const linked = linkedRooms.get(r.id);
     const hasMaterial = Boolean((r.analysis?.material_id || "").trim());
-    const nrBit =
-      r.vg_nr != null && r.vr_nr != null
-        ? `VG ${r.vg_nr} · VR ${r.vr_nr}`
-        : "geen VG/VR";
-    const matBit = materialAnalysisLabel(r.analysis);
+    const missingSources = isComposeResultRoom(r)
+      ? composeConstituentsMissingMaterial(r, allItems)
+      : [];
+    const ledGreen = hasMaterial && missingSources.length === 0;
+    const hasVgVr = r.vg_nr != null && r.vr_nr != null;
+    const oriCodes = Array.isArray(r.analysis?.expected_orientaties)
+      ? r.analysis!.expected_orientaties!
+          .map((c) => normalizeOrientatieCode(c))
+          .filter((c) => (ORIENTATIE_CODES as readonly string[]).includes(c))
+      : [];
+    const oriBit =
+      isFloormapKind()
+        ? oriCodes.length
+          ? `ori ${oriCodes.join(",")}`
+          : "ori ontbreekt"
+        : "";
+    const isComposed = boolOp === "compose" || boolOp === "difference";
+    const matBit = materialAnalysisLabel(r.analysis, { skipOp: isComposed });
+    const composedBit = isComposed ? "± samengesteld" : "";
     let gaBit = "";
     if (allowSetSelect) {
       if (supersededIds.has(r.id)) {
         gaBit = " · bron (vervangen in berekening)";
       } else if (booleanSourceIds.has(r.id)) {
         gaBit = " · bron (blijft in berekening)";
+      } else if (missingSources.length) {
+        gaBit = ` · bronnen zonder materiaal: ${missingSources.map((s) => s.label || "?").join(", ")}`;
       } else if (r.vr_nr && hasMaterial) {
         gaBit = " · in berekening";
       } else if (r.vr_nr) {
@@ -2776,21 +3698,37 @@ function renderRoomListItem(
         : activeSection?.region_kind === "FLOORMAP"
           ? " · niet in berekening"
           : "";
-    const parts = [r.label || "(zonder label)", matBit, nrBit, levelLabel(r.level_hint), roomMetricsLabel(r)].filter(
-      Boolean,
-    );
+    const parts = [
+      r.label || "(zonder label)",
+      composedBit,
+      matBit,
+      oriBit,
+      levelLabel(r.level_hint),
+      roomMetricsLabel(r),
+    ].filter(Boolean);
+    const vgVrBadge = document.createElement("span");
+    vgVrBadge.className = hasVgVr ? "drawing-list-vgvr" : "drawing-list-vgvr drawing-list-vgvr--missing";
+    vgVrBadge.textContent = hasVgVr ? `VG ${r.vg_nr} · VR ${r.vr_nr}` : "geen VG/VR";
+    info.appendChild(vgVrBadge);
     if (allowSetSelect) {
       const led = document.createElement("span");
       led.className = "scale-calibrated-led";
       led.setAttribute("role", "status");
-      if (hasMaterial) {
+      if (ledGreen) {
         led.classList.add("is-on");
         led.title = "Materiaal gekoppeld";
         led.setAttribute("aria-label", "Materiaal gekoppeld");
       } else {
         led.classList.add("is-warn");
-        led.title = "Nog geen materiaal — koppel later voor vlakdelen";
-        led.setAttribute("aria-label", "Nog geen materiaal");
+        led.title = missingSources.length
+          ? `Samengesteld component blijft oranje tot bronnen materiaal hebben: ${missingSources.map((s) => s.label || "?").join(", ")}`
+          : "Nog geen materiaal — koppel later voor vlakdelen";
+        led.setAttribute(
+          "aria-label",
+          missingSources.length
+            ? "Nog oranje bronnen zonder materiaal"
+            : "Nog geen materiaal",
+        );
       }
       info.appendChild(led);
     }
@@ -2798,7 +3736,11 @@ function renderRoomListItem(
     labelSpan.className = "drawing-list-select-label";
     labelSpan.textContent = `${parts.join(" · ")}${gaBit}${linkBit}`;
     info.appendChild(labelSpan);
-    info.title = supersededIds.has(r.id)
+    info.title = missingSources.length
+      ? `Samengesteld component: eerst materiaal op bronnen (${missingSources.map((s) => s.label || "?").join(", ")})`
+      : boolOp === "compose" || boolOp === "difference"
+      ? "Samengesteld component (+/−) — netto uit geselecteerde delen"
+      : supersededIds.has(r.id)
       ? "Bron van een setbewerking met hetzelfde materiaal — vervangen door het netto-component"
       : booleanSourceIds.has(r.id)
         ? "Bron van een setbewerking met ander materiaal — blijft beschikbaar in de berekening (bijv. glas)"
@@ -2807,6 +3749,7 @@ function renderRoomListItem(
           : "Klik om geometrie te bewerken";
     info.addEventListener("click", () => editRoom(r));
     li.appendChild(info);
+
     const actions = document.createElement("span");
     actions.className = "drawing-list-actions";
 
@@ -2854,7 +3797,10 @@ function renderRoomListItem(
       !(r.analysis?.quantity_kind === "length" && r.analysis?.open_path) &&
       Array.isArray(r.points) &&
       r.points.length >= 3;
-    if (isClosedArea) {
+    const canDuplicate =
+      isClosedArea ||
+      (componentIsLengthQuantity(r) && Array.isArray(r.points) && r.points.length >= 2);
+    if (canDuplicate) {
       const dup = document.createElement("button");
       dup.type = "button";
       dup.className = "secondary";
@@ -2865,6 +3811,38 @@ function renderRoomListItem(
         void duplicateFromRoom(r, ev.shiftKey ? undefined : 1);
       });
       actions.appendChild(dup);
+    }
+
+    const canOfferKier =
+      allowSetSelect &&
+      ledGreen &&
+      !componentIsLengthQuantity(r) &&
+      !r.analysis?.seal_for_subsection_id &&
+      isClosedArea &&
+      !isOpenComponent(r) &&
+      !meta.nested;
+    if (canOfferKier) {
+      const seal = existingSealFor(r.id);
+      const wrap = document.createElement("label");
+      wrap.className = "drawing-list-kier";
+      wrap.title = seal
+        ? `Kierdichting gekoppeld (${seal.analysis?.catalog_id || DEFAULT_KIER_CATALOG_ID}). Uitvinken verwijdert dit lengtecomponent.`
+        : `Voeg kierdichting toe (standaard ${DEFAULT_KIER_CATALOG_ID}) met de omtreklengte van dit vlak. Lengtes van hetzelfde type worden opgeteld.`;
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "drawing-list-kier-cb";
+      cb.checked = Boolean(seal);
+      cb.addEventListener("click", (ev) => ev.stopPropagation());
+      cb.addEventListener("change", (ev) => {
+        ev.stopPropagation();
+        void toggleKierSealForRoom(r, cb.checked);
+      });
+      wrap.appendChild(cb);
+      const txt = document.createElement("span");
+      txt.textContent = `Kier ${seal?.analysis?.catalog_id || DEFAULT_KIER_CATALOG_ID}`;
+      wrap.appendChild(txt);
+      actions.appendChild(wrap);
+      void ensureKierMaterials();
     }
 
     const saveBtn = document.createElement("button");
@@ -2901,7 +3879,53 @@ function renderRoomListItem(
       void deleteRoom(r.id);
     });
     actions.appendChild(btn);
+
+    if (childRooms.length) {
+      const expanded = composeGroupExpanded(r.id, childRooms);
+      const editingChild = Boolean(
+        pendingRoom?.editingId && childRooms.some((k) => k.id === pendingRoom?.editingId),
+      );
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "secondary drawing-list-compose-toggle";
+      toggle.textContent = expanded
+        ? `▾ Bronnen (${childRooms.length})`
+        : `▸ Bronnen (${childRooms.length})`;
+      toggle.title = expanded
+        ? "Constituenten van dit samengestelde component inklappen"
+        : "Constituenten van dit samengestelde component tonen";
+      toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+      toggle.disabled = editingChild && expanded && !expandedComposeIds.has(r.id);
+      toggle.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        if (expandedComposeIds.has(r.id)) expandedComposeIds.delete(r.id);
+        else expandedComposeIds.add(r.id);
+        renderRoomList();
+      });
+      actions.insertBefore(toggle, actions.firstChild);
+    }
+
     li.appendChild(actions);
+
+    if (childRooms.length && composeGroupExpanded(r.id, childRooms)) {
+      const nested = document.createElement("ul");
+      nested.className = "drawing-list-children";
+      nested.setAttribute("aria-label", `Constituenten van ${r.label || "samengesteld component"}`);
+      for (const child of childRooms) {
+        const childIndex = allItems.findIndex((x) => x.id === child.id);
+        renderRoomListItem(nested, child, childIndex >= 0 ? childIndex : index, total, {
+          allowSetSelect,
+          booleanSourceIds,
+          supersededIds,
+          boolGroups,
+          allItems,
+          childRooms: [],
+          nested: true,
+        });
+      }
+      li.appendChild(nested);
+    }
+
     listEl.appendChild(li);
 }
 
@@ -2961,15 +3985,16 @@ async function ensureSectionInList(sectionId: string): Promise<boolean> {
 async function loadFloormapSections(bid: string): Promise<void> {
   if (!auth?.token) return;
   buildingId = bid.trim();
+  clearSectionThumbnailCachesForBuilding(buildingId);
   if (!buildingId) {
-    setStatus("Enter a building id", "err");
+    setStatus("Voer een project-id in", "err");
     return;
   }
   buildingInput.value = buildingId;
   if (gaLinkEl) {
     gaLinkEl.href = `/ga.html?building_id=${encodeURIComponent(buildingId)}`;
   }
-  setStatus("Loading sections…", "busy");
+  setStatus("Secties laden…", "busy");
   try {
     await refreshBuildingMeta();
     await refreshLinkedRooms();
@@ -2990,11 +4015,11 @@ async function loadFloormapSections(bid: string): Promise<void> {
     projectMenu?.rememberCurrent();
     projectMenu?.refreshTitle();
     void loadFavoriteMaterials();
-    setStatus(`${sections.length} section(s)`, "ok");
+    setStatus(`${sections.length} sectie(s)`, "ok");
     if (URL_SECTION && sections.some((s) => s.id === URL_SECTION)) {
       await openSection(URL_SECTION);
     } else if (URL_SECTION) {
-      setStatus("Section not found or not scalable — check engineer review link", "err");
+      setStatus("Sectie niet gevonden of niet schaalbaar — controleer de engineer-beoordelingslink", "err");
     }
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
@@ -3127,7 +4152,7 @@ async function openSection(sectionId: string): Promise<void> {
   const n = partNoun(sec.region_kind);
   syncWorkspaceLabels(sec.region_kind);
   sectionTitleEl.textContent = sec.label || n.title;
-  sectionMetaEl.textContent = `${n.kindLabel} · page ${sec.page_index + 1} · ${sec.document_id.slice(0, 8)}…`;
+  sectionMetaEl.textContent = `${n.kindLabel} · pagina ${sec.page_index + 1} · ${sec.document_id.slice(0, 8)}…`;
   pickerPanelEl.classList.add("hidden");
   workspacePanelEl.classList.remove("hidden");
   updateScaleUi();
@@ -3171,12 +4196,11 @@ async function loadCroppedPdf(sec: FloormapSection): Promise<void> {
     credentials: "include",
     headers: apiAuthHeaders(auth!.token),
   });
-  if (!res.ok) throw new Error(`Failed to load PDF (HTTP ${res.status})`);
+  if (!res.ok) throw new Error(`PDF laden mislukt (HTTP ${res.status})`);
   const buf = await res.arrayBuffer();
   const pdfjsLib = window.pdfjsLib;
   if (!pdfjsLib) throw new Error("PDF.js not loaded");
-  pdfjsLib.GlobalWorkerOptions.workerSrc =
-    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  ensurePdfjsWorker();
   pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
   const pageNum = Math.min(pdfDoc.numPages, Math.max(1, sec.page_index + 1));
   const page = await pdfDoc.getPage(pageNum);
@@ -3251,7 +4275,7 @@ async function tryDetectPdfScale(sec: FloormapSection): Promise<void> {
     activeSection = sec;
     const idx = sections.findIndex((s) => s.id === sec.id);
     if (idx >= 0) sections[idx] = sec;
-    calibrateHintEl.textContent = `Detected paper scale 1:${found} from PDF text.`;
+    calibrateHintEl.textContent = `Gedetecteerde papierschaal 1:${found} uit PDF-tekst.`;
   } catch {
     /* optional */
   }
@@ -3305,6 +4329,14 @@ function canvasToNorm(cx: number, cy: number): Pt {
   };
 }
 
+/** Pointer in section-norm space without clamping — used for drag deltas so the shape stays rigid. */
+function canvasToNormUnclamped(cx: number, cy: number): Pt {
+  return {
+    x: cx / Math.max(1, canvasWidth),
+    y: cy / Math.max(1, canvasHeight),
+  };
+}
+
 function normToCanvas(p: Pt): { x: number; y: number } {
   return { x: p.x * canvasWidth, y: p.y * canvasHeight };
 }
@@ -3323,10 +4355,19 @@ function drawPolyline(
   stroke: string,
   fill: string,
   lineWidth: number,
-  opts?: { vertexHandles?: boolean; dash?: number[]; label?: string; holes?: Pt[][] },
+  opts?: {
+    vertexHandles?: boolean;
+    dash?: number[];
+    label?: string;
+    holes?: Pt[][];
+    open?: boolean;
+    strokeOnly?: boolean;
+  },
 ): void {
   if (points.length < 2) return;
   const holes = (opts?.holes || []).filter((h) => h.length >= 3);
+  const open = Boolean(opts?.open);
+  const strokeOnly = Boolean(opts?.strokeOnly) || !fill;
   ctx.beginPath();
   const first = normToCanvas(points[0]);
   ctx.moveTo(first.x, first.y);
@@ -3334,7 +4375,7 @@ function drawPolyline(
     const p = normToCanvas(points[i]);
     ctx.lineTo(p.x, p.y);
   }
-  ctx.closePath();
+  if (!open) ctx.closePath();
   for (const hole of holes) {
     const h0 = normToCanvas(hole[0]);
     ctx.moveTo(h0.x, h0.y);
@@ -3344,7 +4385,7 @@ function drawPolyline(
     }
     ctx.closePath();
   }
-  if (fill) {
+  if (fill && !strokeOnly) {
     ctx.fillStyle = fill;
     ctx.fill(holes.length ? "evenodd" : "nonzero");
   }
@@ -3395,12 +4436,19 @@ function drawOverlay(): void {
       ? r.analysis!.holes!.map((h) => coerceRingPoints(h)).filter((h) => h.length >= 3)
       : [];
     const stroke = selected ? "#1565c0" : touched ? "#00838f" : "#6a1b9a";
-    const fill = selected
-      ? "rgba(21,101,192,0.18)"
-      : touched
-        ? "rgba(0,131,143,0.16)"
-        : "rgba(106,27,154,0.12)";
-    drawPolyline(ctx, r.points, stroke, fill, selected ? 2.2 : touched ? 1.8 : 1.5, holes.length ? { holes } : undefined);
+    const lengthComp = componentIsLengthQuantity(r);
+    const fill = lengthComp
+      ? ""
+      : selected
+        ? "rgba(21,101,192,0.18)"
+        : touched
+          ? "rgba(0,131,143,0.16)"
+          : "rgba(106,27,154,0.12)";
+    drawPolyline(ctx, r.points, stroke, fill, selected ? 2.6 : touched ? 2.2 : 2, {
+      holes: lengthComp ? undefined : holes.length ? holes : undefined,
+      open: Boolean(r.analysis?.open_path) || (lengthComp && r.points.length < 3),
+      strokeOnly: lengthComp,
+    });
   }
 
   if (booleanPreview && booleanPreview.outer.length >= 3) {
@@ -3428,21 +4476,24 @@ function drawOverlay(): void {
       drawPolyline(ctx, discovery.current, "#c62828", "rgba(198,40,40,0.12)", 2.5, {
         dash: [8, 4],
         vertexHandles: true,
-        label: `Candidate ${discovery.index + 1}`,
+        label: `Kandidaat ${discovery.index + 1}`,
       });
     }
   }
 
   if (pendingRoom?.points.length) {
+    const lengthEdit = pendingIsLengthComponent();
     drawPolyline(
       ctx,
       pendingRoom.points,
       "#2e7d32",
-      pendingRoom.closed ? "rgba(46,125,50,0.18)" : "rgba(46,125,50,0.08)",
-      2,
+      lengthEdit || !pendingRoom.closed ? "" : "rgba(46,125,50,0.18)",
+      lengthEdit ? 2.8 : 2,
       {
         vertexHandles: pendingRoom.closed || pendingRoom.points.length >= 2,
-        holes: pendingRoom.holes,
+        holes: lengthEdit ? undefined : pendingRoom.holes,
+        open: !pendingRoom.closed,
+        strokeOnly: lengthEdit || !pendingRoom.closed,
       },
     );
     if (!pendingRoom.closed && pendingRoom.points.length >= 1) {
@@ -3522,15 +4573,34 @@ function seedStarterRoom(): Pt[] {
 
 function scrollToRing(points: Pt[]): void {
   if (!points.length || canvasWidth <= 0 || canvasHeight <= 0) return;
-  const xs = points.map((p) => p.x);
-  const ys = points.map((p) => p.y);
-  const midX = ((Math.min(...xs) + Math.max(...xs)) / 2) * canvasWidth - pdfScrollEl.clientWidth / 2;
-  const midY = ((Math.min(...ys) + Math.max(...ys)) / 2) * canvasHeight - pdfScrollEl.clientHeight / 2;
-  pdfScrollEl.scrollTo({
-    top: Math.max(0, midY),
-    left: Math.max(0, midX),
-    behavior: "auto",
-  });
+  const xs = points.map((p) => p.x * canvasWidth);
+  const ys = points.map((p) => p.y * canvasHeight);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const viewL = pdfScrollEl.scrollLeft;
+  const viewT = pdfScrollEl.scrollTop;
+  const viewW = pdfScrollEl.clientWidth;
+  const viewH = pdfScrollEl.clientHeight;
+  const viewR = viewL + viewW;
+  const viewB = viewT + viewH;
+  const pad = 32;
+  const visible =
+    maxX >= viewL + pad &&
+    minX <= viewR - pad &&
+    maxY >= viewT + pad &&
+    minY <= viewB - pad;
+  if (visible) return;
+  let left = viewL;
+  let top = viewT;
+  if (minX < viewL + pad) left = Math.max(0, minX - pad);
+  else if (maxX > viewR - pad) left = Math.max(0, maxX - viewW + pad);
+  if (minY < viewT + pad) top = Math.max(0, minY - pad);
+  else if (maxY > viewB - pad) top = Math.max(0, maxY - viewH + pad);
+  if (left !== viewL || top !== viewT) {
+    pdfScrollEl.scrollTo({ top, left, behavior: "auto" });
+  }
 }
 
 function normalizeNormRect(a: Pt, b: Pt): NormRect {
@@ -3636,7 +4706,7 @@ async function endDetail(msg?: string): Promise<void> {
 async function beginDetailPick(): Promise<void> {
   endCalibrate();
   if (discovery) {
-    setStatus("Finish or cancel discovery before detail zoom", "err");
+    setStatus("Rond ontdekken eerst af of annuleer vóór detailzoom", "err");
     return;
   }
   // Always start marking from overview (1× / passend) — leftover 2–4× zoom blocks region pick.
@@ -3747,8 +4817,8 @@ function showDiscoveryCandidate(): void {
   if (i >= total) {
     endDiscovery(
       total === 0
-        ? "Discovery finished"
-        : `Discovery finished — reviewed ${total} candidate(s)`,
+        ? "Ontdekken afgerond"
+        : `Ontdekken afgerond — ${total} kandidaat(en) beoordeeld`,
     );
     return;
   }
@@ -3758,9 +4828,9 @@ function showDiscoveryCandidate(): void {
   );
   discovery.candidates[i] = discovery.current;
   discovery.dragVertex = null;
-  discoveryProgressEl.textContent = `(${i + 1} of ${total})`;
+  discoveryProgressEl.textContent = `(${i + 1} van ${total})`;
   discoveryHintEl.textContent =
-    "Drag anchors to follow walls. Double-click an anchor to remove it, or Simplify to thin the polyline.";
+    "Sleep ankers langs de muren. Dubbelklik een anker om te verwijderen, of Vereenvoudigen om de polylijn te dunnen.";
   discoveryLabelInput.value = `${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} ${rooms.length + 1}`;
   discoveryDockEl.classList.remove("hidden");
   document.body.classList.add("discovery-active");
@@ -3773,7 +4843,7 @@ function showDiscoveryCandidate(): void {
 
 async function startDiscovery(): Promise<void> {
   if (!cropBitmap || !activeSection) {
-    setStatus(`Open a ${activePartNoun().title.toLowerCase()} first`, "err");
+    setStatus(`Open eerst een ${activePartNoun().title.toLowerCase()}`, "err");
     return;
   }
   endCalibrate();
@@ -3782,14 +4852,14 @@ async function startDiscovery(): Promise<void> {
   if (measure.tool !== "off") clearMeasure(false);
   discoverBtn.disabled = true;
   if (discoverBtnSide) discoverBtnSide.disabled = true;
-  setStatus(`Discovering ${activePartNoun().plural}…`, "busy");
+  setStatus(`${activePartNoun().plural.charAt(0).toUpperCase() + activePartNoun().plural.slice(1)} ontdekken…`, "busy");
   // Sample from an offscreen copy — never getImageData on the live view canvas.
   const sample = document.createElement("canvas");
   sample.width = cropBitmap.width;
   sample.height = cropBitmap.height;
   const sampleCtx = sample.getContext("2d", { willReadFrequently: true } as CanvasRenderingContext2DSettings);
   if (!sampleCtx) {
-    setStatus("Cannot read drawing image", "err");
+    setStatus("Tekeningbeeld kan niet worden gelezen", "err");
     discoverBtn.disabled = false;
     if (discoverBtnSide) discoverBtnSide.disabled = false;
     return;
@@ -3800,7 +4870,7 @@ async function startDiscovery(): Promise<void> {
   try {
     found = discoverRoomPolylines(img);
   } catch (err) {
-    setStatus(err instanceof Error ? err.message : "Discovery failed", "err");
+    setStatus(err instanceof Error ? err.message : "Ontdekken mislukt", "err");
     discoverBtn.disabled = false;
     if (discoverBtnSide) discoverBtnSide.disabled = false;
     return;
@@ -3822,8 +4892,8 @@ async function startDiscovery(): Promise<void> {
   showDiscoveryCandidate();
   setStatus(
     seeded
-      ? "No auto rooms found — adjust the red starter outline to fit a room, then Accept"
-      : `${norms.length} room candidate(s) — drag the red dashed outline to fit, then Accept / Skip`,
+      ? "Geen ruimten automatisch gevonden — pas de rode startomtrek aan op een ruimte, daarna Accepteren"
+      : `${norms.length} ruimte-kandidaat(en) — sleep de rode stippellijn passend, daarna Accepteren / Overslaan`,
     seeded ? "busy" : "ok",
   );
   discoverBtn.disabled = false;
@@ -3844,7 +4914,7 @@ async function acceptDiscovery(): Promise<void> {
       nums = parseVgVrInputs();
     }
     if (nums.error || nums.vg_nr == null || nums.vr_nr == null) {
-      setStatus(nums.error || "Vul VG- en VR-nummer in (zijbalk) vóór Accept", "err");
+      setStatus(nums.error || "Vul VG- en VR-nummer in (zijbalk) vóór Accepteren", "err");
       return;
     }
     discoveryAcceptBtn.disabled = true;
@@ -3918,7 +4988,7 @@ function removeVertexFromActiveOutline(index: number): boolean {
   if (discovery?.current) {
     const next = removeRingVertex(discovery.current, index);
     if (!next) {
-      setStatus("Need at least 3 anchors", "err");
+      setStatus("Minstens 3 ankers nodig", "err");
       return false;
     }
     discovery.current = next;
@@ -3926,13 +4996,13 @@ function removeVertexFromActiveOutline(index: number): boolean {
     discovery.dragVertex = null;
     updateMeasureReadouts();
     drawOverlay();
-    setStatus(`Removed anchor (${ringVertexCount(next)} left)`, "ok");
+    setStatus(`Anker verwijderd (${ringVertexCount(next)} over)`, "ok");
     return true;
   }
   if (pendingRoom?.closed) {
     const next = removeRingVertex(pendingRoom.points, index);
     if (!next) {
-      setStatus("Need at least 3 anchors", "err");
+      setStatus("Minstens 3 ankers nodig", "err");
       return false;
     }
     pendingRoom.points = next;
@@ -3941,7 +5011,7 @@ function removeVertexFromActiveOutline(index: number): boolean {
     updateMeasureReadouts();
     scheduleRoomListRefresh();
     drawOverlay();
-    setStatus(`Removed anchor (${ringVertexCount(next)} left)`, "ok");
+    setStatus(`Anker verwijderd (${ringVertexCount(next)} over)`, "ok");
     return true;
   }
   return false;
@@ -3957,7 +5027,7 @@ function simplifyActiveOutline(): void {
     updateMeasureReadouts();
     drawOverlay();
     setStatus(
-      after < before ? `Simplified ${before} → ${after} anchors` : "Outline already simple",
+      after < before ? `Vereenvoudigd ${before} → ${after} ankers` : "Omtrek is al eenvoudig",
       "ok",
     );
     return;
@@ -3972,7 +5042,7 @@ function simplifyActiveOutline(): void {
     scheduleRoomListRefresh();
     drawOverlay();
     setStatus(
-      after < before ? `Simplified ${before} → ${after} anchors` : "Outline already simple",
+      after < before ? `Vereenvoudigd ${before} → ${after} ankers` : "Omtrek is al eenvoudig",
       "ok",
     );
   }
@@ -4010,14 +5080,14 @@ function startCalibrate(): void {
   void endDetail();
   if (measure.tool !== "off") clearMeasure(false);
   if (calibrate) {
-    endCalibrate("Calibration cancelled");
+    endCalibrate("Kalibratie geannuleerd");
     return;
   }
   calibrate = { points: [] };
   calibrateMetresWrap.classList.add("hidden");
-  calibrateHintEl.textContent = "Click both ends of a known length on the floormap.";
-  calibrateBtn.textContent = "Cancel calibrate";
-  setStatus("Click first scale point", "busy");
+  calibrateHintEl.textContent = "Klik beide uiteinden van een bekende lengte op de plattegrond.";
+  calibrateBtn.textContent = "Kalibratie annuleren";
+  setStatus("Klik eerste schaalpunt", "busy");
   drawOverlay();
 }
 
@@ -4025,8 +5095,8 @@ function repickCalibrate(): void {
   if (!calibrate) return;
   calibrate = { points: [] };
   calibrateMetresWrap.classList.add("hidden");
-  calibrateHintEl.textContent = "Click both ends of a known length on the floormap.";
-  setStatus("Click first scale point", "busy");
+  calibrateHintEl.textContent = "Klik beide uiteinden van een bekende lengte op de plattegrond.";
+  setStatus("Klik eerste schaalpunt", "busy");
   drawOverlay();
 }
 
@@ -4034,7 +5104,7 @@ async function finishCalibrate(): Promise<void> {
   if (!calibrate || calibrate.points.length < 2 || !activeSection) return;
   const mm = Number(calibrateMetresInput.value);
   if (!(mm > 0)) {
-    setStatus("Enter a positive length in millimetres", "err");
+    setStatus("Voer een positieve lengte in millimeters in", "err");
     return;
   }
   const a = calibrate.points[0];
@@ -4042,7 +5112,7 @@ async function finishCalibrate(): Promise<void> {
   const aspect = activeScaleAspect();
   const mpu = metresPerNormFromCalibration(mm / 1000, a, b, aspect);
   if (!(mpu > 0) || !Number.isFinite(mpu)) {
-    setStatus("Calibration points too close", "err");
+    setStatus("Kalibratiepunten te dicht bij elkaar", "err");
     return;
   }
   try {
@@ -4058,7 +5128,7 @@ async function finishCalibrate(): Promise<void> {
     activeSection.scale_source = "CALIBRATED";
     const idx = sections.findIndex((s) => s.id === activeSection!.id);
     if (idx >= 0) sections[idx] = activeSection;
-    endCalibrate(`Scale saved: marked line = ${mm} mm`);
+    endCalibrate(`Schaal opgeslagen: gemarkeerde lijn = ${mm} mm`);
     updateMeasureReadouts();
     updateToolHint();
     await loadRooms();
@@ -4172,6 +5242,41 @@ function vertexHandleRadiusPx(): number {
   return detail ? 5 : 2;
 }
 
+function polylineHitRadiusPx(): number {
+  return detail ? 18 : 12;
+}
+
+function dist2PointToSegment(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): number {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const apx = px - ax;
+  const apy = py - ay;
+  const ab2 = abx * abx + aby * aby;
+  const t = ab2 > 1e-12 ? Math.min(1, Math.max(0, (apx * abx + apy * aby) / ab2)) : 0;
+  const dx = apx - abx * t;
+  const dy = apy - aby * t;
+  return dx * dx + dy * dy;
+}
+
+function hitNearPolyline(norm: Pt, points: Pt[], maxPx: number): boolean {
+  if (points.length < 2) return false;
+  const p = normToCanvas(norm);
+  const max2 = maxPx * maxPx;
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = normToCanvas(points[i]);
+    const b = normToCanvas(points[i + 1]);
+    if (dist2PointToSegment(p.x, p.y, a.x, a.y, b.x, b.y) <= max2) return true;
+  }
+  return false;
+}
+
 /** Ray-cast point-in-polygon for a (possibly closed) ring. */
 function pointInRing(pt: Pt, points: Pt[]): boolean {
   const n =
@@ -4210,13 +5315,13 @@ overlayCanvas.addEventListener("mousedown", (ev) => {
     calibrate.points.push(norm);
     drawOverlay();
     if (calibrate.points.length === 1) {
-      setStatus("Click second scale point", "busy");
-      calibrateHintEl.textContent = "Click the other end of the known length.";
+      setStatus("Klik tweede schaalpunt", "busy");
+      calibrateHintEl.textContent = "Klik het andere uiteinde van de bekende lengte.";
     } else if (calibrate.points.length >= 2) {
       calibrateMetresWrap.classList.remove("hidden");
       calibrateHintEl.textContent =
-        "Enter the real length in millimetres, then Apply (or press Enter).";
-      setStatus("Enter length in mm, then Apply", "ok");
+        "Voer de werkelijke lengte in millimeters in, daarna Toepassen (of druk Enter).";
+      setStatus("Voer lengte in mm in, daarna Toepassen", "ok");
       queueMicrotask(() => {
         calibrateMetresInput.focus();
         calibrateMetresInput.select();
@@ -4241,13 +5346,13 @@ overlayCanvas.addEventListener("mousedown", (ev) => {
     return;
   }
 
-  if (pendingRoom?.closed) {
+  if (pendingRoom && !pendingRoom.drawing) {
     // Prefer corner grab over body-drag; larger hit target in detail-zoom.
     const vertexHitPx = vertexHitRadiusPx();
     const vi = hitVertex(norm, pendingRoom.points, vertexHitPx);
     if (vi >= 0) {
       ev.preventDefault();
-      if (ev.detail === 2) {
+      if (ev.detail === 2 && pendingRoom.closed) {
         removeVertexFromActiveOutline(vi);
         return;
       }
@@ -4256,10 +5361,11 @@ overlayCanvas.addEventListener("mousedown", (ev) => {
       overlayCanvas.style.cursor = "grabbing";
       return;
     }
-    const inside = pointInRing(norm, pendingRoom.points);
-    if (inside) {
+    const nearLine = hitNearPolyline(norm, pendingRoom.points, polylineHitRadiusPx());
+    const inside = pendingRoom.closed && pointInRing(norm, pendingRoom.points);
+    if (nearLine || inside) {
       ev.preventDefault();
-      pendingRoom.dragBodyLast = { ...norm };
+      pendingRoom.dragBodyLast = canvasToNormUnclamped(c.x, c.y);
       pendingRoom.dragVertex = null;
       overlayCanvas.style.cursor = "grabbing";
       return;
@@ -4268,7 +5374,7 @@ overlayCanvas.addEventListener("mousedown", (ev) => {
 
   if (measure.tool === "length") {
     if (!activeScaleMpu()) {
-      setStatus("Set scale first", "err");
+      setStatus("Zet eerst de schaal", "err");
       return;
     }
     if (measure.points.length >= 2) {
@@ -4397,11 +5503,11 @@ window.addEventListener("mousemove", (ev) => {
   }
   if (!overlayCanvas.isConnected) return;
   const c = eventToCanvas(ev);
-  const norm = canvasToNorm(c.x, c.y);
+  const norm = canvasToNormUnclamped(c.x, c.y);
 
   if (pendingRoom?.dragVertex != null) {
     const i = pendingRoom.dragVertex;
-    pendingRoom.points[i] = norm;
+    pendingRoom.points[i] = { x: norm.x, y: norm.y };
     if (i === 0 && pendingRoom.closed) {
       pendingRoom.points[pendingRoom.points.length - 1] = { ...norm };
     }
@@ -4411,13 +5517,17 @@ window.addEventListener("mousemove", (ev) => {
     return;
   }
 
-  if (pendingRoom?.dragBodyLast && pendingRoom.closed) {
+  if (pendingRoom?.dragBodyLast) {
     const dx = norm.x - pendingRoom.dragBodyLast.x;
     const dy = norm.y - pendingRoom.dragBodyLast.y;
     if (Math.hypot(dx, dy) > 1e-9) {
-      pendingRoom.points = translateRing(pendingRoom.points, dx, dy);
-      if (pendingRoom.holes?.length) {
-        pendingRoom.holes = pendingRoom.holes.map((h) => translateRing(h, dx, dy));
+      if (pendingRoom.closed) {
+        pendingRoom.points = translateRing(pendingRoom.points, dx, dy);
+        if (pendingRoom.holes?.length && !pendingIsLengthComponent()) {
+          pendingRoom.holes = pendingRoom.holes.map((h) => translateRing(h, dx, dy));
+        }
+      } else {
+        pendingRoom.points = pendingRoom.points.map((p) => ({ x: p.x + dx, y: p.y + dy }));
       }
       pendingRoom.dragBodyLast = { ...norm };
       updateMeasureReadouts();
@@ -4444,9 +5554,9 @@ loginForm.addEventListener("submit", (ev) => {
   const password = String(fd.get("password") || "");
   void (async () => {
     try {
-      setStatus("Signing in…", "busy");
+      setStatus("Inloggen…", "busy");
       await bootstrapAndLogin(username, password);
-      setStatus("Signed in", "ok");
+      setStatus("Ingelogd", "ok");
       if (buildingId) await loadFloormapSections(buildingId);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : String(err), "err");
@@ -4457,7 +5567,7 @@ loginForm.addEventListener("submit", (ev) => {
 
 logoutBtn.addEventListener("click", () => {
   showLogin();
-  setStatus("Signed out", "ok");
+  setStatus("Uitgelogd", "ok");
 });
 
 loadBuildingBtn.addEventListener("click", () => {
@@ -4476,6 +5586,10 @@ setClearSelBtn?.addEventListener("click", () => {
   renderRoomList();
   drawOverlay();
   setStatus("Selectie gewist", "ok");
+});
+roomVrFilterEl?.addEventListener("change", () => {
+  roomListVrFilter = roomVrFilterEl.value;
+  renderRoomList();
 });
 materialCategoryEl?.addEventListener("change", () => {
   if (materialFilterEl) materialFilterEl.value = "";
@@ -4497,7 +5611,9 @@ materialFavoriteEl?.addEventListener("change", () => {
     syncFavoriteButtons();
     return;
   }
-  void selectMaterialById(id, true);
+  void selectMaterialById(id, true).catch((err) =>
+    setStatus(err instanceof Error ? err.message : String(err), "err"),
+  );
 });
 favoriteAddBtn?.addEventListener("click", () => {
   const id = (materialIdEl?.value || "").trim();
@@ -4751,7 +5867,40 @@ async function restoreAfterCatalogReturn(): Promise<void> {
     if (roomLevelSelect && draft.level) roomLevelSelect.value = draft.level;
   }
 
-  if (pick?.material_id && pick.master_category && !isFloormapKind()) {
+  const pickIsKier = Boolean(
+    pick?.master_category && isLengthQuantityRubriek(pick.master_category),
+  );
+  const wantKierSuggest =
+    Boolean(pickIsKier && pendingRoom?.closed && !isFloormapKind()) ||
+    sessionStorage.getItem("app-gevelwering-kier-suggest-new") === "1";
+  sessionStorage.removeItem("app-gevelwering-kier-suggest-new");
+
+  if (pick?.material_id && wantKierSuggest && !isFloormapKind()) {
+    if (kierSuggestCb) {
+      kierSuggestCb.checked = true;
+      kierSuggestCb.dataset.userTouched = "1";
+    }
+    await ensureKierMaterials();
+    if (!kierMaterials.some((m) => m.material_id === pick.material_id)) {
+      kierMaterials = [
+        {
+          material_id: pick.material_id,
+          catalog_id: pick.catalog_id || "",
+          material_no: 0,
+          master_category: pick.master_category,
+          name: pick.name || pick.material_id,
+          category: pick.category || "",
+          thickness_mm: null,
+          ra_dba: null,
+        },
+        ...kierMaterials,
+      ];
+    }
+    renderKierMaterialOptions(pick.material_id);
+    syncKierSuggestUi();
+    const label = (pick.name || pick.catalog_id || pick.material_id).trim();
+    setStatus(`Kierdichting «${label}» gekozen — sla het vlak op om de omtrek toe te voegen`, "ok");
+  } else if (pick?.material_id && pick.master_category && !isFloormapKind()) {
     await applyMaterialSelectionFromAnalysis({
       material_id: pick.material_id,
       master_category: pick.master_category,
@@ -4832,6 +5981,15 @@ customMatToggleBtn?.addEventListener("click", () => {
   openMaterialCatalogEditor({ newMaterial: true });
 });
 
+kierSuggestCb?.addEventListener("change", () => {
+  if (kierSuggestCb) kierSuggestCb.dataset.userTouched = "1";
+  syncKierSuggestUi();
+});
+kierSuggestNewBtn?.addEventListener("click", () => {
+  sessionStorage.setItem("app-gevelwering-kier-suggest-new", "1");
+  openMaterialCatalogEditor({ newMaterial: true });
+});
+
 function updateMaterialQuantityHint(): void {
   const hint = materialBlockEl?.querySelector(".hint:last-of-type") || materialBlockEl?.querySelector(".hint");
   if (!(hint instanceof HTMLElement)) return;
@@ -4904,6 +6062,12 @@ roomDrawBtn.addEventListener("click", () => startDrawRoom());
 roomCloseBtn.addEventListener("click", () => closePendingPolygon());
 roomSimplifyBtn?.addEventListener("click", () => simplifyActiveOutline());
 roomSaveBtn.addEventListener("click", () => void savePendingRoom());
+expectedOriRowEl?.addEventListener("change", (ev) => {
+  const t = ev.target as HTMLElement | null;
+  if (t instanceof HTMLInputElement && t.type === "checkbox") {
+    syncOriCorrRows();
+  }
+});
 roomDuplicateBtn?.addEventListener("click", () => {
   void duplicateFromPending();
 });
@@ -4923,11 +6087,11 @@ document.querySelectorAll<HTMLButtonElement>(".tool-mode-btn").forEach((btn) => 
 toolClearBtn?.addEventListener("click", () => {
   if (pendingRoom) {
     clearPendingRoom();
-    setStatus("Room mark cleared", "ok");
+    setStatus("Markering gewist", "ok");
     return;
   }
   clearMeasure(true);
-  setStatus("Measure cleared", "ok");
+  setStatus("Meting gewist", "ok");
 });
 
 (() => {
@@ -4980,16 +6144,16 @@ window.addEventListener("keydown", (evt) => {
   }
   if (pendingRoom) {
     clearPendingRoom();
-    setStatus("Room mark cleared", "ok");
+    setStatus("Markering gewist", "ok");
   } else if (measure.tool !== "off") {
     clearMeasure(true);
-    setStatus("Measure cleared", "ok");
+    setStatus("Meting gewist", "ok");
   }
 });
 
 discoveryAcceptBtn.addEventListener("click", () => void acceptDiscovery());
 discoverySkipBtn.addEventListener("click", () => skipDiscovery());
-discoveryCancelBtn.addEventListener("click", () => endDiscovery("Discovery cancelled"));
+discoveryCancelBtn.addEventListener("click", () => endDiscovery("Ontdekken geannuleerd"));
 discoverySimplifyBtn?.addEventListener("click", () => simplifyActiveOutline());
 nudgeLeftBtn.addEventListener("click", () => nudgeCurrent(-0.01, 0));
 nudgeRightBtn.addEventListener("click", () => nudgeCurrent(0.01, 0));
@@ -5004,7 +6168,7 @@ syncPendingRoomButtons();
 syncFavoriteButtons();
 
 function connect(): void {
-  setStatus("Connecting…", "busy");
+  setStatus("Verbinden…", "busy");
   setConnLed(false);
   ws = new WebSocket(BPP_WS);
   ws.addEventListener("open", () => {
@@ -5018,16 +6182,16 @@ function connect(): void {
           const ret = await invokeString("API_ValidateSession", [stored.token]);
           if (ret.startsWith("ERROR")) {
             showLogin();
-            setStatus("Session expired — sign in", "err");
+            setStatus("Sessie verlopen — log in", "err");
             return;
           }
           showPanel(stored);
-          setStatus("Ready", "ok");
+          setStatus("Gereed", "ok");
           buildingInput.value = buildingId;
           if (buildingId) await loadFloormapSections(buildingId);
         } else {
           showLogin();
-          setStatus("Connected — sign in", "ok");
+          setStatus("Verbonden — log in", "ok");
         }
       } catch (err) {
         setStatus(err instanceof Error ? err.message : String(err), "err");
@@ -5038,9 +6202,9 @@ function connect(): void {
   ws.addEventListener("message", (ev) => onMessage(String(ev.data)));
   ws.addEventListener("close", () => {
     setConnLed(false);
-    setStatus("Disconnected", "err");
+    setStatus("Verbinding verbroken", "err");
   });
-  ws.addEventListener("error", () => setStatus("WebSocket error", "err"));
+  ws.addEventListener("error", () => setStatus("WebSocket-fout", "err"));
 }
 
 buildingInput.value = buildingId;
@@ -5081,7 +6245,7 @@ if (fileMenuRoot) {
     onStatus: (state, text) => setStatus(text, state),
     setTitle: (title) => {
       document.title =
-        title === "Geen project" ? "Geluidwering Gevels — Drawing analysis" : `${title} — Plattegrond`;
+        title === "Geen project" ? "Geluidwering Gevels — Tekeninganalyse" : `${title} — Plattegrond`;
     },
   });
   fileMenuRoot.hidden = true;

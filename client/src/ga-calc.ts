@@ -6,11 +6,12 @@
  *   RAs_i = RA_i + 10·log10(S / Q_i)     Q = m² of m (kier)
  *   R'    = −10·log10(Σ 10^(−RAs_i/10))
  *   Ruimte = 10·log10(V / (6·T·S))
- *   D2m,nT = R' + Cg + Ruimte + CL
+ *   D2m,nT = R' + Ruimte                   (geen CL/Cg op component- of GA-niveau)
  *   GA     = D2m,nT − Cr                  Cr = 3 dB (reflectie, vast)
  *   Lbi    = Lb − GA
- *   GA;k   = GA − 10·log10(max(V/Stot, 3) / (6·T))
+ *   GA;k   = GA − 10·log10(max(V/Stot, 3) / (6·T)) + CL + Cg
  *            Stot = som S van vlakken met meenemen_gak (lengte telt niet mee)
+ *            CL/Cg = VR-correcties (van dominante geveloppervlak), alleen op GA;k
  *   Lbi;k  = Lb − GA;k   (karakteristiek binnenniveau)
  *   Toets  = Lbi;k ≤ grens (gebruiksfunctie) → Voldoet
  *
@@ -257,11 +258,12 @@ export function computeVrGa(input: GaVrInput): GaVrResult {
     };
   }
 
-  const d2m = rPrime + cg + ruimte + cl;
+  // CL/Cg do not enter RAs, D2m or GA — only the final GA;k.
+  const d2m = rPrime + ruimte;
   const ga = d2m - Cr;
   const lbi = Number.isFinite(Lb) ? Lb - ga : null;
   const gakCorr = stot > 0 ? gakCorrectionDb(V, T, stot) : null;
-  const gak = gakCorr != null ? ga - gakCorr : null;
+  const gak = gakCorr != null ? ga - gakCorr + cl + cg : null;
   const gakRequired = Number.isFinite(Lb) ? Lb - grens : null;
   const lbik = gak != null && Number.isFinite(Lb) ? Lb - gak : null;
   const voldoet = lbik != null ? lbik <= grens : null;
@@ -287,4 +289,34 @@ export function computeVrGa(input: GaVrInput): GaVrResult {
     grenswaarde_lbik_db: grens,
     voldoet,
   };
+}
+
+/**
+ * Minimum RA increase (dB) on one element so combined R' rises by at least `needDeltaR`.
+ * Returns 0 if need ≤ 0; null if this element alone cannot close the gap.
+ */
+export function minRaDeltaForRprime(
+  elements: Array<{ ras: number | null }>,
+  elementIndex: number,
+  needDeltaR: number,
+): number | null {
+  if (!(needDeltaR > 0)) return 0;
+  const rasList = elements.map((e) => e.ras).filter((x): x is number => x != null && Number.isFinite(x));
+  if (rasList.length !== elements.length) return null;
+  const targetRas = elements[elementIndex]?.ras;
+  if (targetRas == null || !Number.isFinite(targetRas)) return null;
+  const oldSum = rasList.reduce((a, r) => a + 10 ** (-r / 10), 0);
+  if (!(oldSum > 0)) return null;
+  const oldRp = -10 * Math.log10(oldSum);
+  const targetRp = oldRp + needDeltaR;
+  const tauI = 10 ** (-targetRas / 10);
+  const rest = oldSum - tauI;
+  const maxSum = 10 ** (-targetRp / 10);
+  if (!(maxSum > rest)) return null;
+  const maxTauI = maxSum - rest;
+  if (!(maxTauI > 0)) return null;
+  const neededRas = -10 * Math.log10(maxTauI);
+  const delta = neededRas - targetRas;
+  if (!(delta > 0)) return 0;
+  return Math.ceil(delta * 10) / 10;
 }

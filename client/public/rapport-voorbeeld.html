@@ -230,7 +230,7 @@
         <h1>Gevelwering nieuwbouw woning</h1>
         <p class="werknummer">Werknummer: <span class="missing">— (external_ref)</span> · <span class="badge">Concept</span></p>
       </div>
-      <img class="logo" src="/assets/stilte-logo.jpg" alt="Stilte" />
+      <img class="logo" src="/assets/stilte-logo.jpg" alt="Stilte advies en meten" />
     </header>
 
     <dl class="meta">
@@ -349,6 +349,7 @@
         <div class="row"><span class="lab">Vertrekhoogte</span><span class="val">2,60</span><span class="unit">m</span></div>
         <div class="row"><span class="lab">Volume</span><span class="val">31,38</span><span class="unit">m³</span></div>
         <div class="row"><span class="lab">Nagalmtijd T₀</span><span class="val">0,50</span><span class="unit">s</span></div>
+        <div class="row"><span class="lab">Geveloriëntaties (VR)</span><span class="val">ZW, N</span><span class="unit"></span></div>
       </div>
       <div>
         <div class="row"><span class="lab">Max. geluidsbelasting</span><span class="val">61,0</span><span class="unit">dB</span></div>
@@ -360,36 +361,84 @@
       </div>
     </div>
 
-    <p class="vlak-head">Vlakken (samenvatting huidig model)</p>
-    <p class="corr">CL = 0,0 dB · Cg = 0,0 dB (zoals in GA-model; per vlak overschrijfbaar)</p>
+    <p class="vlak-head">Vlakken / materialen</p>
+    <p class="corr">CL = 0,0 dB · Cg = 0,0 dB (maatgevend via grootste geveloppervlak → GA;k) · oriëntaties op VR-niveau</p>
     <table>
       <thead>
         <tr>
           <th>Omschrijving</th>
+          <th>Materiaal</th>
           <th class="num">S [m²]</th>
+          <th class="num">RA</th>
+          <th class="num">Rw</th>
+          <th class="num">63</th>
+          <th class="num">125</th>
+          <th class="num">250</th>
+          <th class="num">500</th>
+          <th class="num">1k</th>
+          <th class="num">2k</th>
+          <th class="num">4k</th>
+          <th class="num">C</th>
+          <th class="num">Ctr</th>
           <th class="num">CL</th>
           <th class="num">Cg</th>
-          <th class="center">In GA;k</th>
+          <th class="center">GA;k</th>
         </tr>
       </thead>
       <tbody>
         <tr>
-          <td>Steenachtigen/beton/blokken: Porotherm/isolatie/metselsteen</td>
+          <td>Porotherm/isolatie/metselsteen</td>
+          <td>Porotherm-element</td>
           <td class="num">2,50</td>
+          <td class="num">—</td>
+          <td class="num">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
           <td class="num">0,0</td>
           <td class="num">0,0</td>
           <td class="center">ja</td>
         </tr>
         <tr>
+          <td>Glas 4-16-4</td>
           <td>Glas 4-16-4 (GDL)</td>
           <td class="num">2,00</td>
+          <td class="num">—</td>
+          <td class="num">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
           <td class="num">0,0</td>
           <td class="num">0,0</td>
           <td class="center">ja</td>
         </tr>
         <tr>
-          <td>Elementen: Kozijn hout (gemiddeld)</td>
+          <td>Kozijn hout</td>
+          <td>Kozijn hout (gemiddeld)</td>
           <td class="num">0,86</td>
+          <td class="num">—</td>
+          <td class="num">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
+          <td class="num missing">—</td>
           <td class="num">0,0</td>
           <td class="num">0,0</td>
           <td class="center">ja</td>
@@ -397,12 +446,12 @@
       </tbody>
     </table>
     <p class="note">
-      Volledige elementtabel met catalogus-id, RA en (later) octaafbanden volgt de DGMR-/Stilte-export 1:1
-      zodra materialen per element in het rapport worden meegenomen.
+      Oriëntatie staat op VR-niveau (plattegrond-definitie). R-spectrum (63–4000 Hz), RA/Rw/C/Ctr
+      staan per materiaallijn bij elk vlak — geen aparte materiaalbijlage.
     </p>
 
     <footer class="page-foot">
-      <span>Geluidwering gevels · Stilte · rapportvoorbeeld</span>
+      <span>Geluidwering gevels · Stilte advies en meten · rapportvoorbeeld</span>
       <span>Gegenereerd ter illustratie · Afdrukken → PDF</span>
     </footer>
   </article>

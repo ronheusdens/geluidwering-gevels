@@ -76,11 +76,10 @@ Daarna **per VR** detailblok:
 | Vloeroppervlak, hoogte, volume, T₀ | Max. geluidsbelasting (Lb), GA, Lbi, GA;k, Voldoet |
 
 ### E. Per vlak (detail)
-- Vlaknaam, **oriëntatie** (N/NO/O/…), gekoppeld **catalogusmateriaal**, S [m²], RA, CL, Cg, meenemen in GA;k  
-
-### E2. Toegepaste materialen — catalogusspectra
-Unieke materialen uit de gevelvlakken van de variant, met waarden uit `app_gevelwering.material`:
-Cat.id · naam · RA · Rw · R(63…4000 Hz) · C · Ctr (bron catalogusGG / eigen).
+Per VR:
+- **Geveloriëntaties** op **VR-niveau** (uit plattegrond `expected_orientaties`, anders unieke vlak-oriëntaties)
+- Tabel **per materiaallijn**: vlak · materiaal · S · RA · Rw · R(63…4000) · C · Ctr · CL · Cg · meenemen in GA;k  
+  (spectrum dus **niet** als aparte bijlage)
 
 ### F. Optionele bijlagen (fase 2)
 - Plattegrond-/geveltekening (crop)  
@@ -141,7 +140,8 @@ Printbare mock (layout-referentie): [`/rapport-voorbeeld.html`](../../client/pub
 - [x] Waarschuwing + skip bij identieke inhoud (force optioneel)  
 - [x] Stilte-logo rechtsboven op (minstens) de eerste pagina  
 - [x] Secties gevuld uit live projectdata (basis)  
-- [x] Catalogusspectra (R 63–4000 Hz, RA/Rw/C/Ctr) van toegepaste materialen in PDF  
+- [x] Catalogusspectra (R 63–4000 Hz, RA/Rw/C/Ctr) **per materiaallijn** bij elk VR-vlak (geen aparte bijlage)  
+- [x] Oriëntatie op **VR-niveau** in rapport (niet per materiaalregel) 
 - [x] Voldoet-kolom consistent met gebruiksfunctie-grens (woon 33 / onderwijs 28)  
 - [x] Opdrachtgever kan rapport downloaden wanneer status het toelaat  
 - [x] Native PDF (puppeteer-core + systeem-Chrome) — opdrachtgever haalt `.pdf` op  

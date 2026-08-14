@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Geluidwering Gevels — Berekening gevelwering</title>
-  <link rel="stylesheet" href="/styles.css?v=about-menu" />
+  <link rel="stylesheet" href="/styles.css?v=vlak-pick" />
 </head>
 <body>
   <main class="page page-wide">
@@ -18,7 +18,7 @@
       </div>
       <p class="lede">
         Variant → verblijfsgebied → verblijfsruimte (plattegrond) → vlak (gevel).
-        <a href="/engineer.html">← Engineer</a>
+        <a href="/engineer.html">← Ingenieur</a>
         ·
         <a id="ga-floormap-link" href="/floormap.html">Plattegrond</a>
         ·
@@ -29,18 +29,18 @@
 
     <section class="panel conn-bar" id="ga-conn-bar" aria-live="polite">
       <span class="conn-led disconnected" id="ga-conn-led" aria-hidden="true"></span>
-      <span id="ga-conn-status">Connecting…</span>
+      <span id="ga-conn-status">Verbinden…</span>
     </section>
 
     <section class="panel" id="ga-login-panel">
       <form id="ga-login-form" class="form" novalidate>
         <fieldset>
-          <legend>Engineer login</legend>
-          <label>Username <input name="username" required autocomplete="username" value="engineer" /></label>
-          <label>Password <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
+          <legend>Ingenieur-login</legend>
+          <label>Gebruikersnaam <input name="username" required autocomplete="username" value="engineer" /></label>
+          <label>Wachtwoord <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
         </fieldset>
         <div class="actions">
-          <button type="submit" id="ga-login-btn">Sign in</button>
+          <button type="submit" id="ga-login-btn">Inloggen</button>
         </div>
       </form>
     </section>
@@ -48,7 +48,7 @@
     <section id="ga-panel" class="hidden">
       <div class="panel user-bar">
         <span id="ga-user-label"></span>
-        <button type="button" id="ga-logout-btn" class="secondary">Sign out</button>
+        <button type="button" id="ga-logout-btn" class="secondary">Uitloggen</button>
       </div>
 
       <details class="panel tools-panel ga-project-id-bar" id="ga-project-id-bar" open>
@@ -59,12 +59,12 @@
         </summary>
         <div class="tools-panel-main">
           <form id="ga-building-form" class="form mat-filter-row">
-            <label>Building id
+            <label>Project-id
               <input id="ga-building-id" name="building_id" required placeholder="uuid" />
             </label>
             <div class="actions mat-filter-actions">
-              <button type="submit">Open project</button>
-              <button type="button" id="ga-queue-btn" class="secondary">Kies uit queue</button>
+              <button type="submit">Project openen</button>
+              <button type="button" id="ga-queue-btn" class="secondary">Kies uit wachtrij</button>
             </div>
           </form>
           <div id="ga-queue-list" class="admin-projects-list hidden"></div>
@@ -174,41 +174,76 @@
 
           <div class="ga-col">
             <h2>Vlakken</h2>
-            <p class="hint" id="ga-vlak-facade-hint">Selecteer een VR in het midden; dan verschijnen alleen gevelcomponenten van die VR. Materiaal koppel je op de geveltekening (componentdefinitie), niet hier.</p>
+            <p class="hint" id="ga-vlak-facade-hint">
+              <strong>Gevelcomponenten</strong> teken en materiaal je op de geveltekening.
+              <strong>Vlakken</strong> hieronder zijn de koppeling naar de berekening (per materiaal; CL/Cg vast per ori).
+              Zelfde materiaal wordt opgeteld tot één keuze. Meerdere materialen op dezelfde oriëntatie mogen.
+              Een compositie (±) telt als één netto-component — bronnen (glas, kozijn, …) horen niet als apart vlak tenzij ze een eigen materiaal hebben.
+            </p>
+            <label class="block-label ga-vlak-pick" id="ga-vlak-pick-wrap">
+              Vlak / oriëntatie (deze VR)
+              <select id="ga-vlak-pick" disabled aria-label="Kies vlak of nog niet gespecificeerde oriëntatie">
+                <option value="">— selecteer eerst een VR —</option>
+              </select>
+            </label>
             <form id="ga-vlak-form" class="form">
-              <label class="block-label">Gevelcomponent (voor gekozen VR)
-                <select id="ga-vlak-facade" class="ga-facade-select" size="5" title="Materiaal staat op de gevelcomponent; wijzig het op de geveltekening">
-                  <option value="">— selecteer eerst een VR —</option>
-                </select>
-              </label>
-              <p class="ga-room-preview is-empty" id="ga-vlak-facade-preview">—</p>
-              <label>Omschrijving vlak <input id="ga-vlak-name" maxlength="80" placeholder="bijv. voorzijde" /></label>
-              <label>Orientatie
-                <select id="ga-vlak-orientatie" title="Windrichting van het gevelvlak — basis voor Lb per gevel → CL">
+              <fieldset class="ga-vlak-props">
+                <legend>1. Vlak-eigenschappen</legend>
+                <p class="hint">Oriëntatie en CL/Cg komen uit de plattegrond (vast per windrichting). Koppel daarna één materiaal-groep als vlak.</p>
+                <label>Omschrijving vlak <input id="ga-vlak-name" maxlength="80" placeholder="bijv. voorzijde" /></label>
+                <p class="ga-ori-readonly" id="ga-vlak-orientatie-display" aria-live="polite">Oriëntatie: — (uit plattegrond)</p>
+                <select id="ga-vlak-orientatie" class="hidden" tabindex="-1" aria-hidden="true">
                   <option value="">—</option>
-                  <option value="N">N · noord</option>
-                  <option value="NO">NO · noordoost</option>
-                  <option value="O">O · oost</option>
-                  <option value="ZO">ZO · zuidoost</option>
-                  <option value="Z">Z · zuid</option>
-                  <option value="ZW">ZW · zuidwest</option>
-                  <option value="W">W · west</option>
-                  <option value="NW">NW · noordwest</option>
                 </select>
-              </label>
-              <label><span id="ga-vlak-qty-label">S [m²]</span> <input id="ga-vlak-area" type="number" min="0" step="0.01" value="0" /></label>
-              <label>CL [dB] <input id="ga-vlak-cl" type="number" step="0.1" min="0" max="100" value="0" title="Geluidsniveaucorrectie (telt mee via het grootste geveloppervlak)" /></label>
-              <label>Cg [dB] <input id="ga-vlak-cg" type="number" step="0.1" value="0" title="Gevelstructuurcorrectie (telt mee via het grootste geveloppervlak)" /></label>
-              <label class="inline-check"><input id="ga-vlak-gak" type="checkbox" checked /> Meenemen in GA;k (Stot)</label>
-              <p class="hint" id="ga-vlak-edit-hint">CL en Cg tellen 1:1 mee in GA en GA;k (D<sub>2m,nT</sub> = R′ + Cg + Ruimte + CL). Wijzig CL en zie de resultaten direct meelopen; of klik <strong>Herberekenen GA / GA;k</strong>.</p>
+                <div class="mat-row">
+                  <label>CL [dB] <input id="ga-vlak-cl" type="number" step="0.1" min="0" max="100" value="" readonly placeholder="0" title="Vast per geveloriëntatie (plattegrond) — niet live te wijzigen. Alleen op GA;k." /></label>
+                  <label>Cg [dB] <input id="ga-vlak-cg" type="number" step="0.1" value="" readonly placeholder="0" title="Vast per geveloriëntatie (plattegrond) — niet live te wijzigen. Alleen op GA;k." /></label>
+                </div>
+                <label class="inline-check"><input id="ga-vlak-gak" type="checkbox" checked /> Meenemen in GA;k (Stot)</label>
+                <p class="hint" id="ga-vlak-edit-hint">Open een vlak in de lijst hieronder om te bewerken, of voeg een vlak toe voor een nog vrije oriëntatie.</p>
+                <p class="hint" id="ga-vlak-ori-status"></p>
+              </fieldset>
+
+              <fieldset class="ga-vlak-component" id="ga-vlak-component-fieldset">
+                <legend>2. Gevelcomponent (materiaal)</legend>
+                <p class="hint">
+                  Hier kies je een <strong>gevelcomponent met materiaal</strong> van de geveltekening
+                  (geen cataloguslijst). Nog niet gekoppelde materialen verschijnen hier totdat de
+                  oppervlaktedekking 100% is.
+                </p>
+                <p class="hint" id="ga-vlak-props-gate-hint"></p>
+                <p class="ga-facade-linked" id="ga-vlak-facade-linked" hidden></p>
+                <ul class="ga-facade-compose" id="ga-vlak-facade-compose" hidden></ul>
+                <label class="block-label" id="ga-vlak-facade-label">Nog niet gekoppelde component van deze VR
+                  <select id="ga-vlak-facade" class="ga-facade-select" size="5" disabled title="Eerst oriëntaties op de plattegrond">
+                    <option value="">— eerst oriëntaties op plattegrond —</option>
+                  </select>
+                </label>
+                <p class="ga-room-preview is-empty" id="ga-vlak-facade-preview">—</p>
+                <label><span id="ga-vlak-qty-label">S [m²]</span> <input id="ga-vlak-area" type="number" min="0" step="0.01" value="0" title="Oppervlak/lengte komt uit de gevelcomponent" /></label>
+              </fieldset>
+
               <div class="actions">
-                <button type="submit" id="ga-vlak-save-btn">Vlak toevoegen</button>
+                <button type="submit" id="ga-vlak-save-btn" disabled>Vlak toevoegen</button>
                 <button type="button" id="ga-vlak-cancel-btn" class="secondary hidden">Annuleer bewerken</button>
               </div>
             </form>
+            <h3 class="ga-vlak-list-heading">Toegevoegde vlakken (berekening)</h3>
+            <div id="ga-vlak-coverage" class="ga-vlak-coverage" aria-live="polite" hidden>
+              <div class="ga-vlak-coverage-row">
+                <span class="ga-vlak-coverage-label">Oppervlaktedekking</span>
+                <strong id="ga-vlak-coverage-pct" class="ga-vlak-coverage-pct">0%</strong>
+              </div>
+              <div class="ga-vlak-coverage-track" aria-hidden="true">
+                <div id="ga-vlak-coverage-bar" class="ga-vlak-coverage-bar" style="width: 0%"></div>
+              </div>
+              <p class="ga-vlak-coverage-meta" id="ga-vlak-coverage-meta"></p>
+            </div>
+            <p class="hint" id="ga-vlak-inventory"></p>
             <ul id="ga-vlak-list" class="drawing-list"></ul>
             <div class="ga-results" id="ga-vr-results" aria-live="polite">
               <h3>Resultaten VR</h3>
+              <p class="hint" id="ga-vr-results-werknummer" hidden></p>
               <p class="hint" id="ga-vr-results-hint">Selecteer een VR en voeg vlakken met materiaal toe.</p>
               <dl class="ga-results-grid" id="ga-vr-results-grid">
                 <div><dt>S / Stot</dt><dd id="ga-res-s">—</dd></div>
@@ -222,6 +257,13 @@
               </dl>
               <div class="actions">
                 <button type="button" id="ga-recalc-btn" class="secondary">Herberekenen GA / GA;k</button>
+                <button type="button" id="ga-analyze-btn" class="secondary" disabled title="Alleen beschikbaar als de toets niet voldoet">Analyseer</button>
+              </div>
+              <div id="ga-analyze-panel" class="ga-analyze-panel hidden" aria-live="polite">
+                <h4>Analyse: waarom voldoet niet?</h4>
+                <p class="hint" id="ga-analyze-hint"></p>
+                <ul id="ga-analyze-causes" class="ga-analyze-causes"></ul>
+                <div id="ga-analyze-suggestions" class="ga-analyze-suggestions"></div>
               </div>
               <div class="actions ga-report-actions">
                 <label class="inline-label">Versie
@@ -240,6 +282,6 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/ga.js?v=vlak-uniq"></script>
+  <script type="module" src="/ga.js?v=vlak-pick"></script>
 </body>
 </html>

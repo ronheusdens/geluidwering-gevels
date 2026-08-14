@@ -16,10 +16,12 @@ import {
 } from "./lib/drawing-upload.mjs";
 import {
   handleFloormapApiOptions,
+  handleFloormapMaterialAlternatives,
   handleFloormapMaterialCategoriesGet,
   handleFloormapMaterialCreate,
   handleFloormapMaterialsList,
   handleFloormapScaleSave,
+  handleFloormapSubsectionMaterial,
   handleFloormapSectionGet,
   handleFloormapSectionsList,
   handleFloormapSubsectionDelete,
@@ -44,6 +46,7 @@ import {
   handleReportDownload,
   handleReportGenerate,
   handleReportInboxEmailRequest,
+  handleReportInboxDelete,
   handleReportInboxList,
   handleReportInboxRead,
   handleReportList,
@@ -107,6 +110,7 @@ const server = http.createServer(async (req, res) => {
     urlPath === "/api/reports/publish" ||
     urlPath === "/api/reports/inbox" ||
     urlPath === "/api/reports/inbox/read" ||
+    urlPath === "/api/reports/inbox/delete" ||
     urlPath === "/api/reports/inbox/email-request" ||
     urlPath === "/api/reports/cleanup-project-folder"
   ) {
@@ -137,6 +141,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (urlPath === "/api/reports/inbox/read" && req.method === "POST") {
         await handleReportInboxRead(req, res);
+        return;
+      }
+      if (urlPath === "/api/reports/inbox/delete" && req.method === "POST") {
+        await handleReportInboxDelete(req, res);
         return;
       }
       if (urlPath === "/api/reports/inbox/email-request" && req.method === "POST") {
@@ -209,6 +217,8 @@ const server = http.createServer(async (req, res) => {
     urlPath === "/api/floormap/scale" ||
     urlPath === "/api/floormap/material-categories" ||
     urlPath === "/api/floormap/materials" ||
+    urlPath === "/api/floormap/material-alternatives" ||
+    urlPath === "/api/floormap/subsection-material" ||
     urlPath === "/api/floormap/material-favorites" ||
     urlPath === "/api/floormap/material-favorite-presets"
   ) {
@@ -267,6 +277,14 @@ const server = http.createServer(async (req, res) => {
       }
       if (urlPath === "/api/floormap/materials" && req.method === "POST") {
         await handleFloormapMaterialCreate(req, res);
+        return;
+      }
+      if (urlPath === "/api/floormap/material-alternatives" && req.method === "GET") {
+        await handleFloormapMaterialAlternatives(req, res, url);
+        return;
+      }
+      if (urlPath === "/api/floormap/subsection-material" && req.method === "POST") {
+        await handleFloormapSubsectionMaterial(req, res);
         return;
       }
     } catch (err) {

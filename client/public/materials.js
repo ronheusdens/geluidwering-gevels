@@ -287,7 +287,7 @@ function pickMaterialForCaller() {
   location.assign(returnHref);
 }
 async function httpJson(url, init) {
-  if (!auth?.token) throw new Error("Not signed in");
+  if (!auth?.token) throw new Error("Niet ingelogd");
   const res = await fetch(url, {
     credentials: "include",
     ...init,
@@ -478,13 +478,13 @@ function showAdmin(info) {
   storeAuth2(info);
   loginPanelEl.classList.add("hidden");
   panelEl.classList.remove("hidden");
-  userLabelEl.textContent = `Signed in as ${info.display_name || info.username}`;
+  userLabelEl.textContent = `Ingelogd als ${info.display_name || info.username}`;
   if (favoriteWrapEl) favoriteWrapEl.classList.toggle("hidden", !contextBuildingId);
   void loadPresets();
 }
 function send(type, payload, wantType) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    return Promise.reject(new Error("WebSocket not open"));
+    return Promise.reject(new Error("WebSocket niet open"));
   }
   const request_id = nextRequestId(type.replace(".", "_"));
   const env = { v: 1, type, request_id, payload };
@@ -529,6 +529,26 @@ async function invokeString(target, args) {
 }
 function esc(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function normalizeDecimalInput(raw) {
+  let s = raw.trim().replace(/\s/g, "");
+  if (!s) return "";
+  if (s.includes(",") && s.includes(".")) {
+    s = s.replace(/\./g, "").replace(",", ".");
+  } else if (s.includes(",")) {
+    s = s.replace(",", ".");
+  }
+  if (!/^-?\d+(\.\d+)?$/.test(s)) {
+    throw new Error(`Ongeldig getal: \u201C${raw.trim()}\u201D (gebruik bijv. 42,6 of 42.6)`);
+  }
+  return s;
+}
+function decimalField(el, label) {
+  try {
+    return normalizeDecimalInput(el.value);
+  } catch (err) {
+    throw new Error(`${label}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 function fillFilterRubrieken() {
   const keep = categoryEl.value;
@@ -661,7 +681,7 @@ function clearEditor() {
   rwEl.value = "";
   cEl.value = "";
   ctrEl.value = "";
-  editorTitleEl.textContent = "New material";
+  editorTitleEl.textContent = "Nieuw materiaal";
   deleteBtn.disabled = true;
   syncPickUi();
   if (favoriteEl) favoriteEl.checked = false;
@@ -709,7 +729,7 @@ function fillEditor(m) {
   rwEl.value = m.rw_db || "";
   cEl.value = m.c_db || "";
   ctrEl.value = m.ctr_db || "";
-  editorTitleEl.textContent = m.material_id ? `Edit \xB7 ${m.catalog_id || ""} \xB7 ${m.name}` : "New material";
+  editorTitleEl.textContent = m.material_id ? `Bewerken \xB7 ${m.catalog_id || ""} \xB7 ${m.name}` : "Nieuw materiaal";
   deleteBtn.disabled = !m.material_id;
   highlightSelection();
   syncPickUi();
@@ -730,7 +750,7 @@ function updatePager() {
   const lim = limit();
   const from = total === 0 ? 0 : offset + 1;
   const to = Math.min(offset + lim, total);
-  pagerLabelEl.textContent = total === 0 ? "No materials match." : `Showing ${from}\u2013${to} of ${total}`;
+  pagerLabelEl.textContent = total === 0 ? "Geen materialen gevonden." : `Weergave ${from}\u2013${to} van ${total}`;
   prevBtn.disabled = offset <= 0;
   nextBtn.disabled = offset + lim >= total;
 }
@@ -738,7 +758,7 @@ function selectFromList(id, opts) {
   const row = listRows.find((m) => m.material_id === id);
   if (!row) return;
   fillEditor(row);
-  setStatus(`Selected ${row.name}`, "ok");
+  setStatus(`Geselecteerd: ${row.name}`, "ok");
   const fieldId = opts?.focusFieldId;
   if (fieldId) {
     const el = document.getElementById(fieldId);
@@ -811,10 +831,10 @@ async function loadList(preferId) {
   const pick = want && listRows.find((m) => m.material_id === want) || listRows[0] || null;
   if (pick) {
     fillEditor(pick);
-    setStatus(`Loaded ${listRows.length} \xB7 ${pick.name}`, "ok");
+    setStatus(`Geladen ${listRows.length} \xB7 ${pick.name}`, "ok");
   } else {
     clearEditor();
-    setStatus(total === 0 ? "No materials match" : `Loaded ${listRows.length} materials`, "ok");
+    setStatus(total === 0 ? "Geen materialen gevonden" : `${listRows.length} materialen geladen`, "ok");
   }
 }
 async function applyDeepLink() {
@@ -829,7 +849,7 @@ async function applyDeepLink() {
   }
   if (!deepMaterialId) return;
   if (deepQ && !qEl.value.trim()) qEl.value = deepQ;
-  setStatus("Loading material\u2026", "busy");
+  setStatus("Materiaal laden\u2026", "busy");
   const ret = await invokeString("API_AdminGetMaterial", [auth.token, deepMaterialId]);
   if (ret.startsWith("ERROR")) {
     setStatus(ret, "err");
@@ -845,14 +865,14 @@ async function applyDeepLink() {
   }
   editorForm.scrollIntoView({ block: "nearest", behavior: "smooth" });
   nameEl.focus({ preventScroll: true });
-  setStatus(`Opened ${m.catalog_id || ""} \xB7 ${m.name}`, "ok");
+  setStatus(`Geopend: ${m.catalog_id || ""} \xB7 ${m.name}`, "ok");
 }
 async function bootstrapSession() {
-  setStatus(`Connecting to ${BPP_WS}\u2026`, "busy");
+  setStatus(`Verbinden met ${BPP_WS}\u2026`, "busy");
   ws = new WebSocket(BPP_WS);
   setConnLed(false);
   await new Promise((resolve, reject) => {
-    const t = window.setTimeout(() => reject(new Error("WebSocket connect timeout")), 8e3);
+    const t = window.setTimeout(() => reject(new Error("WebSocket-verbinding time-out")), 8e3);
     ws.onopen = () => {
       window.clearTimeout(t);
       setConnLed(true);
@@ -861,19 +881,19 @@ async function bootstrapSession() {
     ws.onerror = () => {
       window.clearTimeout(t);
       setConnLed(false);
-      reject(new Error("WebSocket connection failed \u2014 is bppServer running on port 18080?"));
+      reject(new Error("WebSocket-verbinding mislukt \u2014 draait bppServer op poort 18080?"));
     };
   });
   ws.onmessage = (ev) => onMessage(String(ev.data));
   ws.onclose = () => {
     setConnLed(false);
-    setStatus("Disconnected from bppServer", "err");
+    setStatus("Verbinding met bppServer verbroken", "err");
   };
   await send("session.open", { client_name: "app-gevelwering-materials-web", client_version: "0.2.12" }, "session.opened");
   await send("exec.request", { code: 'INCLUDE "fixtures/app-gevelwering/shared_building_api.basicpp"\n' }, "exec.completed");
   const bootRet = await invokeString("API_Bootstrap", []);
-  if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap failed: ${bootRet}`);
-  setStatus(`Connected \xB7 session ${sessionId ?? "?"} \xB7 Postgres ready`, "ok");
+  if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap mislukt: ${bootRet}`);
+  setStatus(`Verbonden \xB7 sessie ${sessionId ?? "?"} \xB7 Postgres gereed`, "ok");
   const stored = loadStoredAuth();
   if (stored?.token) {
     const validated = await invokeString("API_ValidateSession", [stored.token]);
@@ -892,7 +912,7 @@ async function bootstrapSession() {
 loginForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   loginBtn.disabled = true;
-  setStatus("Signing in\u2026", "busy");
+  setStatus("Inloggen\u2026", "busy");
   try {
     const fd = new FormData(loginForm);
     const username = String(fd.get("username") ?? "").trim();
@@ -904,14 +924,14 @@ loginForm.addEventListener("submit", async (ev) => {
     }
     const info = JSON.parse(ret);
     if (info.username !== "admin") {
-      setStatus("Material editor is restricted to user 'admin'", "err");
+      setStatus("Materiaaleditor is alleen voor gebruiker 'admin'", "err");
       return;
     }
     showAdmin(info);
     offset = 0;
     if (deepMaterialId || deepNew) await applyDeepLink();
     else await loadList();
-    setStatus("Admin signed in", "ok");
+    setStatus("Beheerder ingelogd", "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   } finally {
@@ -924,7 +944,7 @@ logoutBtn.addEventListener("click", async () => {
   } catch {
   }
   showLogin();
-  setStatus("Signed out", "ok");
+  setStatus("Uitgelogd", "ok");
 });
 filterForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
@@ -1020,7 +1040,7 @@ editorForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   if (!auth?.token) return;
   saveBtn.disabled = true;
-  setStatus("Saving material\u2026", "busy");
+  setStatus("Materiaal opslaan\u2026", "busy");
   try {
     const ret = await invokeString("API_AdminSaveMaterial", [
       auth.token,
@@ -1030,24 +1050,24 @@ editorForm.addEventListener("submit", async (ev) => {
       noEl.value.trim(),
       nameEl.value.trim(),
       catEl.value.trim(),
-      thickEl.value.trim(),
-      weightEl.value.trim(),
-      raEl.value.trim(),
+      decimalField(thickEl, "Dikte"),
+      decimalField(weightEl, "Gewicht"),
+      decimalField(raEl, "RA"),
       sourceRefEl.value.trim(),
       spectrumOkEl.checked ? "true" : "false",
-      r63El.value.trim(),
-      r125El.value.trim(),
-      r250El.value.trim(),
-      r500El.value.trim(),
-      r1000El.value.trim(),
-      r2000El.value.trim(),
-      r4000El.value.trim(),
-      rwEl.value.trim(),
-      cEl.value.trim(),
-      ctrEl.value.trim(),
-      t1El.value.trim(),
-      cavEl.value.trim(),
-      t2El.value.trim(),
+      decimalField(r63El, "63 Hz"),
+      decimalField(r125El, "125 Hz"),
+      decimalField(r250El, "250 Hz"),
+      decimalField(r500El, "500 Hz"),
+      decimalField(r1000El, "1000 Hz"),
+      decimalField(r2000El, "2000 Hz"),
+      decimalField(r4000El, "4000 Hz"),
+      decimalField(rwEl, "Rw"),
+      decimalField(cEl, "C"),
+      decimalField(ctrEl, "Ctr"),
+      decimalField(t1El, "Glas t1"),
+      decimalField(cavEl, "Spouw"),
+      decimalField(t2El, "Glas t2"),
       resolveSaveSource()
     ]);
     if (ret.startsWith("ERROR")) {
@@ -1056,7 +1076,7 @@ editorForm.addEventListener("submit", async (ev) => {
     }
     const saved = JSON.parse(ret);
     const wantFav = Boolean(favoriteEl?.checked && contextBuildingId);
-    setStatus(saved.created ? "Material created" : "Material updated", "ok");
+    setStatus(saved.created ? "Materiaal aangemaakt" : "Materiaal bijgewerkt", "ok");
     await loadList(saved.material_id || null);
     if (wantFav && saved.material_id) {
       try {
@@ -1083,9 +1103,9 @@ editorForm.addEventListener("submit", async (ev) => {
 });
 deleteBtn.addEventListener("click", async () => {
   if (!auth?.token || !idEl.value) return;
-  if (!window.confirm(`Delete material \u201C${nameEl.value || idEl.value}\u201D?`)) return;
+  if (!window.confirm(`Materiaal \u201C${nameEl.value || idEl.value}\u201D verwijderen?`)) return;
   deleteBtn.disabled = true;
-  setStatus("Deleting\u2026", "busy");
+  setStatus("Verwijderen\u2026", "busy");
   try {
     const ret = await invokeString("API_AdminDeleteMaterial", [auth.token, idEl.value]);
     if (ret.startsWith("ERROR")) {
@@ -1094,7 +1114,7 @@ deleteBtn.addEventListener("click", async () => {
     }
     selectedId = null;
     await loadList();
-    setStatus("Material deleted", "ok");
+    setStatus("Materiaal verwijderd", "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   } finally {

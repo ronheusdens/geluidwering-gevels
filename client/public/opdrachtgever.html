@@ -220,7 +220,8 @@ GA;k = GA − 10·log<sub>10</sub>(max(V/S<sub>tot</sub>, 3) / (6·T<sub>0</sub>
           <fieldset>
             <legend>Projectgegevens</legend>
             <label>Projectnaam <input name="label" placeholder="bijv. Nieuwbouw Lot 12" /></label>
-            <label>Uw referentie <input name="external_ref" placeholder="optioneel" /></label>
+            <label>Uw kenmerk <input name="client_ref" maxlength="120" placeholder="optioneel, uw eigen referentie" title="Los van de projectnaam en los van het werknummer van de engineer" /></label>
+            <p class="hint">Uw kenmerk is alleen voor u; de engineer werkt onder een apart projectnummer (werknummer).</p>
           </fieldset>
           <div class="actions">
             <button type="submit" id="save-btn">Project opslaan</button>
@@ -231,6 +232,6 @@ GA;k = GA − 10·log<sub>10</sub>(max(V/S<sub>tot</sub>, 3) / (6·T<sub>0</sub>
       </section>
     </section>
   </main>
-  <script type="module" src="/app.js?v=dl-results"></script>
+  <script type="module" src="/app.js?v=status-uitvoering"></script>
 </body>
 </html>

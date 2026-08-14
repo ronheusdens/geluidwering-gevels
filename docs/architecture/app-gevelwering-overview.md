@@ -126,6 +126,8 @@ Schema / multi-variant: [app-gevelwering-postgres-schema.md](app-gevelwering-pos
 
 Catalogusrijen hebben herkomst-metadata `source` (`catalogusGG.pdf`, legacy `GL.cat`, of `app`). Seed via `./start.sh` draait **eenmalig** als `material` leeg is (`app_meta.material_catalog_seeded`); daarna geen DROP/re-seed. Favorieten zijn per `building_id`, niet globaal op `material`.
 
+**Rw / C / Ctr** (ISO 717-1) worden uit de R-octaafbanden gevuld/geverifieerd met `sql/app_gevelwering_0_2_23_backfill_rw.py` — zie [material-rw-c-ctr.md](material-rw-c-ctr.md).
+
 ### 5.2 Compositie (+/−) op de gevel
 
 Doel: meerdere gesloten contouren combineren tot één netto oppervlak met één materiaal (bijv. omhulling minus kozijnen = metselwerk).

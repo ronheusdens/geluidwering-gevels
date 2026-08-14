@@ -43,6 +43,7 @@ SQL27="$SQL_DIR/app_gevelwering_0_2_25.sql"
 SQL28="$SQL_DIR/app_gevelwering_0_2_26.sql"
 SQL29="$SQL_DIR/app_gevelwering_0_2_27.sql"
 SQL30="$SQL_DIR/app_gevelwering_0_2_28.sql"
+SQL31="$SQL_DIR/app_gevelwering_0_2_29.sql"
 
 BPP_PORT="${BPP_PORT:-18080}"
 UI_PORT="${GEVELWERING_UI_PORT:-4173}"
@@ -166,6 +167,8 @@ psql -d "$PG_DB" -f "$SQL28" >/dev/null
 apply_sql "$SQL29"
 echo "Applying DDL $SQL30 (material favorites + presets, app_meta) to database ${PG_DB}..."
 psql -d "$PG_DB" -f "$SQL30" >/dev/null
+echo "Applying DDL $SQL31 (client_ref = kenmerk opdrachtgever) to database ${PG_DB}..."
+psql -d "$PG_DB" -f "$SQL31" >/dev/null
 # Ensure seeded flag after first successful catalog load
 psql -d "$PG_DB" -c \
   "INSERT INTO app_gevelwering.app_meta (key, value, updated_at)
