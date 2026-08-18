@@ -79,7 +79,14 @@ flowchart LR
 | Map / start | `c/app-gevelwering/./start.sh` |
 | UI | `client/` — o.a. `/ga.html`, `/floormap.html`, `/materials.html`, `/admin.html`, `/engineer.html` |
 | Postgres | Database + schema **`app_gevelwering`** |
+| Domeinlogica | **bppServer** (WSS `API_*`) — fases 1–4 gemigreerd |
+| Node HTTPS | Static UI, `/api/session`, tekening upload/download, `/api/reports/*` |
 | Fixtures | `fixtures/app-gevelwering/*.basicpp` |
+| Migratie Node→bpp | [bppserver-migration-plan.md](bppserver-migration-plan.md) |
+
+**Transport (productie):** browser → Apache TLS → `wss://…/ws` (bpp) + `https://…` (Node binary/static).  
+**Rollback HTTP-CRUD:** browser `localStorage.GEVELWERING_BPP_HTTP=1` **én** Node `GEVELWERING_BPP_ONLY=0`.  
+**Productie:** `start.sh` zet default `GEVELWERING_BPP_ONLY=1` → gemigreerde REST → **410 Gone**; code in `client/lib/deprecated/`.
 
 ---
 

@@ -4,6 +4,7 @@
 import { loadAuth, storeAuth as persistAuth, syncSessionCookie, apiAuthHeaders } from "./auth-store";
 import { resolveBppWsUrl } from "./ws-url";
 import { initPasswordToggles } from "./password-toggle";
+import { bppListProjectDocuments, bppPhase1Enabled } from "./bpp-api";
 
 type Envelope = {
   v: number;
@@ -895,23 +896,40 @@ async function refreshProjectDocuments(): Promise<void> {
   lastProjectId = projectId;
   drawingFileInput.disabled = currentProjectStatus !== null && currentProjectStatus !== "INITIAL_REQUEST";
 
-  const res = await fetch(`/api/drawings/list?building_id=${encodeURIComponent(projectId)}`, {
-    credentials: "include",
-    headers: apiAuthHeaders(auth.token),
-  });
-  let parsed: { ok?: boolean; error?: string; documents?: ProjectDocument[] };
-  try {
-    parsed = (await res.json()) as { ok?: boolean; error?: string; documents?: ProjectDocument[] };
-  } catch {
-    drawingUploadHintEl.textContent = `Tekeningen laden mislukt (HTTP ${res.status})`;
-    return;
-  }
-  if (!res.ok || !parsed.ok) {
-    drawingUploadHintEl.textContent = parsed.error || `Tekeningen laden mislukt (HTTP ${res.status})`;
-    return;
+  let docs: ProjectDocument[] = [];
+  if (bppPhase1Enabled()) {
+    try {
+      const data = await bppListProjectDocuments(invokeString, auth.token, projectId);
+      docs = (data.documents || []).map((d) => ({
+        id: d.id,
+        filename: d.filename,
+        file_ext: d.file_ext,
+        byte_size: Number(d.byte_size) || 0,
+      }));
+    } catch (err) {
+      drawingUploadHintEl.textContent =
+        err instanceof Error ? err.message : "Tekeningen laden mislukt";
+      return;
+    }
+  } else {
+    const res = await fetch(`/api/drawings/list?building_id=${encodeURIComponent(projectId)}`, {
+      credentials: "include",
+      headers: apiAuthHeaders(auth.token),
+    });
+    let parsed: { ok?: boolean; error?: string; documents?: ProjectDocument[] };
+    try {
+      parsed = (await res.json()) as { ok?: boolean; error?: string; documents?: ProjectDocument[] };
+    } catch {
+      drawingUploadHintEl.textContent = `Tekeningen laden mislukt (HTTP ${res.status})`;
+      return;
+    }
+    if (!res.ok || !parsed.ok) {
+      drawingUploadHintEl.textContent = parsed.error || `Tekeningen laden mislukt (HTTP ${res.status})`;
+      return;
+    }
+    docs = parsed.documents ?? [];
   }
 
-  const docs = parsed.documents ?? [];
   updateSubmitDrawingsButton(docs.length);
   if (docs.length === 0) {
     drawingUploadHintEl.textContent = "Nog geen tekeningen geüpload.";

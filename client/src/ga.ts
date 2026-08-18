@@ -8,6 +8,14 @@ import { resolveBppWsUrl } from "./ws-url";
 import { initPasswordToggles } from "./password-toggle";
 import { computeVrGa, grenswaardeLbik, minRaDeltaForRprime, round1, type GaVrResult } from "./ga-calc";
 import { mountProjectMenu, type ProjectMenuApi } from "./project-menu";
+import {
+  bppListDrawingSubsections,
+  bppListFloormapSections,
+  bppListMaterialAlternatives,
+  bppListVrFacadeComponents,
+  bppPhase1Enabled,
+  bppSaveSubsectionMaterial,
+} from "./bpp-api";
 
 type Envelope = {
   v: number;
@@ -590,29 +598,37 @@ function roomFitsSelectedVg(room: RoomOpt | null): boolean {
 
 async function loadGeometryOptions(): Promise<void> {
   if (!buildingId || !auth) return;
-  const sections = await apiGet<{
-    sections: Array<{ id: string; label: string; region_kind: string }>;
-  }>(`/api/floormap/sections?building_id=${encodeURIComponent(buildingId)}`);
+  const sectionRows = bppPhase1Enabled()
+    ? (await bppListFloormapSections(invokeString, auth.token, buildingId)).sections
+    : (
+        await apiGet<{
+          sections: Array<{ id: string; label: string; region_kind: string }>;
+        }>(`/api/floormap/sections?building_id=${encodeURIComponent(buildingId)}`)
+      ).sections;
   const rooms: RoomOpt[] = [];
   floormapRoomsById = new Map();
-  for (const sec of sections.sections || []) {
+  for (const sec of sectionRows || []) {
     const kind = String(sec.region_kind || "").toUpperCase();
-    const sub = await apiGet<{
-      subsections: Array<{
-        id: string;
-        label: string;
-        area_m2: number | null;
-        vg_nr?: number | null;
-        vr_nr?: string | null;
-        level_hint?: string | null;
-        analysis?: {
-          expected_orientaties?: string[];
-          orientatie_correcties?: Record<string, { cl_db?: number; cg_db?: number }>;
-        } | null;
-      }>;
-    }>(`/api/floormap/subsections?section_id=${encodeURIComponent(sec.id)}`);
+    // GA only needs plattegrond rooms (VG/VR + oriëntaties). Skip façades —
+    // their subsection JSON (points) easily exceeds bpp invoke payload limits.
+    if (kind !== "FLOORMAP") continue;
+    const sub = bppPhase1Enabled()
+      ? await bppListDrawingSubsections(invokeString, auth.token, sec.id)
+      : await apiGet<{
+          subsections: Array<{
+            id: string;
+            label: string;
+            area_m2: number | null;
+            vg_nr?: number | null;
+            vr_nr?: string | null;
+            level_hint?: string | null;
+            analysis?: {
+              expected_orientaties?: string[];
+              orientatie_correcties?: Record<string, { cl_db?: number; cg_db?: number }>;
+            } | null;
+          }>;
+        }>(`/api/floormap/subsections?section_id=${encodeURIComponent(sec.id)}`);
     for (const s of sub.subsections || []) {
-      if (kind !== "FLOORMAP") continue;
       const expected = Array.isArray(s.analysis?.expected_orientaties)
         ? s.analysis!.expected_orientaties!
             .map((c) => normalizeOrientatie(c))
@@ -636,7 +652,7 @@ async function loadGeometryOptions(): Promise<void> {
         id: s.id,
         section_id: sec.id,
         label: s.label,
-        area_m2: s.area_m2,
+        area_m2: s.area_m2 != null ? Number(s.area_m2) : null,
         region_kind: kind,
         section_label: sec.label || kind,
         vg_nr: s.vg_nr != null ? Number(s.vg_nr) : null,
@@ -1603,37 +1619,39 @@ async function loadFacadesForSelectedVr(): Promise<void> {
     return;
   }
   try {
-    const data = await apiGet<{
-      eligible: Array<{
-        id: string;
-        label: string;
-        section_label?: string;
-        region_kind?: string;
-        area_m2: number | null;
-        quantity_kind?: string;
-        length_m?: number | null;
-        vg_nr?: number | null;
-        vr_nr?: string | null;
-        ga_ready?: boolean;
-        material_name?: string | null;
-        catalog_id?: string | null;
-        master_category?: string | null;
-        material_id?: string | null;
-        ra_dba?: number | null;
-        boolean_op?: string | null;
-        constituents?: Array<{
-          id?: string;
-          sign?: string;
-          label?: string;
-          catalog_id?: string | null;
-          material_name?: string | null;
-          area_m2?: number | null;
-        }>;
-      }>;
-      counts?: { eligible?: number; ga_ready?: number; excluded_as_source?: number };
-    }>(
-      `/api/floormap/vr-components?building_id=${encodeURIComponent(buildingId)}&vr_nr=${encodeURIComponent(vrNr)}`,
-    );
+    const data = bppPhase1Enabled()
+      ? await bppListVrFacadeComponents(invokeString, auth.token, buildingId, vrNr)
+      : await apiGet<{
+          eligible: Array<{
+            id: string;
+            label: string;
+            section_label?: string;
+            region_kind?: string;
+            area_m2: number | null;
+            quantity_kind?: string;
+            length_m?: number | null;
+            vg_nr?: number | null;
+            vr_nr?: string | null;
+            ga_ready?: boolean;
+            material_name?: string | null;
+            catalog_id?: string | null;
+            master_category?: string | null;
+            material_id?: string | null;
+            ra_dba?: number | null;
+            boolean_op?: string | null;
+            constituents?: Array<{
+              id?: string;
+              sign?: string;
+              label?: string;
+              catalog_id?: string | null;
+              material_name?: string | null;
+              area_m2?: number | null;
+            }>;
+          }>;
+          counts?: { eligible?: number; ga_ready?: number; excluded_as_source?: number };
+        }>(
+          `/api/floormap/vr-components?building_id=${encodeURIComponent(buildingId)}&vr_nr=${encodeURIComponent(vrNr)}`,
+        );
     vrFacades = (data.eligible || []).map((s) => ({
       id: s.id,
       label: s.label || "",
@@ -3855,12 +3873,14 @@ async function runAnalyze(): Promise<void> {
       deficit > 0 ? minRaDeltaForRprime(result.elements, m.elementIndex, deficit) : 0;
     let alts: AnalyzeAlt[] = [];
     try {
-      const data = await apiGet<{
-        alternatives?: AnalyzeAlt[];
-        reason?: string;
-      }>(
-        `/api/floormap/material-alternatives?material_id=${encodeURIComponent(m.materialId)}&limit=8`,
-      );
+      const data = bppPhase1Enabled()
+        ? await bppListMaterialAlternatives(invokeString, auth.token, m.materialId, 8)
+        : await apiGet<{
+            alternatives?: AnalyzeAlt[];
+            reason?: string;
+          }>(
+            `/api/floormap/material-alternatives?material_id=${encodeURIComponent(m.materialId)}&limit=8`,
+          );
       alts = Array.isArray(data.alternatives) ? data.alternatives : [];
     } catch (err) {
       blocks.push(
@@ -3978,17 +3998,19 @@ async function applyAnalyzeMaterial(
   let appliedCatalog: string | null = null;
   let appliedName = name;
   for (const sid of targets) {
-    const ret = await apiPost<{
-      material?: {
-        material_id?: string;
-        catalog_id?: string | null;
-        name?: string | null;
-        ra_dba?: number | null;
-      };
-    }>("/api/floormap/subsection-material", {
-      subsection_id: sid,
-      material_id: materialId,
-    });
+    const ret = bppPhase1Enabled()
+      ? await bppSaveSubsectionMaterial(invokeString, auth.token, sid, materialId)
+      : await apiPost<{
+          material?: {
+            material_id?: string;
+            catalog_id?: string | null;
+            name?: string | null;
+            ra_dba?: number | null;
+          };
+        }>("/api/floormap/subsection-material", {
+          subsection_id: sid,
+          material_id: materialId,
+        });
     const mat = ret.material;
     if (mat) {
       if (mat.ra_dba != null && Number.isFinite(Number(mat.ra_dba))) appliedRa = Number(mat.ra_dba);

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Geluidwering Gevels — Tekeninganalyse</title>
-  <link rel="stylesheet" href="/styles.css?v=section-thumb" />
+  <link rel="stylesheet" href="/styles.css?v=save-ui-sync" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body class="engineer-body">
@@ -58,7 +58,7 @@
       <section class="panel" id="fm-picker-panel">
         <h2>Schaalbare secties</h2>
         <p class="hint">Kies een plattegrond, gevel of doorsnede om te meten en componenten te markeren.</p>
-        <div id="fm-section-list" class="admin-projects-list"></div>
+        <div id="fm-section-list" class="fm-section-picker"></div>
       </section>
 
       <section class="panel hidden engineer-workspace-panel" id="fm-workspace-panel">
@@ -80,6 +80,22 @@
               <button type="button" id="fm-zoom-fit" class="secondary">Passend</button>
               <span class="toolbar-sep" aria-hidden="true"></span>
               <button type="button" id="fm-discover-btn" class="secondary">Ontdek ruimten</button>
+              <div id="fm-discover-min-wrap" class="fm-discover-min-wrap hidden">
+                <label for="fm-discover-min-size" class="fm-discover-min-label">
+                  Min. opening
+                  <span id="fm-discover-min-val">0%</span>
+                </label>
+                <input
+                  type="range"
+                  id="fm-discover-min-size"
+                  min="0"
+                  max="100"
+                  value="0"
+                  step="1"
+                  title="Minimale grootte t.o.v. buitencontour (0 = kleinste, 100 = hele contour)"
+                />
+              </div>
+              <p class="hint" id="fm-discover-hint" style="margin:0.25rem 0 0;font-size:0.8rem;">Plattegrond: ruimten op de crop. Gevel: selecteer eerst de buitencontour (VR), daarna openingen (kozijnen) in de bitmap.</p>
               <button type="button" id="fm-calibrate-btn" class="secondary">Schaal kalibreren</button>
               <span
                 class="scale-calibrated-led"
@@ -247,7 +263,7 @@
                   <label class="fm-ori-check"><input type="checkbox" value="NW" /> NW</label>
                 </div>
                 <div id="fm-ori-corr-rows" class="fm-ori-corr-rows hidden" aria-label="CL en Cg per geveloriëntatie"></div>
-                <p class="hint" id="fm-expected-ori-hint">Verplicht: vink windrichtingen aan en vul CL/Cg per oriëntatie. Op GA zijn die correcties vast (niet live te wijzigen).</p>
+                <p class="hint" id="fm-expected-ori-hint">Verplicht bij opslaan. Open een opgeslagen ruimte in de lijst om oriëntaties te wijzigen — het blok hierboven komt dan in beeld. CL/Cg per oriëntatie gaan mee naar GA.</p>
               </div>
               <div id="fm-material-block" class="hidden">
                 <label class="block-label">Meest gebruikt (dit project)
@@ -350,7 +366,7 @@
 
             <fieldset id="fm-set-ops-fieldset" class="hidden">
               <legend>Compositie (+/−)</legend>
-              <p class="hint" id="fm-compose-hint">Selecteer ≥2 gesloten componenten in de lijst hieronder. Grootste = buitencontour; overige moeten er volledig in passen. Zet per deel <strong>+</strong> of <strong>−</strong>, kies een materiaal hierboven, en klik <strong>Toepassen &amp; opslaan</strong> (niet «Component opslaan» — dat is alleen voor nieuw getekende contouren). Selectie blijft staan voor een volgende compositie met ander materiaal.</p>
+              <p class="hint" id="fm-compose-hint">Selecteer ≥2 gesloten componenten in de lijst hieronder. Grootste = buitencontour; overige moeten er volledig in passen. Zet per deel <strong>+</strong> of <strong>−</strong>, kies een materiaal hierboven, en klik <strong>Toepassen &amp; opslaan</strong>. Het netto-resultaat erft VG/VR; de originelen blijven in de lijst (groene markering) en zijn via <strong>Bronnen</strong> op het resultaat te vinden. De selectie wordt gewist.</p>
               <ul id="fm-compose-parts" class="compose-parts-list" aria-label="Tekens per component"></ul>
               <div class="actions actions-stack">
                 <button type="button" id="fm-set-apply-btn">Toepassen &amp; opslaan</button>
@@ -380,6 +396,6 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/floormap.js?v=section-thumb"></script>
+  <script type="module" src="/floormap.js?v=discover-shape-min"></script>
 </body>
 </html>

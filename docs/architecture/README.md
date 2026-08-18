@@ -9,6 +9,7 @@ Product design for **geluidwering gevels** on [bppServer](../../../bppServer/).
 | [rapport-gevelwering-pdf.md](rapport-gevelwering-pdf.md) | Voorstel PDF-rapportage (layout à la Stilte-export; concept + definitief) |
 | [../workflow gevelweringgevels-app.drawio](../workflow%20gevelweringgevels-app.drawio) | Procesflow diagram (draw.io) |
 | [app-gevelwering-postgres-schema.md](app-gevelwering-postgres-schema.md) | Versioned PostgreSQL DDL + material/floormap/GA APIs (DDL **0.2.25** multi-variant) |
+| [bppserver-migration-plan.md](bppserver-migration-plan.md) | Migratie Node REST → bppServer (WSS); fasering, security, acceptatie |
 | [material-rw-c-ctr.md](material-rw-c-ctr.md) | Rw / C / Ctr uit R-spectrum (ISO 717-1): backfill, `--verify`, `--force` |
 | [facade-sound-insulation-app.md](facade-sound-insulation-app.md) | Design driver / invokes (aanvulling op overview §5) |
 

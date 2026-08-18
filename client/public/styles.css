@@ -306,6 +306,74 @@ body {
   align-self: center;
 }
 
+.fm-section-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.fm-section-type-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.fm-section-type-heading {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-family: "IBM Plex Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  color: var(--ink);
+}
+
+.fm-section-type-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr));
+  gap: 0.75rem;
+}
+
+.fm-section-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0.65rem 0.7rem 0.75rem;
+  min-width: 0;
+}
+
+.fm-section-card h4 {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  font-family: "IBM Plex Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  line-height: 1.25;
+}
+
+.fm-section-card .hint {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.3;
+}
+
+.fm-section-card-media {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.45rem;
+  margin-top: 0.25rem;
+}
+
+.fm-section-card-media .section-thumb {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  max-height: 7.5rem;
+}
+
+.fm-section-card-media .section-open-btn {
+  width: 100%;
+}
+
 .section-thumb {
   flex: 0 0 auto;
   display: block;
@@ -516,9 +584,110 @@ body {
   font-weight: 600;
 }
 
+/* Originelen die bron zijn van ±: groene markering, blijven top-level in de lijst */
+.drawing-list-item.drawing-list-item--compose-source {
+  position: relative;
+  background: #f4faf6;
+  border-color: #a5d6a7;
+  border-left-color: transparent;
+  padding-left: 0.7rem;
+}
+
+.drawing-list-item.drawing-list-item--compose-source::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  background: #43a047;
+  border-radius: 2px 0 0 2px;
+  pointer-events: none;
+}
+
+.drawing-list-item.drawing-list-item--compose-source.selected {
+  background: #e8f5e9;
+  border-color: #c62828;
+}
+
+.drawing-list-item.drawing-list-item--compose-source.selected::before {
+  background: #2e7d32;
+}
+
+.drawing-list-item.drawing-list-item--compose-flash {
+  outline: 2px solid #2e7d32;
+  outline-offset: 1px;
+  box-shadow: 0 0 0 3px rgba(46, 125, 50, 0.25);
+  transition: box-shadow 0.2s ease, outline-color 0.2s ease;
+}
+
 .drawing-list-compose-toggle {
   font-size: 0.78rem;
   padding: 0.2rem 0.5rem;
+}
+
+.drawing-list-compose-refs {
+  grid-column: 1 / -1;
+  margin: 0.15rem 0 0;
+  padding: 0.4rem 0.5rem 0.45rem;
+  border-top: 1px dashed #a5d6a7;
+  background: #f7fbf7;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.drawing-list-item--set > .drawing-list-compose-refs {
+  grid-column: 1 / -1;
+}
+
+.drawing-list-compose-refs-hint {
+  margin: 0 0 0.15rem;
+  font-size: 0.75rem;
+  color: #2e5a32;
+  line-height: 1.35;
+}
+
+.drawing-list-compose-ref {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.28rem 0.45rem;
+  border: 1px solid #c8e6c9;
+  border-radius: 3px;
+  background: #fff;
+  color: #1b5e20;
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.drawing-list-compose-ref:hover {
+  border-color: #66bb6a;
+  background: #e8f5e9;
+}
+
+.drawing-list-compose-ref.is-missing {
+  color: #8b1e1e;
+  border-color: #ef9a9a;
+  background: #fff8f8;
+  cursor: not-allowed;
+}
+
+.drawing-list-compose-ref-sign {
+  flex: 0 0 auto;
+  min-width: 1.1rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.drawing-list-compose-ref-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .drawing-list-children {
@@ -542,7 +711,7 @@ body {
 }
 
 .drawing-list-item.drawing-list-item--ga-source {
-  opacity: 0.9;
+  opacity: 0.95;
 }
 
 .drawing-list-item.drawing-list-item--ga-source > button.drawing-list-select {
@@ -1595,9 +1764,7 @@ button.drawing-list-select {
   grid-column: 1 / -1;
   min-width: 0;
   width: 100%;
-  display: flex;
-  align-items: flex-start;
-  gap: 0.4rem;
+  display: block;
   text-align: left;
   border: none;
   background: transparent;
@@ -1607,6 +1774,24 @@ button.drawing-list-select {
   cursor: pointer;
   overflow-wrap: anywhere;
   line-height: 1.35;
+}
+
+/* Flex lives on the inner span — WebKit often drops flex children of <button>. */
+.drawing-list-select-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.28rem;
+  min-width: 0;
+  width: 100%;
+}
+
+.drawing-list-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
 }
 
 .drawing-list-item--set > button.drawing-list-select {
@@ -1646,17 +1831,29 @@ button.drawing-list-select {
 
 .saved-sections-block {
   margin-top: 0.25rem;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
+/* Hele rechterkolom scrollt; geen tweede, krappe scroll binnen de lijst. */
 .saved-sections-block .drawing-list {
-  flex: 1 1 auto;
-  min-height: 8rem;
+  flex: 0 0 auto;
+  min-height: 0;
   max-height: none;
-  overflow: auto;
+  overflow: visible;
+}
+
+/* Sticky engineer-sidebar: lijst mag meegroeien zodat alle componenten bereikbaar zijn. */
+.engineer-sidebar .saved-sections-block {
+  flex: 0 0 auto;
+}
+
+.engineer-sidebar .saved-sections-block .drawing-list {
+  overflow: visible;
+  max-height: none;
+  min-height: 0;
 }
 
 #drawing-file-input {
@@ -2178,9 +2375,15 @@ body.engineer-resizing * {
   width: var(--engineer-sidebar-width);
   max-width: min(70vw, 760px);
   min-width: 0;
-  min-height: 0;
-  align-self: stretch;
-  overflow: auto;
+  /* Eigen verticale scroll; gevel/viewer blijft staan (sticky i.p.v. stretch met de PDF). */
+  max-height: calc(100vh - 1.5rem);
+  overflow-x: hidden;
+  overflow-y: auto;
+  position: sticky;
+  top: 0.75rem;
+  align-self: start;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   box-sizing: border-box;
   border: 1px solid var(--line);
   border-radius: 2px;
@@ -2208,6 +2411,36 @@ body.engineer-resizing * {
   margin-bottom: 0.4rem;
   font-size: 0.88rem;
   flex-shrink: 0;
+}
+
+.fm-discover-min-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 9rem;
+  max-width: 12rem;
+  padding: 0.15rem 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-inset, rgba(0, 0, 0, 0.03));
+}
+
+.fm-discover-min-wrap.hidden {
+  display: none;
+}
+
+.fm-discover-min-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--muted, #666);
+}
+
+.fm-discover-min-wrap input[type="range"] {
+  width: 100%;
+  margin: 0;
 }
 
 .toolbar-sep {
@@ -2238,19 +2471,20 @@ body.engineer-resizing * {
 }
 
 button.drawing-list-select .scale-calibrated-led {
-  margin: 0.2rem 0 0;
+  margin: 0;
   margin-left: 0;
 }
 
 button.drawing-list-select .drawing-list-select-label {
   min-width: 0;
-  flex: 1;
+  flex: 1 1 auto;
+  display: block;
 }
 
 .drawing-list-vgvr {
   flex: 0 0 auto;
   display: inline-block;
-  margin-top: 0.05rem;
+  margin-top: 0;
   padding: 0.14rem 0.5rem;
   border-radius: 2px;
   background: #111;
@@ -2266,6 +2500,11 @@ button.drawing-list-select .drawing-list-select-label {
   background: #444;
   color: #f0f0f0;
   font-weight: 600;
+}
+
+.drawing-list-vgvr--partial {
+  background: #6d4c41;
+  color: #fff;
 }
 
 .drawing-list-item.selected .drawing-list-vgvr {
@@ -2366,6 +2605,30 @@ button.drawing-list-select .drawing-list-select-label {
 
 .fm-expected-ori-block {
   margin: 0.35rem 0 0.25rem;
+}
+
+.fm-expected-ori-block--focus {
+  outline: 2px solid #1565c0;
+  outline-offset: 3px;
+  border-radius: 4px;
+  background: rgba(21, 101, 192, 0.06);
+}
+
+.drawing-list-ori {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.05rem 0.35rem;
+  margin-right: 0.25rem;
+  border-radius: 3px;
+  background: #e3f2fd;
+  color: #0d47a1;
+  white-space: nowrap;
+}
+
+.drawing-list-ori--missing {
+  background: #fff3e0;
+  color: #e65100;
 }
 
 .fm-expected-ori-label {
@@ -3031,6 +3294,13 @@ body.discovery-active #fm-mark-room-fieldset {
     min-height: 0;
     max-height: none;
     position: static;
+    align-self: stretch;
+    overflow: visible;
+  }
+
+  .engineer-sidebar {
+    max-height: none;
+    overflow: visible;
   }
 
   .engineer-pdf-scroll {

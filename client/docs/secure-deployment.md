@@ -40,6 +40,8 @@ Template: [`scripts/apache2/app-gevelwering-https.conf`](../../scripts/apache2/a
 export BPP_WS_ORIGIN_ALLOWLIST=https://app-gevelwering.example.com
 export GEVELWERING_CORS_ORIGIN=https://app-gevelwering.example.com
 export GEVELWERING_REQUIRE_HTTPS=1
+# After bpp migration (fase 1–4) stable: disable Node CRUD fallbacks
+export GEVELWERING_BPP_ONLY=1
 # optional: GEVELWERING_FORCE_HTTPS=1  # emit HSTS even if proto header missing
 ```
 

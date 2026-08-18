@@ -67,6 +67,23 @@ export function translateRing(points: Pt[], dx: number, dy: number): Pt[] {
   return closeRing(points.map((p) => ({ x: p.x + dx, y: p.y + dy })));
 }
 
+/**
+ * Translate without clamping to [0,1]. Use while dragging so vertices near the
+ * crop edge do not stick and shear the polygon (closeRing would clamp).
+ */
+export function translateRingUnclamped(points: Pt[], dx: number, dy: number): Pt[] {
+  if (!points.length) return [];
+  const out = points.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+  if (out.length >= 2) {
+    const pf = points[0];
+    const pl = points[points.length - 1];
+    if (Math.hypot(pf.x - pl.x, pf.y - pl.y) < 1e-6) {
+      out[out.length - 1] = { ...out[0] };
+    }
+  }
+  return out;
+}
+
 /** Unique vertex count of a (possibly closed) ring. */
 export function ringVertexCount(points: Pt[]): number {
   if (points.length < 2) return points.length;
@@ -137,7 +154,13 @@ export function rdpSimplify(points: Pt[], epsilon: number): Pt[] {
   const closed =
     Math.hypot(points[0].x - points[points.length - 1].x, points[0].y - points[points.length - 1].y) < 1e-9;
   const ring = closed ? points.slice(0, -1) : points.slice();
-  if (ring.length < 3) return closeRing(ring);
+  if (ring.length < 3) {
+    const out = ring.map((p) => ({ x: p.x, y: p.y }));
+    if (out.length && Math.hypot(out[0].x - out[out.length - 1].x, out[0].y - out[out.length - 1].y) > 1e-6) {
+      out.push({ ...out[0] });
+    }
+    return out;
+  }
 
   function distSeg(p: Pt, a: Pt, b: Pt): number {
     const dx = b.x - a.x;
@@ -170,7 +193,14 @@ export function rdpSimplify(points: Pt[], epsilon: number): Pt[] {
     return [a, b];
   }
 
-  return closeRing(rec(ring));
+  // Close without clamping — callers may pass pixel coords (not section 0–1).
+  const simplified = rec(ring);
+  if (!simplified.length) return [];
+  const out = simplified.map((p) => ({ x: p.x, y: p.y }));
+  const f = out[0];
+  const l = out[out.length - 1];
+  if (Math.hypot(f.x - l.x, f.y - l.y) > 1e-6) out.push({ ...f });
+  return out;
 }
 
 /**

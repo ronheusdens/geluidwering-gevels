@@ -130,6 +130,7 @@ export const handleDrawingUploadOptions = handleDrawingApiOptions;
  * GET /api/drawings/list?building_id=<uuid>
  * Headers: Authorization: Bearer <session_token>
  */
+/** @deprecated Phase 1 — prefer API_ListProjectDocuments via WSS. */
 export async function handleDrawingList(req, res, url) {
   if (requireHttpsOrReject(req, res)) return;
   if (req.method !== "GET") {
@@ -373,6 +374,7 @@ function isEngineerSession(session) {
  * Headers: Authorization: Bearer <session_token>
  * Engineer/admin only.
  */
+/** @deprecated Phase 1 — prefer API_DeleteDrawingRegion via WSS. */
 export async function handleDrawingSectionsDelete(req, res, url) {
   if (requireHttpsOrReject(req, res)) return;
   if (req.method !== "DELETE") {

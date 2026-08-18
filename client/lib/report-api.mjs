@@ -32,6 +32,10 @@ import {
   requireHttpsOrReject,
   securityHeaders,
 } from "./http-security.mjs";
+import {
+  resolveGeluidbelastingSpectrum,
+  spectrumDisplayLabel,
+} from "./geluidbelasting-spectra.mjs";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -41,6 +45,8 @@ const APP_ROOT = path.resolve(__dirname, "..", "..");
 const DEFAULT_PROJECTS_ROOT = path.join(APP_ROOT, "data", "projecten");
 const LOGO_PATH = path.join(__dirname, "..", "public", "assets", "stilte-logo.jpg");
 const FIRM_NAME = "Stilte advies en meten";
+/** Bump when report HTML template changes — forces a new content hash vs old files. */
+const REPORT_TEMPLATE_VERSION = "2026-08-16-spectrum2-geluidbelasting";
 
 let cachedLogoDataUri = null;
 
@@ -406,6 +412,61 @@ function spectrumBandCells(m) {
   return bands.map((b) => `<td class="num">${esc(fmtNum(b, 0))}</td>`).join("");
 }
 
+/** Tabel «Geluidbelasting» — voor Spectrum 2 (Atr) vaste octaafbanden + totaal. */
+function renderGeluidbelastingSection(variant, lb) {
+  const kind = variant.spectrum_kind;
+  const spec = resolveGeluidbelastingSpectrum(kind);
+  const label = spectrumDisplayLabel(kind);
+  const fmt1 = (n) =>
+    n == null || !Number.isFinite(Number(n))
+      ? "—"
+      : Number(n).toLocaleString("nl-NL", {
+          minimumFractionDigits: 1,
+          maximumFractionDigits: 1,
+        });
+  const bandHeaders = (spec?.bands_hz || [63, 125, 250, 500, 1000, 2000])
+    .map((hz) => `<th class="num">${hz}</th>`)
+    .join("");
+  let bandCells;
+  let totalCell;
+  let note;
+  if (spec) {
+    bandCells = spec.levels_db.map((v) => `<td class="num">${esc(fmt1(v))}</td>`).join("");
+    // Toon vaste Atr-totaal; Lb van de variant staat in de variantbalk (kan gelijk zijn).
+    totalCell = `<td class="num"><strong>${esc(fmt1(spec.total_db))}</strong></td>`;
+    note =
+      Number.isFinite(lb) && Math.abs(lb - spec.total_db) > 0.05
+        ? `<p class="note">Index-totaal Spectrum 2 (wegverkeer, Atr) = ${esc(fmt1(spec.total_db))} dB. Project-Lb op deze variant = ${esc(fmt1(lb))} dB.</p>`
+        : `<p class="note">Spectrum 2 — wegverkeer, index Atr: octaafbanden 63–2000 Hz + totaal ${esc(fmt1(spec.total_db))} dB.</p>`;
+  } else {
+    bandCells = [63, 125, 250, 500, 1000, 2000]
+      .map(() => `<td class="num missing">—</td>`)
+      .join("");
+    totalCell = `<td class="num"><strong>${esc(fmt1(lb))}</strong></td>`;
+    note = `<p class="note">Voor dit spectrum zijn nog geen vaste octaafbanden vastgelegd; Lb-totaal is leidend.</p>`;
+  }
+  return `
+    <h2>Geluidbelasting — ${esc(label)}</h2>
+    <p class="note">Toegepast verkeersgeluidspectrum op deze variant (NPR 5272 / NEN 5077).</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Geluidbelasting [dB]</th>
+          ${bandHeaders}
+          <th class="num">Totaal</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>${esc(label)}</td>
+          ${bandCells}
+          ${totalCell}
+        </tr>
+      </tbody>
+    </table>
+    ${note}`;
+}
+
 function dominantClCg(vlakken) {
   let best = null;
   let bestArea = -1;
@@ -572,7 +633,7 @@ function renderReportHtml(model, opts) {
     .page-foot { display: flex; justify-content: space-between; margin-top: 1.25rem; padding-top: .4rem; border-top: 1px solid #bbb; font-size: 8.5pt; color: #444; }
   </style>
 </head>
-<body data-generated-at="${esc(generatedAt)}">
+<body data-generated-at="${esc(generatedAt)}" data-report-template="${esc(REPORT_TEMPLATE_VERSION)}">
   <article class="sheet">
     <header class="page-head">
       <div>
@@ -595,7 +656,8 @@ function renderReportHtml(model, opts) {
       <dt>Rapportstatus</dt><dd>${esc(status)}</dd>
       <dt>Projectstatus app</dt><dd>${esc(building.project_status)}</dd>
     </dl>
-    <div class="variant-bar">VARIANT: ${esc(variant.omschrijving)} · Lb ${esc(fmtNum(lb, 1))} dB · ${esc(variant.spectrum_kind)}</div>
+    <div class="variant-bar">VARIANT: ${esc(variant.omschrijving)} · Lb ${esc(fmtNum(lb, 1))} dB · ${esc(spectrumDisplayLabel(variant.spectrum_kind))}</div>
+    ${renderGeluidbelastingSection(variant, lb)}
     <h2>Resultaten GA;k</h2>
     <table>
       <thead>

@@ -1,14 +1,14 @@
 /**
  * Project material favorites ("meest gebruikt") + named presets.
- * GET/POST/DELETE /api/floormap/material-favorites
- * GET/POST/DELETE /api/floormap/material-favorite-presets
+ * @deprecated Phase 4b — archived HTTP fallback. Prefer bppServer WSS (client/src/bpp-api.ts).
+ * Loaded only when GEVELWERING_BPP_ONLY is unset/0.
  */
-import { getPool } from "./pg-config.mjs";
+import { getPool } from "../pg-config.mjs";
 import {
   jsonWithSecurity,
   parseSessionToken,
   requireHttpsOrReject,
-} from "./http-security.mjs";
+} from "../http-security.mjs";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -103,6 +103,7 @@ function mapMaterialRow(r) {
 }
 
 /** GET/POST/DELETE /api/floormap/material-favorites */
+/** @deprecated Phase 4 — prefer API_List/Add/RemoveMaterialFavorite via WSS. */
 export async function handleMaterialFavorites(req, res, url) {
   if (requireHttpsOrReject(req, res)) return;
   const token = parseSessionToken(req);
@@ -240,6 +241,7 @@ export async function handleMaterialFavorites(req, res, url) {
  *   delete: { preset_id }
  *   rename: { preset_id, name }
  */
+/** @deprecated Phase 4 — prefer API_ListMaterialFavoritePresets / API_MaterialFavoritePresetAction via WSS. */
 export async function handleMaterialFavoritePresets(req, res, url) {
   if (requireHttpsOrReject(req, res)) return;
   const token = parseSessionToken(req);

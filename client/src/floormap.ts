@@ -21,6 +21,7 @@ import {
   shoelaceArea,
   simplifyEditableRing,
   translateRing,
+  translateRingUnclamped,
   type Pt,
 } from "./geom";
 import {
@@ -37,11 +38,35 @@ import {
   composeConstituentsMissingMaterial,
 } from "./ga-vr-components";
 import { isLengthQuantityRubriek, MATERIAL_RUBRIEKEN } from "../lib/material-taxonomy.mjs";
-import { discoverRoomPolylines, pixelsToSectionNorm } from "./room-discover";
+import {
+  discoverInteriorOpenings,
+  discoverRoomPolylines,
+  pixelsToSectionNorm,
+  type DiscoveredOpening,
+} from "./room-discover";
+
 import { loadAuth, storeAuth as persistAuth, syncSessionCookie, apiAuthHeaders } from "./auth-store";
 import { resolveBppWsUrl } from "./ws-url";
 import { initPasswordToggles } from "./password-toggle";
 import { mountProjectMenu, type ProjectMenuApi } from "./project-menu";
+import {
+  bppAddMaterialFavorite,
+  bppDeleteDrawingSubsection,
+  bppGetFloormapSection,
+  bppListDrawingSubsections,
+  bppListFloormapSections,
+  bppListMaterialCategories,
+  bppListMaterialFavoritePresets,
+  bppListMaterialFavorites,
+  bppListMaterials,
+  bppMaterialFavoritePresetAction,
+  bppPhase1Enabled,
+  bppRemoveMaterialFavorite,
+  bppReorderDrawingSubsections,
+  bppSaveDrawingSubsection,
+  bppSaveFloormapScale,
+  bppSaveSubsectionMaterial,
+} from "./bpp-api";
 
 type Envelope = {
   v: number;
@@ -206,6 +231,10 @@ const zoomBtn = document.getElementById("fm-zoom-btn") as HTMLButtonElement;
 const zoomFitBtn = document.getElementById("fm-zoom-fit") as HTMLButtonElement;
 const zoomLabelEl = document.getElementById("fm-zoom-label") as HTMLElement;
 const discoverBtn = document.getElementById("fm-discover-btn") as HTMLButtonElement;
+const discoverMinWrapEl = document.getElementById("fm-discover-min-wrap") as HTMLElement | null;
+const discoverMinSizeEl = document.getElementById("fm-discover-min-size") as HTMLInputElement | null;
+const discoverMinValEl = document.getElementById("fm-discover-min-val") as HTMLElement | null;
+const discoverHintEl = document.getElementById("fm-discover-hint") as HTMLElement | null;
 const calibrateBtn = document.getElementById("fm-calibrate-btn") as HTMLButtonElement;
 const calibrateLedEl = document.getElementById("fm-calibrate-led") as HTMLElement | null;
 const detailBtn = document.getElementById("fm-detail-btn") as HTMLButtonElement | null;
@@ -498,7 +527,7 @@ function differenceSubject(selected: RoomSubsection[]): RoomSubsection | null {
   return sortByAreaDesc(selected)[0] ?? null;
 }
 
-/** Prefer sidebar VG/VR; else inherit when all selected sources agree (or subject for −). */
+/** VG/VR from sources (unanimous or grootste buitencontour); form only if sources lack VG/VR. */
 function resolveComponentVgVr(selected: RoomSubsection[]): {
   vg_nr: number | null;
   vr_nr: string | null;
@@ -506,12 +535,6 @@ function resolveComponentVgVr(selected: RoomSubsection[]): {
 } {
   const form = parseVgVrInputs();
   if (form.error) return form;
-  if (form.vg_nr != null && form.vr_nr != null) return form;
-
-  const subj = differenceSubject(selected);
-  if (subj?.vg_nr != null && subj.vr_nr) {
-    return { vg_nr: Number(subj.vg_nr), vr_nr: String(subj.vr_nr) };
-  }
 
   const vrs = [
     ...new Set(
@@ -527,9 +550,40 @@ function resolveComponentVgVr(selected: RoomSubsection[]): {
         .filter((v): v is number => v != null && Number.isFinite(v)),
     ),
   ];
+  const subj = differenceSubject(selected);
+
+  let inherited: { vg_nr: number; vr_nr: string } | null = null;
   if (vrs.length === 1 && vgs.length === 1) {
-    return { vg_nr: vgs[0], vr_nr: vrs[0] };
+    inherited = { vg_nr: vgs[0], vr_nr: vrs[0] };
+  } else if (subj?.vg_nr != null && subj.vr_nr) {
+    // Grootste (buitencontour) bepaalt VG/VR als bronnen gedeeltelijk leeg zijn.
+    inherited = { vg_nr: Number(subj.vg_nr), vr_nr: String(subj.vr_nr).trim() };
+  } else if (vrs.length === 1 && subj?.vg_nr != null) {
+    inherited = { vg_nr: Number(subj.vg_nr), vr_nr: vrs[0] };
+  } else if (vrs.length > 1) {
+    return {
+      vg_nr: null,
+      vr_nr: null,
+      error: `Geselecteerde bronnen hebben verschillende VR’s (${vrs.join(", ")}). Maak die gelijk vóór compositie.`,
+    };
   }
+
+  if (inherited) {
+    if (
+      form.vg_nr != null &&
+      form.vr_nr != null &&
+      (form.vg_nr !== inherited.vg_nr || form.vr_nr !== inherited.vr_nr)
+    ) {
+      return {
+        vg_nr: null,
+        vr_nr: null,
+        error: `Geselecteerde bronnen zijn VG ${inherited.vg_nr} · VR ${inherited.vr_nr}, maar het formulier heeft VG ${form.vg_nr} · VR ${form.vr_nr}. Zet het formulier gelijk of leeg VG/VR.`,
+      };
+    }
+    return inherited;
+  }
+
+  if (form.vg_nr != null && form.vr_nr != null) return form;
   return { vg_nr: null, vr_nr: null };
 }
 
@@ -554,10 +608,31 @@ function suggestVgNr(): number {
   return 1;
 }
 
+/** Most-used VR on this gevel/section, else active list filter, else empty. */
+function suggestFacadeVrNr(): string {
+  if (roomListVrFilter) return roomListVrFilter;
+  const counts = new Map<string, number>();
+  for (const r of rooms) {
+    const vr = normalizeVrNr(r.vr_nr);
+    if (!vr) continue;
+    counts.set(vr, (counts.get(vr) || 0) + 1);
+  }
+  let best = "";
+  let bestN = 0;
+  for (const [vr, n] of counts) {
+    if (n > bestN) {
+      best = vr;
+      bestN = n;
+    }
+  }
+  return best;
+}
+
 function fillVgVrSuggestions(): void {
   if (!isFloormapKind()) {
-    roomVgInput.value = "";
-    roomVrInput.value = "";
+    // Keep sticky VG/VR across successive gevel-componenten; only fill gaps.
+    if (!roomVgInput.value.trim()) roomVgInput.value = String(suggestVgNr());
+    if (!roomVrInput.value.trim()) roomVrInput.value = suggestFacadeVrNr();
     return;
   }
   roomVgInput.value = String(suggestVgNr());
@@ -577,10 +652,18 @@ function syncWorkspaceLabels(kind?: string | null): void {
   }
   if (loadBuildingBtn) loadBuildingBtn.textContent = "Ophalen";
   if (backPickerBtn) backPickerBtn.textContent = "← Overzicht";
-  discoverBtn.textContent = `Ontdek ${n.plural}`;
+  discoverBtn.textContent = floormap ? `Ontdek ${n.plural}` : "Ontdek openingen";
   if (discoverBtnSide) {
-    discoverBtnSide.textContent = "Ontdek";
-    discoverBtnSide.title = `Ontdek ${n.plural} automatisch`;
+    discoverBtnSide.textContent = floormap ? "Ontdek" : "Ontdek in";
+    discoverBtnSide.title = floormap
+      ? `Ontdek ${n.plural} automatisch`
+      : "Ontdek openingen (kozijnen e.d.) binnen de geselecteerde buitencontour";
+  }
+  if (discoverMinWrapEl) discoverMinWrapEl.classList.toggle("hidden", floormap);
+  if (discoverHintEl) {
+    discoverHintEl.textContent = floormap
+      ? `Plattegrond: ruimten op de crop.`
+      : "Gevel: selecteer buitencontour (VR), stel min. grootte in, daarna Ontdek openingen — alleen rechthoeken (H/V) en ronde vormen, groot→klein.";
   }
   if (markRoomLegendEl) markRoomLegendEl.textContent = cap;
   roomDrawBtn.textContent = `Teken ${n.singular}`;
@@ -611,7 +694,7 @@ function syncWorkspaceLabels(kind?: string | null): void {
   if (roomsHintEl) {
     roomsHintEl.textContent = floormap
       ? `Elke ${n.singular} toont VG/VR, oppervlakte (m²) en omtrek (m) bij ingestelde schaal.`
-      : `Kleuren: groen = in bewerking · teal = bewerkt/opgeslagen · paars = nog open. Oranje/groene led = materiaal. Selecteer voor +/− compositie.`;
+      : `Kleuren: groen = in bewerking · teal = bewerkt/opgeslagen · paars = nog open. Zwarte badge = VG/VR. Oranje/groene led = materiaal. Selecteer voor +/− compositie.`;
   }
   vgVrRowEl?.classList.remove("hidden");
   if (vgVrHintEl) {
@@ -685,8 +768,9 @@ function syncRoomListVrFilterOptions(items: RoomSubsection[]): void {
   savedVrFilterWrapEl?.classList.toggle("hidden", vrs.length === 0);
 }
 
-function visibleTopLevelRooms(items: RoomSubsection[], nestedIds: Set<string>): RoomSubsection[] {
-  return items.filter((r) => !nestedIds.has(r.id) && roomMatchesVrFilter(r, roomListVrFilter));
+/** Top-level rows for the current VR filter. */
+function visibleTopLevelRooms(items: RoomSubsection[]): RoomSubsection[] {
+  return items.filter((r) => roomMatchesVrFilter(r, roomListVrFilter));
 }
 
 function roomListCountLabel(visible: number, total: number): string {
@@ -707,13 +791,138 @@ let projectMenu: ProjectMenuApi | null = null;
 let sections: FloormapSection[] = [];
 let activeSection: FloormapSection | null = null;
 let rooms: RoomSubsection[] = [];
+/**
+ * Monotonic epoch for loadRooms — discard late/stale list replies that would
+ * overwrite a fresher in-memory save (classic race after Opslaan).
+ */
+let roomsLoadEpoch = 0;
+/**
+ * Just-saved geometry kept briefly so a stale ListDrawingSubsections cannot
+ * roll the overlay/list back to the pre-edit shape (seen on Firefox after save).
+ */
+const localRoomPatches = new Map<
+  string,
+  {
+    at: number;
+    points: Pt[];
+    label: string;
+    level_hint: string;
+    vg_nr: number | null;
+    vr_nr: string | null;
+    area_m2: number | null;
+    area_norm: number | null;
+    perimeter_m: number | null;
+    analysis: SubsectionAnalysis | null | undefined;
+  }
+>();
+const LOCAL_ROOM_PATCH_TTL_MS = 45_000;
+
+function noteLocalRoomPatch(room: {
+  id: string;
+  points: Pt[];
+  label: string;
+  level_hint: string;
+  vg_nr: number | null;
+  vr_nr: string | null;
+  area_m2: number | null;
+  area_norm: number | null;
+  perimeter_m: number | null;
+  analysis?: SubsectionAnalysis | null;
+}): void {
+  const sid = (room.id || "").trim();
+  if (!sid || !room.points?.length) return;
+  localRoomPatches.set(sid, {
+    at: Date.now(),
+    points: room.points.map((p) => ({ ...p })),
+    label: room.label,
+    level_hint: room.level_hint,
+    vg_nr: room.vg_nr,
+    vr_nr: room.vr_nr,
+    area_m2: room.area_m2,
+    area_norm: room.area_norm,
+    perimeter_m: room.perimeter_m,
+    analysis: room.analysis
+      ? {
+          ...room.analysis,
+          holes: Array.isArray(room.analysis.holes)
+            ? room.analysis.holes.map((h) => h.map((p) => ({ ...p })))
+            : room.analysis.holes,
+        }
+      : room.analysis,
+  });
+}
+
+function pruneLocalRoomPatches(): void {
+  const now = Date.now();
+  for (const [id, p] of localRoomPatches) {
+    if (now - p.at > LOCAL_ROOM_PATCH_TTL_MS) localRoomPatches.delete(id);
+  }
+}
+
+/** Apply recent local saves on top of a server list (geometry/label/VG-VR). */
+function mergeRoomsWithLocalPatches(incoming: RoomSubsection[]): RoomSubsection[] {
+  pruneLocalRoomPatches();
+  if (!localRoomPatches.size) return incoming;
+  const out = incoming.map((r) => {
+    const p = localRoomPatches.get(r.id);
+    if (!p) return r;
+    return {
+      ...r,
+      points: p.points.map((pt) => ({ ...pt })),
+      label: p.label || r.label,
+      level_hint: p.level_hint || r.level_hint,
+      vg_nr: p.vg_nr,
+      vr_nr: p.vr_nr,
+      area_m2: p.area_m2 != null ? p.area_m2 : r.area_m2,
+      area_norm: p.area_norm != null ? p.area_norm : r.area_norm,
+      perimeter_m: p.perimeter_m != null ? p.perimeter_m : r.perimeter_m,
+      analysis: p.analysis
+        ? {
+            ...(r.analysis || {}),
+            ...p.analysis,
+            holes: Array.isArray(p.analysis.holes)
+              ? p.analysis.holes
+              : r.analysis?.holes,
+          }
+        : r.analysis,
+    };
+  });
+  // If a brand-new save is missing from a stale list, keep it visible.
+  for (const [id, p] of localRoomPatches) {
+    if (out.some((r) => r.id === id)) continue;
+    out.push({
+      id,
+      section_id: activeSection?.id || "",
+      label: p.label,
+      level_hint: p.level_hint,
+      vg_nr: p.vg_nr,
+      vr_nr: p.vr_nr,
+      points: p.points.map((pt) => ({ ...pt })),
+      area_m2: p.area_m2,
+      area_norm: p.area_norm,
+      perimeter_m: p.perimeter_m,
+      perimeter_norm: null,
+      metres_per_norm_unit: activeScaleMpu(),
+      analysis_status: "ok",
+      sort_order: out.length,
+      analysis: p.analysis ?? null,
+    });
+  }
+  return out;
+}
 /** Multi-select for gevel compose (component ids). */
 let selectedSetIds = new Set<string>();
 /** Per selected id: + include / − subtract. Defaults applied when selecting. */
 let constituentSigns = new Map<string, ComposeSign>();
 let booleanPreview: BooleanPolygon | null = null;
-/** Samengestelde componenten waarvan de constituenten uitgeklapt zijn. */
-const expandedComposeIds = new Set<string>();
+/** Twee-staps bevestiging voor Verwijderen (window.confirm wordt soms stil geblokkeerd). */
+let pendingDeleteId: string | null = null;
+let pendingDeleteTimer: number | null = null;
+/** True while add/remove seal runs — syncKierSuggestUi must not fight the checkbox. */
+let kierToggleInFlight = false;
+/** Samengestelde resultaten waarvan het Bronnen-paneel open staat (verwijzingen, geen nesting). */
+const expandedComposeSourcePanels = new Set<string>();
+let composeFlashTimer: number | null = null;
 type MaterialCategoryOpt = {
   rubriek_nr?: number | null;
   master_category: string;
@@ -1384,46 +1593,100 @@ function setMeasureTool(tool: ToolMode): void {
   if (tool === "length") setStatus("Lengte meten: klik twee punten", "busy");
 }
 
+function sectionKindOrder(kind?: string | null): number {
+  switch (String(kind || "").toUpperCase()) {
+    case "FLOORMAP":
+      return 0;
+    case "FACADE":
+      return 1;
+    case "SECTION":
+      return 2;
+    case "CROSS_SECTION":
+      return 3;
+    default:
+      return 9;
+  }
+}
+
 function renderSectionList(): void {
   sectionListEl.innerHTML = "";
+  sectionListEl.className = "fm-section-picker";
   if (sections.length === 0) {
     sectionListEl.innerHTML = `<p class="hint">Geen schaalbare secties (plattegrond / gevel / doorsnede) voor dit project.</p>`;
     return;
   }
+
+  const byKind = new Map<string, FloormapSection[]>();
   for (const s of sections) {
-    const card = document.createElement("article");
-    card.className = "admin-project-card panel";
-    const hasComponents = (s.room_count || 0) >= 1;
-    const n = partNoun(s.region_kind);
-    const scale =
-      s.metres_per_norm_unit != null && s.metres_per_norm_unit > 0
-        ? `schaal gezet (${s.scale_source})`
-        : "geen schaal";
-    const countLabel =
-      s.room_count === 1 ? `1 ${n.singular}` : `${s.room_count} ${n.plural}`;
-    card.innerHTML = `
-      <h3>${s.label || n.title}</h3>
-      <p class="hint">${n.kindLabel} · pagina ${s.page_index + 1} · ${countLabel} · ${scale}</p>
-    `;
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = hasComponents ? "section-open-btn section-open-btn--filled" : "section-open-btn section-open-btn--empty";
-    btn.textContent = `${n.title} openen`;
-    btn.addEventListener("click", () => {
-      void openSection(s.id);
-    });
-    const row = document.createElement("div");
-    row.className = "section-open-row";
-    const thumb = document.createElement("img");
-    thumb.className = "section-thumb is-loading";
-    thumb.alt = s.label || n.title;
-    thumb.width = SECTION_THUMB_W;
-    thumb.height = SECTION_THUMB_H;
-    row.appendChild(thumb);
-    row.appendChild(btn);
-    card.appendChild(row);
-    sectionListEl.appendChild(card);
-    mountSectionThumbnail(s, thumb);
+    const kind = String(s.region_kind || "FLOORMAP").toUpperCase();
+    const list = byKind.get(kind) || [];
+    list.push(s);
+    byKind.set(kind, list);
+  }
+  const kinds = [...byKind.keys()].sort((a, b) => sectionKindOrder(a) - sectionKindOrder(b) || a.localeCompare(b));
+
+  for (const kind of kinds) {
+    const group = byKind.get(kind) || [];
+    const n = partNoun(kind);
+    const row = document.createElement("section");
+    row.className = "fm-section-type-row";
+    row.setAttribute("aria-label", n.kindLabel);
+
+    const head = document.createElement("h3");
+    head.className = "fm-section-type-heading";
+    head.textContent = `${n.kindLabel}${group.length > 1 ? ` (${group.length})` : ""}`;
+    row.appendChild(head);
+
+    const grid = document.createElement("div");
+    grid.className = "fm-section-type-grid";
+
+    for (const s of group) {
+      const card = document.createElement("article");
+      card.className = "fm-section-card panel";
+      const hasComponents = (s.room_count || 0) >= 1;
+      const scale =
+        s.metres_per_norm_unit != null && s.metres_per_norm_unit > 0
+          ? `schaal gezet (${s.scale_source})`
+          : "geen schaal";
+      const countLabel =
+        s.room_count === 1 ? `1 ${n.singular}` : `${s.room_count} ${n.plural}`;
+
+      const title = document.createElement("h4");
+      title.textContent = s.label || n.title;
+      card.appendChild(title);
+
+      const meta = document.createElement("p");
+      meta.className = "hint";
+      meta.textContent = `pagina ${s.page_index + 1} · ${countLabel} · ${scale}`;
+      card.appendChild(meta);
+
+      const media = document.createElement("div");
+      media.className = "fm-section-card-media";
+      const thumb = document.createElement("img");
+      thumb.className = "section-thumb is-loading";
+      thumb.alt = s.label || n.title;
+      thumb.width = SECTION_THUMB_W;
+      thumb.height = SECTION_THUMB_H;
+      media.appendChild(thumb);
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = hasComponents
+        ? "section-open-btn section-open-btn--filled"
+        : "section-open-btn section-open-btn--empty";
+      btn.textContent = `${n.title} openen`;
+      btn.addEventListener("click", () => {
+        void openSection(s.id);
+      });
+      media.appendChild(btn);
+      card.appendChild(media);
+
+      grid.appendChild(card);
+      mountSectionThumbnail(s, thumb);
+    }
+
+    row.appendChild(grid);
+    sectionListEl.appendChild(row);
   }
 }
 
@@ -1434,10 +1697,17 @@ function selectedIsKierdichting(): boolean {
 }
 
 function pendingIsLengthComponent(): boolean {
+  if (pendingRoom?.editingId) {
+    const editing = rooms.find((x) => x.id === pendingRoom!.editingId);
+    if (editing) return componentIsLengthQuantity(editing);
+  }
   if (selectedIsKierdichting()) return true;
-  if (!pendingRoom?.editingId) return false;
-  const r = rooms.find((x) => x.id === pendingRoom!.editingId);
-  return Boolean(r && componentIsLengthQuantity(r));
+  return false;
+}
+
+/** Length vs area for save/UI: prefer the component being edited, not the material dropdown. */
+function pendingSaveIsLength(): boolean {
+  return pendingIsLengthComponent() || (!pendingRoom?.editingId && selectedIsKierdichting());
 }
 
 function perimeterMOfRing(points: Pt[]): number | null {
@@ -1492,15 +1762,25 @@ async function ensureKierMaterials(): Promise<void> {
     return;
   }
   try {
-    const data = await apiGet<{ materials: CatalogMaterial[] }>(
-      `/api/floormap/materials?master_category=${encodeURIComponent(KIER_RUBRIEK_NAME)}&limit=1000`,
-    );
-    kierMaterials = data.materials || [];
+    const data = bppPhase1Enabled()
+      ? await bppListMaterials(invokeString, auth.token, {
+          master_category: KIER_RUBRIEK_NAME,
+          limit: 1000,
+        })
+      : await apiGet<{ materials: CatalogMaterial[] }>(
+          `/api/floormap/materials?master_category=${encodeURIComponent(KIER_RUBRIEK_NAME)}&limit=1000`,
+        );
+    kierMaterials = (data.materials || []) as CatalogMaterial[];
     if (!kierMaterials.some((m) => (m.catalog_id || "") === DEFAULT_KIER_CATALOG_ID)) {
-      const extra = await apiGet<{ materials: CatalogMaterial[] }>(
-        `/api/floormap/materials?q=${encodeURIComponent(DEFAULT_KIER_CATALOG_ID)}&limit=20`,
-      );
-      for (const m of extra.materials || []) {
+      const extra = bppPhase1Enabled()
+        ? await bppListMaterials(invokeString, auth.token, {
+            q: DEFAULT_KIER_CATALOG_ID,
+            limit: 20,
+          })
+        : await apiGet<{ materials: CatalogMaterial[] }>(
+            `/api/floormap/materials?q=${encodeURIComponent(DEFAULT_KIER_CATALOG_ID)}&limit=20`,
+          );
+      for (const m of (extra.materials || []) as CatalogMaterial[]) {
         if ((m.catalog_id || "") === DEFAULT_KIER_CATALOG_ID) {
           kierMaterials = [m, ...kierMaterials];
           break;
@@ -1570,9 +1850,18 @@ function syncKierSuggestUi(): void {
   void ensureKierMaterials();
   const peri = pendingRoom ? perimeterMOfRing(pendingRoom.points) : null;
   const existing = editing ? existingSealFor(editing.id) : undefined;
-  if (existing && kierSuggestCb && !kierSuggestCb.dataset.userTouched) {
-    kierSuggestCb.checked = true;
-    if (existing.analysis?.material_id) {
+  const setSelected = Boolean(editing && selectedSetIds.has(editing.id));
+  // Tijdens toggle volgt de checkbox de klik; anders DB-state. Alleen aanvinken als component geselecteerd is.
+  if (kierSuggestCb && !kierToggleInFlight) {
+    kierSuggestCb.checked = Boolean(existing);
+    kierSuggestCb.disabled = !setSelected && !existing;
+    kierSuggestCb.title = setSelected
+      ? "Kierdichting voor dit vlak"
+      : existing
+        ? "Uitvinken verwijdert de kierdichting"
+        : "Vink eerst het component aan in de lijst (selectie) om kierdichting toe te voegen";
+    delete kierSuggestCb.dataset.userTouched;
+    if (existing?.analysis?.material_id) {
       renderKierMaterialOptions(existing.analysis.material_id);
     }
   }
@@ -1590,9 +1879,13 @@ function syncKierSuggestUi(): void {
       typeSum > 0
         ? ` Totaal ${(mat?.catalog_id || DEFAULT_KIER_CATALOG_ID)} ≈ ${typeSum.toFixed(2)} m.`
         : "";
-    kierSuggestHintEl.textContent = existing
-      ? `Al toegevoegd. Opslaan werkt de omtreklengte bij.${periBit}${typeBit}`
-      : `Optioneel. Standaard ${DEFAULT_KIER_CATALOG_ID}. Bij aanvinken: extra component met de omtreklengte; lengtes van hetzelfde type worden opgeteld.${periBit}${typeBit}`;
+    if (existing) {
+      kierSuggestHintEl.textContent = `Al toegevoegd — vink uit om te verwijderen. Opslaan werkt de omtreklengte bij.${periBit}${typeBit}`;
+    } else if (!setSelected) {
+      kierSuggestHintEl.textContent = `Vink eerst het component aan in de lijst (selectie voor +/−) om kierdichting te kunnen toevoegen.${periBit}`;
+    } else {
+      kierSuggestHintEl.textContent = `Optioneel. Standaard ${DEFAULT_KIER_CATALOG_ID}. Bij aanvinken: extra component met de omtreklengte; lengtes van hetzelfde type worden opgeteld.${periBit}${typeBit}`;
+    }
   }
 }
 
@@ -1628,10 +1921,7 @@ async function upsertPerimeterSeal(
     seal_for_subsection_id: parentId,
   };
   if (lengthM != null) analysis.length_m = lengthM;
-  const saved = await apiPost<{
-    subsection_id: string;
-    analysis?: SubsectionAnalysis;
-  }>("/api/floormap/subsections", {
+  const saved = await saveDrawingSubsection({
     section_id: activeSection.id,
     subsection_id: existing?.id || undefined,
     label: existing?.label || label,
@@ -1656,14 +1946,11 @@ async function upsertPerimeterSeal(
   };
 }
 
-async function removeSealForParent(parentId: string, { confirm: ask = true } = {}): Promise<boolean> {
+async function removeSealForParent(parentId: string): Promise<boolean> {
   const seal = existingSealFor(parentId);
   if (!seal) return false;
-  if (ask) {
-    const label = seal.label || "kierdichting";
-    if (!confirm(`«${label}» verwijderen?`)) return false;
-  }
-  await apiDelete(`/api/floormap/subsections?subsection_id=${encodeURIComponent(seal.id)}`);
+  // Geen window.confirm — die wordt soms stil geblokkeerd (vinkje lijkt “vast”).
+  await deleteDrawingSubsection(seal.id);
   if (pendingRoom?.editingId === seal.id) clearPendingRoom();
   if (touchedRoomIds.delete(seal.id)) persistTouchedRoomIds();
   selectedSetIds.delete(seal.id);
@@ -1675,13 +1962,27 @@ async function toggleKierSealForRoom(room: RoomSubsection, want: boolean): Promi
   if (isFloormapKind() || componentIsLengthQuantity(room)) return;
   if (!Array.isArray(room.points) || room.points.length < 3) {
     setStatus("Gesloten vlak nodig voor kierdichting (omtrek)", "err");
+    if (kierSuggestCb) kierSuggestCb.checked = Boolean(existingSealFor(room.id));
     return;
   }
+  if (want && !selectedSetIds.has(room.id)) {
+    setStatus("Vink eerst het component aan (selectie links) om kierdichting toe te voegen", "err");
+    if (kierSuggestCb && pendingRoom?.editingId === room.id) {
+      kierSuggestCb.checked = Boolean(existingSealFor(room.id));
+    }
+    renderRoomList();
+    return;
+  }
+  kierToggleInFlight = true;
   try {
     if (!want) {
       setStatus("Kierdichting verwijderen…", "busy");
-      const removed = await removeSealForParent(room.id, { confirm: false });
+      const removed = await removeSealForParent(room.id);
       await loadRooms();
+      if (kierSuggestCb && pendingRoom?.editingId === room.id) {
+        kierSuggestCb.checked = false;
+        delete kierSuggestCb.dataset.userTouched;
+      }
       setStatus(removed ? "Kierdichting verwijderd" : "Geen kierdichting gekoppeld", "ok");
       return;
     }
@@ -1693,6 +1994,7 @@ async function toggleKierSealForRoom(room: RoomSubsection, want: boolean): Promi
         `Kierdichtingsmateriaal ${DEFAULT_KIER_CATALOG_ID} niet gevonden in de catalogus`,
         "err",
       );
+      if (kierSuggestCb) kierSuggestCb.checked = Boolean(existingSealFor(room.id));
       return;
     }
     const seal = await upsertPerimeterSeal(
@@ -1705,6 +2007,10 @@ async function toggleKierSealForRoom(room: RoomSubsection, want: boolean): Promi
       mat,
     );
     await loadRooms();
+    if (kierSuggestCb && pendingRoom?.editingId === room.id) {
+      kierSuggestCb.checked = true;
+      delete kierSuggestCb.dataset.userTouched;
+    }
     const key = sealMaterialKey({
       material_id: mat.material_id,
       catalog_id: mat.catalog_id,
@@ -1721,7 +2027,14 @@ async function toggleKierSealForRoom(room: RoomSubsection, want: boolean): Promi
     );
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
+    if (kierSuggestCb && pendingRoom?.editingId === room.id) {
+      kierSuggestCb.checked = Boolean(existingSealFor(room.id));
+      delete kierSuggestCb.dataset.userTouched;
+    }
     renderRoomList();
+  } finally {
+    kierToggleInFlight = false;
+    if (pendingRoom?.editingId === room.id) syncKierSuggestUi();
   }
 }
 
@@ -1793,13 +2106,20 @@ function roomMetricsLabel(r: RoomSubsection): string {
 }
 
 let roomListRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+/** When true, renderRoomList keeps list scroll and skips scroll-into-view (drag refresh). */
+let roomListRefreshQuiet = false;
 /** Refresh “Opgeslagen ruimten” while dragging an edited outline. */
 function scheduleRoomListRefresh(): void {
   if (!pendingRoom?.editingId) return;
   if (roomListRefreshTimer) clearTimeout(roomListRefreshTimer);
   roomListRefreshTimer = setTimeout(() => {
     roomListRefreshTimer = null;
-    renderRoomList();
+    roomListRefreshQuiet = true;
+    try {
+      renderRoomList();
+    } finally {
+      roomListRefreshQuiet = false;
+    }
   }, 40);
 }
 
@@ -1807,7 +2127,7 @@ function syncPendingRoomButtons(): void {
   const n = activePartNoun();
   const has = Boolean(pendingRoom && pendingRoom.points.length > 0);
   const closed = Boolean(pendingRoom?.closed);
-  const kier = !isFloormapKind() && selectedIsKierdichting();
+  const kier = !isFloormapKind() && pendingSaveIsLength();
   const editingId = pendingRoom?.editingId || null;
   roomCloseBtn.disabled = !(pendingRoom?.drawing && pendingRoom.points.length >= 3 && !closed);
   const canSaveClosed = Boolean(closed && pendingRoom && pendingRoom.points.length >= 3);
@@ -1822,6 +2142,19 @@ function syncPendingRoomButtons(): void {
   roomClearBtn.disabled = !has && !pendingRoom?.drawing;
   if (roomDeleteBtn) {
     roomDeleteBtn.disabled = !editingId;
+    if (editingId && pendingDeleteId === editingId) {
+      roomDeleteBtn.textContent = "Bevestig wissen";
+      roomDeleteBtn.title = "Nogmaals klikken wist dit component permanent";
+      roomDeleteBtn.classList.remove("secondary");
+    } else {
+      roomDeleteBtn.textContent = "Verwijderen";
+      const editingRoom = editingId ? rooms.find((r) => r.id === editingId) : null;
+      roomDeleteBtn.title =
+        editingRoom && isComposeResultRoom(editingRoom)
+          ? "Verwijdert alleen dit samengestelde resultaat; broncomponenten blijven bestaan"
+          : `Opgeslagen ${n.singular} permanent verwijderen`;
+      roomDeleteBtn.classList.add("secondary");
+    }
   }
   if (roomSimplifyBtn) {
     roomSimplifyBtn.disabled = !(closed && pendingRoom && ringVertexCount(pendingRoom.points) > 3);
@@ -2136,39 +2469,85 @@ function isComposeResultRoom(r: RoomSubsection): boolean {
   return op === "compose" || op === "difference";
 }
 
-/**
- * Constituenten van een zichtbaar samengesteld component: nesten onder het
- * resultaat (standaard ingeklapt). Zelf samengestelde bronnen blijven top-level.
- */
-function collectComposeChildMap(items: RoomSubsection[]): {
-  childrenByParent: Map<string, RoomSubsection[]>;
-  nestedIds: Set<string>;
-} {
-  const byId = new Map(items.map((r) => [r.id, r]));
-  const nestedIds = new Set<string>();
-  const childrenByParent = new Map<string, RoomSubsection[]>();
-  for (const r of items) {
-    if (!isComposeResultRoom(r)) continue;
-    const src = r.analysis?.source_subsection_ids;
-    if (!Array.isArray(src) || src.length < 2) continue;
-    const kids: RoomSubsection[] = [];
-    for (const sid of src) {
-      if (!sid || sid === r.id || nestedIds.has(sid)) continue;
-      const child = byId.get(sid);
-      if (!child || isComposeResultRoom(child)) continue;
-      kids.push(child);
-      nestedIds.add(sid);
+type ComposeSourceRef = {
+  id: string;
+  label: string;
+  sign: string;
+  missing: boolean;
+};
+
+/** Bronnen van een ±-resultaat — verwijzingen naar top-level rijen (niet nesten). */
+function collectComposeSourceRefs(
+  compose: RoomSubsection,
+  allItems: RoomSubsection[],
+): ComposeSourceRef[] {
+  const src = compose.analysis?.source_subsection_ids;
+  if (!Array.isArray(src) || src.length < 2) return [];
+  const byId = new Map(allItems.map((x) => [x.id, x]));
+  const signs = compose.analysis?.constituent_signs || {};
+  const storedLabels = Array.isArray(compose.analysis?.source_labels)
+    ? compose.analysis!.source_labels!
+    : [];
+  const out: ComposeSourceRef[] = [];
+  const seen = new Set<string>();
+  src.forEach((sid, i) => {
+    if (!sid || seen.has(sid)) return;
+    seen.add(sid);
+    const room = byId.get(sid);
+    const rawSign = signs[sid];
+    const sign = rawSign === "+" || rawSign === "-" ? rawSign : "?";
+    let label = (room?.label || "").trim();
+    if (!label && storedLabels[i]) {
+      label = String(storedLabels[i]).replace(/^[±+\-]\s*/, "").trim();
     }
-    if (kids.length) childrenByParent.set(r.id, kids);
-  }
-  return { childrenByParent, nestedIds };
+    if (!label) label = sid.slice(0, 8);
+    out.push({ id: sid, label, sign, missing: !room });
+  });
+  return out;
 }
 
-function composeGroupExpanded(parentId: string, kids: RoomSubsection[]): boolean {
-  if (expandedComposeIds.has(parentId)) return true;
-  const editId = pendingRoom?.editingId;
-  if (editId && kids.some((k) => k.id === editId)) return true;
-  return false;
+function composeParentsOfSource(
+  sourceId: string,
+  allItems: RoomSubsection[],
+): RoomSubsection[] {
+  return allItems.filter(
+    (r) =>
+      isComposeResultRoom(r) &&
+      Array.isArray(r.analysis?.source_subsection_ids) &&
+      r.analysis!.source_subsection_ids!.includes(sourceId),
+  );
+}
+
+/** Scroll naar een top-level bronrij en markeer kort (geen nest-duplicaat). */
+function focusComposeSourceInList(sourceId: string): void {
+  const listEl = resolveRoomListEl();
+  if (!listEl) return;
+  const room = rooms.find((r) => r.id === sourceId);
+  const li = listEl.querySelector(
+    `.drawing-list-item[data-room-id="${CSS.escape(sourceId)}"]`,
+  ) as HTMLElement | null;
+  if (!li) {
+    if (room && roomListVrFilter && !roomMatchesVrFilter(room, roomListVrFilter)) {
+      setStatus(
+        `Bron «${room.label || sourceId}» hoort bij VR ${normalizeVrNr(room.vr_nr) || "—"} — zet de VR-filter daarop of kies Alle VR's`,
+        "err",
+      );
+      return;
+    }
+    setStatus("Broncomponent niet gevonden in de lijst", "err");
+    return;
+  }
+  scrollActiveRoomListItemIntoView(listEl, sourceId);
+  listEl
+    .querySelectorAll(".drawing-list-item--compose-flash")
+    .forEach((el) => el.classList.remove("drawing-list-item--compose-flash"));
+  li.classList.add("drawing-list-item--compose-flash");
+  if (composeFlashTimer != null) window.clearTimeout(composeFlashTimer);
+  composeFlashTimer = window.setTimeout(() => {
+    li.classList.remove("drawing-list-item--compose-flash");
+    composeFlashTimer = null;
+  }, 1800);
+  setStatus(`Bron: «${room?.label || sourceId}»`, "ok");
 }
 
 function applyBooleanListColors(li: HTMLElement, role: BoolListRole): void {
@@ -2258,7 +2637,7 @@ async function recalculateBooleanDependents(rootId: string): Promise<number> {
             ? Math.round(scaledAreaM2(result.areaNorm, mpu, activeScaleAspect()) * 100) / 100
             : null;
         const prev = dep.analysis || {};
-        await apiPost("/api/floormap/subsections", {
+        await saveDrawingSubsection({
           section_id: activeSection.id,
           subsection_id: dep.id,
           label: dep.label,
@@ -2289,6 +2668,7 @@ async function recalculateBooleanDependents(rootId: string): Promise<number> {
           area_norm: result.areaNorm,
           area_m2: areaM2 ?? undefined,
         };
+        noteLocalRoomPatch(dep);
         nextChanged.add(dep.id);
         updated += 1;
       } catch (err) {
@@ -2304,11 +2684,25 @@ async function recalculateBooleanDependents(rootId: string): Promise<number> {
 }
 
 async function savePendingRoom(): Promise<void> {
-  if (!pendingRoom || !activeSection || !auth) return;
-  const kier = !isFloormapKind() && selectedIsKierdichting();
+  if (!pendingRoom || !activeSection || !auth) {
+    setStatus("Niets om op te slaan — open eerst een component om te bewerken", "err");
+    return;
+  }
+  const kier = !isFloormapKind() && pendingSaveIsLength();
   const openPath = Boolean(kier && !pendingRoom.closed && pendingRoom.points.length >= 2);
-  if (!openPath && !pendingRoom.closed) return;
-  const points = openPath ? clampPath(pendingRoom.points) : closeRing(pendingRoom.points);
+  if (!openPath && !pendingRoom.closed) {
+    setStatus("Sluit eerst de polygoon (≥3 punten) voordat je opslaat", "err");
+    return;
+  }
+  // Snapshot geometry now — async work must not read a cleared/replaced pendingRoom.
+  const pointsSnap = openPath
+    ? clampPath(pendingRoom.points.map((p) => ({ ...p })))
+    : closeRing(pendingRoom.points.map((p) => ({ ...p })));
+  const holesSnap = openPath
+    ? []
+    : (pendingRoom.holes || []).map((h) => h.map((p) => ({ ...p })));
+  const editingId = pendingRoom.editingId;
+  const points = pointsSnap;
   const mpu = activeScaleMpu();
   if (kier) {
     const lenNorm = openPath ? openPolylineLength(points) : polylinePerimeter(points);
@@ -2353,7 +2747,8 @@ async function savePendingRoom(): Promise<void> {
     !isFloormapKind() &&
     !kier &&
     Boolean(pendingRoom.closed) &&
-    Boolean(kierSuggestCb?.checked);
+    Boolean(kierSuggestCb?.checked) &&
+    Boolean(pendingRoom.editingId && selectedSetIds.has(pendingRoom.editingId));
   if (wantSeal) {
     await ensureKierMaterials();
     if (!resolveKierSuggestMaterial()) {
@@ -2365,10 +2760,8 @@ async function savePendingRoom(): Promise<void> {
     }
   }
   roomSaveBtn.disabled = true;
-  setStatus(pendingRoom.editingId ? "Geometrie bijwerken…" : "Opslaan…", "busy");
+  setStatus(editingId ? "Geometrie bijwerken…" : "Opslaan…", "busy");
   try {
-    const holes = openPath ? [] : pendingRoom.holes || [];
-    const editingId = pendingRoom.editingId;
     const body: Record<string, unknown> = {
       section_id: activeSection.id,
       subsection_id: editingId || undefined,
@@ -2377,7 +2770,7 @@ async function savePendingRoom(): Promise<void> {
       vg_nr: vgVr.vg_nr,
       vr_nr: vgVr.vr_nr,
       points,
-      holes,
+      holes: holesSnap,
       metres_per_norm_unit: mpu ?? undefined,
       open_path: openPath || undefined,
       scale_aspect_yx: activeScaleAspect(),
@@ -2413,15 +2806,75 @@ async function savePendingRoom(): Promise<void> {
         orientatie_correcties: readOrientatieCorrecties(),
       };
     }
-    const saved = await apiPost<{
-      subsection_id: string;
-      area_m2: number | null;
-      perimeter_m: number | null;
-      analysis?: SubsectionAnalysis;
-    }>("/api/floormap/subsections", body);
+    const saved = await saveDrawingSubsection(body);
     const wasEdit = Boolean(editingId);
     const savedId = saved.subsection_id;
     markRoomTouched(savedId);
+    // Prefer server-echoed VG/VR when present (same as DB).
+    const savedVg =
+      saved.vg_nr != null && Number.isFinite(Number(saved.vg_nr))
+        ? Number(saved.vg_nr)
+        : vgVr.vg_nr;
+    const savedVr =
+      saved.vr_nr != null && String(saved.vr_nr).trim()
+        ? String(saved.vr_nr).trim()
+        : vgVr.vr_nr;
+    // Optimistic local update so the overlay/list show new data even if reload is slow.
+    const idx = rooms.findIndex((r) => r.id === savedId);
+    let patched: RoomSubsection;
+    if (idx >= 0) {
+      const prev = rooms[idx];
+      patched = {
+        ...prev,
+        points: points.map((p) => ({ ...p })),
+        label: String(body.label || prev.label),
+        level_hint: level,
+        vg_nr: savedVg,
+        vr_nr: savedVr,
+        area_m2: saved.area_m2 != null ? Number(saved.area_m2) : prev.area_m2,
+        area_norm: saved.area_norm != null ? Number(saved.area_norm) : prev.area_norm,
+        perimeter_m: saved.perimeter_m != null ? Number(saved.perimeter_m) : prev.perimeter_m,
+        analysis: {
+          ...(prev.analysis || {}),
+          ...(typeof body.analysis === "object" && body.analysis
+            ? (body.analysis as SubsectionAnalysis)
+            : {}),
+          ...(saved.analysis || {}),
+          holes: holesSnap.length ? holesSnap : undefined,
+        },
+      };
+      rooms[idx] = patched;
+    } else {
+      patched = {
+        id: savedId,
+        section_id: activeSection.id,
+        label: String(body.label || label),
+        level_hint: level,
+        vg_nr: savedVg,
+        vr_nr: savedVr,
+        points: points.map((p) => ({ ...p })),
+        area_m2: saved.area_m2 != null ? Number(saved.area_m2) : null,
+        area_norm: saved.area_norm != null ? Number(saved.area_norm) : null,
+        perimeter_m: saved.perimeter_m != null ? Number(saved.perimeter_m) : null,
+        perimeter_norm: null,
+        metres_per_norm_unit: mpu,
+        analysis_status: "ok",
+        sort_order: rooms.length,
+        analysis: {
+          ...(typeof body.analysis === "object" && body.analysis
+            ? (body.analysis as SubsectionAnalysis)
+            : {}),
+          ...(saved.analysis || {}),
+          holes: holesSnap.length ? holesSnap : undefined,
+        },
+      };
+      rooms = [...rooms, patched];
+    }
+    noteLocalRoomPatch(patched);
+    // Invalidate in-flight lists so they cannot clobber this save.
+    roomsLoadEpoch += 1;
+    renderRoomList();
+    drawOverlay();
     let sealBit = "";
     let sealMatForSum: CatalogMaterial | null = null;
     if (wantSeal) {
@@ -2429,8 +2882,8 @@ async function savePendingRoom(): Promise<void> {
         savedId,
         points,
         String(body.label || label),
-        vgVr.vg_nr,
-        vgVr.vr_nr,
+        savedVg,
+        savedVr,
         level,
       );
       if (seal) {
@@ -2440,6 +2893,9 @@ async function savePendingRoom(): Promise<void> {
           ? ` · kierdichting toegevoegd${lenTxt}`
           : ` · kierdichting bijgewerkt${lenTxt}`;
       }
+    } else if (editingId && existingSealFor(editingId)) {
+      const removed = await removeSealForParent(editingId);
+      if (removed) sealBit = " · kierdichting verwijderd";
     }
     clearPendingRoom();
     // Keep VG/VR on gevel/section so successive components can share the same VR.
@@ -2447,8 +2903,45 @@ async function savePendingRoom(): Promise<void> {
       roomVgInput.value = "";
       roomVrInput.value = "";
       clearExpectedOrientaties();
+    } else {
+      if (savedVg != null) roomVgInput.value = String(savedVg);
+      if (savedVr) roomVrInput.value = savedVr;
     }
-    await loadRooms();
+    // Re-assert patch after clearPendingRoom (it redraws from `rooms`).
+    noteLocalRoomPatch(patched);
+    renderRoomList();
+    drawOverlay();
+    try {
+      await loadRooms();
+    } catch (reloadErr) {
+      renderRoomList();
+      drawOverlay();
+      console.warn("loadRooms after save failed", reloadErr);
+    }
+    // Guarantee post-reload UI still shows what we just wrote (stale list → patch).
+    {
+      const i = rooms.findIndex((r) => r.id === savedId);
+      if (i >= 0) {
+        rooms[i] = {
+          ...rooms[i],
+          points: patched.points.map((p) => ({ ...p })),
+          label: patched.label,
+          level_hint: patched.level_hint,
+          vg_nr: patched.vg_nr,
+          vr_nr: patched.vr_nr,
+          area_m2: patched.area_m2 != null ? patched.area_m2 : rooms[i].area_m2,
+          area_norm: patched.area_norm != null ? patched.area_norm : rooms[i].area_norm,
+          perimeter_m: patched.perimeter_m != null ? patched.perimeter_m : rooms[i].perimeter_m,
+          analysis: patched.analysis
+            ? { ...(rooms[i].analysis || {}), ...patched.analysis }
+            : rooms[i].analysis,
+        };
+        noteLocalRoomPatch(rooms[i]);
+      }
+      renderRoomList();
+      drawOverlay();
+    }
+    requestAnimationFrame(() => drawOverlay());
     if (sealMatForSum && sealBit) {
       const key = sealMaterialKey({
         material_id: sealMatForSum.material_id,
@@ -2459,10 +2952,18 @@ async function savePendingRoom(): Promise<void> {
       if (typeSum > 0) sealBit += ` · totaal ${code} ${typeSum.toFixed(2)} m`;
     }
     let depCount = 0;
+    let depErr = "";
     if (wasEdit && editingId) {
       setStatus("Afgeleide setbewerkingen herberekenen…", "busy");
-      depCount = await recalculateBooleanDependents(editingId);
-      if (depCount > 0) await loadRooms();
+      try {
+        depCount = await recalculateBooleanDependents(editingId);
+        if (depCount > 0) {
+          await loadRooms();
+          drawOverlay();
+        }
+      } catch (err) {
+        depErr = err instanceof Error ? err.message : String(err);
+      }
     }
     const m2 = saved.area_m2 != null ? Number(saved.area_m2) : null;
     const lenM =
@@ -2477,23 +2978,46 @@ async function savePendingRoom(): Promise<void> {
         : "";
     const noMatBit =
       !isFloormapKind() && !mat && !kier ? " · nog geen materiaal (oranje)" : "";
+    const vgBit =
+      savedVg != null && savedVr
+        ? ` · VG ${savedVg} · VR ${savedVr}`
+        : !isFloormapKind()
+          ? " · zonder VG/VR"
+          : "";
+    const oriCodes = isFloormapKind() ? readExpectedOrientaties() : [];
+    const oriBit =
+      isFloormapKind()
+        ? oriCodes.length
+          ? ` · ori ${oriCodes.join(",")}`
+          : " · ori ontbreekt"
+        : "";
     setStatus(
       wasEdit
         ? kier && lenM != null
-          ? `Geometrie bijgewerkt · lengte ${lenM.toFixed(2)} m${depBit}${sealBit}`
+          ? `Geometrie bijgewerkt · lengte ${lenM.toFixed(2)} m${vgBit}${oriBit}${depBit}${sealBit}`
           : m2 != null
-            ? `Geometrie bijgewerkt · ${m2.toFixed(2)} m²${depBit}${noMatBit}${sealBit}`
-            : `Geometrie bijgewerkt${depBit}${noMatBit}${sealBit}`
+            ? `Geometrie bijgewerkt · ${m2.toFixed(2)} m²${vgBit}${oriBit}${depBit}${sealBit}${noMatBit}`
+            : `Geometrie bijgewerkt${vgBit}${oriBit}${depBit}${sealBit}${noMatBit}`
         : kier && lenM != null
-          ? `Opgeslagen ${String(body.label)} · lengte ${lenM.toFixed(2)} m`
+          ? `Opgeslagen ${String(body.label)} · lengte ${lenM.toFixed(2)} m${vgBit}${oriBit}`
           : m2 != null
-            ? `Opgeslagen ${String(body.label)} · ${m2.toFixed(2)} m²${noMatBit}${sealBit}`
-            : `Opgeslagen ${String(body.label)}${noMatBit}${sealBit}`,
-      "ok",
+            ? `Opgeslagen ${String(body.label)} · ${m2.toFixed(2)} m²${vgBit}${oriBit}${noMatBit}${sealBit}`
+            : `Opgeslagen ${String(body.label)}${vgBit}${oriBit}${noMatBit}${sealBit}`,
+      depErr ? "err" : "ok",
     );
+    if (depErr) {
+      setStatus(
+        `Geometrie opgeslagen, maar afgeleide setbewerking faalde: ${depErr}`,
+        "err",
+      );
+    }
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
     syncPendingRoomButtons();
+    renderRoomList();
+    drawOverlay();
+  } finally {
+    roomSaveBtn.disabled = false;
   }
 }
 
@@ -2590,7 +3114,8 @@ function analysisForDuplicate(src?: SubsectionAnalysis | null): Record<string, u
 }
 
 async function postNewSubsection(body: Record<string, unknown>): Promise<{ subsection_id: string }> {
-  return apiPost<{ subsection_id: string }>("/api/floormap/subsections", body);
+  const saved = await saveDrawingSubsection(body);
+  return { subsection_id: saved.subsection_id };
 }
 
 /**
@@ -2869,8 +3394,22 @@ function editRoom(room: RoomSubsection): void {
   };
   roomLabelInput.value = room.label;
   roomLevelSelect.value = room.level_hint || "OTHER";
-  roomVgInput.value = room.vg_nr != null ? String(room.vg_nr) : "";
-  roomVrInput.value = room.vr_nr != null ? String(room.vr_nr) : "";
+  // Gevel: keep sticky VG/VR (or suggest) when opening a component that has none yet,
+  // so «Opslaan» actually koppelt i.p.v. leeg terug te schrijven.
+  if (room.vg_nr != null) {
+    roomVgInput.value = String(room.vg_nr);
+  } else if (isFloormapKind()) {
+    roomVgInput.value = "";
+  } else if (!roomVgInput.value.trim()) {
+    roomVgInput.value = String(suggestVgNr());
+  }
+  if (room.vr_nr != null && String(room.vr_nr).trim()) {
+    roomVrInput.value = String(room.vr_nr).trim();
+  } else if (isFloormapKind()) {
+    roomVrInput.value = "";
+  } else if (!roomVrInput.value.trim()) {
+    roomVrInput.value = suggestFacadeVrNr();
+  }
   if (isFloormapKind()) {
     setExpectedOrientaties(
       room.analysis?.expected_orientaties,
@@ -2886,12 +3425,26 @@ function editRoom(room: RoomSubsection): void {
   updateMeasureReadouts();
   updateToolHint();
   renderRoomList();
-  scrollToRing(pendingRoom.points);
+  drawOverlay();
+  // Scroll PDF after layout (edit dock / list) settles — avoids fighting scrollIntoView jumps.
+  // Floormap: ook het oriëntatieblok in de zijbalk in beeld (staat boven de lijst).
+  requestAnimationFrame(() => {
+    if (isFloormapKind() && expectedOriBlockEl && !expectedOriBlockEl.classList.contains("hidden")) {
+      expectedOriBlockEl.classList.add("fm-expected-ori-block--focus");
+      expectedOriBlockEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      window.setTimeout(() => expectedOriBlockEl?.classList.remove("fm-expected-ori-block--focus"), 1400);
+    }
+    if (pendingRoom?.editingId === room.id && pendingRoom.points.length) {
+      scrollToRing(pendingRoom.points);
+    }
+  });
+  const oriN = isFloormapKind() ? readExpectedOrientaties().length : 0;
   setStatus(
-    `Bewerken: ${room.label} — sleep het vlak of witte ankers; pijltjes om te schuiven; daarna «${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} opslaan»`,
+    isFloormapKind()
+      ? `Bewerken: ${room.label} — geveloriëntaties${oriN ? ` (${oriN})` : ""} bovenaan in de zijbalk aanpassen, daarna Opslaan`
+      : `Bewerken: ${room.label} — sleep het vlak of witte ankers; pijltjes om te schuiven; daarna «${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} opslaan»`,
     "ok",
   );
-  drawOverlay();
 }
 
 async function applyMaterialSelectionFromAnalysis(a?: SubsectionAnalysis | null): Promise<void> {
@@ -3163,10 +3716,12 @@ async function loadFavoriteMaterials(): Promise<void> {
     return;
   }
   try {
-    const data = await apiGet<{ materials: CatalogMaterial[] }>(
-      `/api/floormap/material-favorites?building_id=${encodeURIComponent(buildingId)}`,
-    );
-    favoriteMaterials = data.materials || [];
+    const data = bppPhase1Enabled()
+      ? await bppListMaterialFavorites(invokeString, auth.token, buildingId)
+      : await apiGet<{ materials: CatalogMaterial[] }>(
+          `/api/floormap/material-favorites?building_id=${encodeURIComponent(buildingId)}`,
+        );
+    favoriteMaterials = (data.materials || []) as CatalogMaterial[];
     renderFavoriteOptions(materialIdEl?.value || null);
   } catch (err) {
     favoriteMaterials = [];
@@ -3177,19 +3732,27 @@ async function loadFavoriteMaterials(): Promise<void> {
 
 async function addMaterialFavorite(materialId: string): Promise<void> {
   if (!auth?.token || !buildingId || !materialId) return;
-  await apiPost("/api/floormap/material-favorites", {
-    building_id: buildingId,
-    material_id: materialId,
-  });
+  if (bppPhase1Enabled()) {
+    await bppAddMaterialFavorite(invokeString, auth.token, buildingId, materialId);
+  } else {
+    await apiPost("/api/floormap/material-favorites", {
+      building_id: buildingId,
+      material_id: materialId,
+    });
+  }
   await loadFavoriteMaterials();
   setStatus("Toegevoegd aan meest gebruikt", "ok");
 }
 
 async function removeMaterialFavorite(materialId: string): Promise<void> {
   if (!auth?.token || !buildingId || !materialId) return;
-  await apiDelete(
-    `/api/floormap/material-favorites?building_id=${encodeURIComponent(buildingId)}&material_id=${encodeURIComponent(materialId)}`,
-  );
+  if (bppPhase1Enabled()) {
+    await bppRemoveMaterialFavorite(invokeString, auth.token, buildingId, materialId);
+  } else {
+    await apiDelete(
+      `/api/floormap/material-favorites?building_id=${encodeURIComponent(buildingId)}&material_id=${encodeURIComponent(materialId)}`,
+    );
+  }
   await loadFavoriteMaterials();
   setStatus("Verwijderd uit meest gebruikt", "ok");
 }
@@ -3255,10 +3818,14 @@ async function applyMaterialToEditingComponent(mat: CatalogMaterial): Promise<vo
     return;
   }
   try {
-    await apiPost("/api/floormap/subsection-material", {
-      subsection_id: editingId,
-      material_id: mat.material_id,
-    });
+    if (bppPhase1Enabled()) {
+      await bppSaveSubsectionMaterial(invokeString, auth.token, editingId, mat.material_id);
+    } else {
+      await apiPost("/api/floormap/subsection-material", {
+        subsection_id: editingId,
+        material_id: mat.material_id,
+      });
+    }
     const room = rooms.find((r) => r.id === editingId);
     if (room) {
       const prev =
@@ -3296,10 +3863,12 @@ async function ensureMaterialCategories(): Promise<void> {
   if (!auth?.token || !materialCategoryEl) return;
   if (materialCategoriesLoaded && materialCategoryEl.options.length > 1) return;
   try {
-    const data = await apiGet<{
-      categories: MaterialCategoryOpt[];
-    }>("/api/floormap/material-categories");
-    renderMaterialCategoryOptions(data.categories || []);
+    const data = bppPhase1Enabled()
+      ? await bppListMaterialCategories(invokeString, auth.token)
+      : await apiGet<{
+          categories: MaterialCategoryOpt[];
+        }>("/api/floormap/material-categories");
+    renderMaterialCategoryOptions((data.categories || []) as MaterialCategoryOpt[]);
     materialCategoriesLoaded = true;
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
@@ -3318,17 +3887,23 @@ async function loadMaterialsForCategory(category: string, q = ""): Promise<void>
   }
   materialIdEl.disabled = true;
   try {
-    const params = new URLSearchParams({
-      limit: "1000",
-      master_category: category,
-    });
     const sub = (materialSubcategoryEl?.value || "").trim();
-    if (sub) params.set("category", sub);
-    if (q.trim()) params.set("q", q.trim());
-    const data = await apiGet<{ materials: CatalogMaterial[] }>(
-      `/api/floormap/materials?${params.toString()}`,
-    );
-    catalogMaterials = data.materials || [];
+    const data = bppPhase1Enabled()
+      ? await bppListMaterials(invokeString, auth.token, {
+          master_category: category,
+          category: sub || undefined,
+          q: q.trim() || undefined,
+          limit: 1000,
+        })
+      : await apiGet<{ materials: CatalogMaterial[] }>(
+          `/api/floormap/materials?${new URLSearchParams({
+            limit: "1000",
+            master_category: category,
+            ...(sub ? { category: sub } : {}),
+            ...(q.trim() ? { q: q.trim() } : {}),
+          }).toString()}`,
+        );
+    catalogMaterials = (data.materials || []) as CatalogMaterial[];
     renderMaterialNameOptions(catalogMaterials, keep);
     updateMaterialSpectrumPreview();
   } catch (err) {
@@ -3417,11 +3992,14 @@ async function applyBooleanSet(): Promise<void> {
       setStatus(vgVr.error, "err");
       return;
     }
-    const saved = await apiPost<{
-      subsection_id: string;
-      area_m2: number | null;
-      area_norm: number;
-    }>("/api/floormap/subsections", {
+    if (vgVr.vg_nr == null || !normalizeVrNr(vgVr.vr_nr)) {
+      const msg =
+        "Samengesteld component heeft VG/VR nodig — ken die toe aan de bronnen of vul VG/VR in het formulier in";
+      setComposeFeedback(msg, "err");
+      setStatus(msg, "err");
+      return;
+    }
+    const saved = await saveDrawingSubsection({
       section_id: activeSection.id,
       label,
       level_hint: "OTHER",
@@ -3447,11 +4025,31 @@ async function applyBooleanSet(): Promise<void> {
         area_m2: areaM2,
       },
     });
-    // Keep selection so another material compose can be made in the same outer.
     booleanPreview = null;
+    selectedSetIds.clear();
+    constituentSigns.clear();
+    // Toon meteen onder de geërfde VR (bronnen verdwijnen als nest onder dit resultaat).
+    const inheritVr = normalizeVrNr(vgVr.vr_nr)!;
+    roomListVrFilter = inheritVr;
+    roomVgInput.value = String(vgVr.vg_nr);
+    roomVrInput.value = inheritVr;
     await loadRooms();
+    roomListVrFilter = inheritVr;
+    if (roomVrFilterEl) {
+      if (![...roomVrFilterEl.options].some((o) => o.value === inheritVr)) {
+        const opt = document.createElement("option");
+        opt.value = inheritVr;
+        opt.textContent = `VR ${inheritVr}`;
+        roomVrFilterEl.appendChild(opt);
+      }
+      roomVrFilterEl.value = inheritVr;
+    }
+    renderRoomList();
+    drawOverlay();
     updateBooleanPreview();
     markRoomTouched(saved.subsection_id);
+    const listEl = resolveRoomListEl();
+    if (listEl) scrollActiveRoomListItemIntoView(listEl, saved.subsection_id);
     const savedM2 = saved.area_m2 != null ? Number(saved.area_m2) : areaM2;
     const orangeParts = selected.filter((r) => !(r.analysis?.material_id || "").trim());
     const orangeBit = orangeParts.length
@@ -3459,8 +4057,8 @@ async function applyBooleanSet(): Promise<void> {
       : "";
     const okMsg =
       savedM2 != null
-        ? `Opgeslagen: ${label} (netto ${savedM2.toFixed(2)} m²).${orangeBit} Selectie blijft staan voor een volgende compositie.`
-        : `Opgeslagen: ${label}.${orangeBit} Selectie blijft staan voor een volgende compositie.`;
+        ? `Opgeslagen: ${label} (netto ${savedM2.toFixed(2)} m²) · VR ${inheritVr}.${orangeBit}`
+        : `Opgeslagen: ${label} · VR ${inheritVr}.${orangeBit}`;
     setComposeFeedback(okMsg, "ok");
     setStatus(okMsg, "ok");
   } catch (err) {
@@ -3510,19 +4108,17 @@ function renderRoomList(): void {
   const listEl = resolveRoomListEl();
   const countEl = resolveRoomCountEl();
   if (!listEl) return;
-  const scrollTop = listEl.scrollTop;
+  const listScroller = resolveRoomListScrollParent(listEl);
+  const scrollTop = listScroller.scrollTop;
   const items = rooms.filter((r): r is RoomSubsection => Boolean(r?.id));
   if (items.length !== rooms.length) {
     rooms = items;
   }
   const allowSetSelect = !isFloormapKind();
-  const { childrenByParent, nestedIds } = allowSetSelect
-    ? collectComposeChildMap(items)
-    : { childrenByParent: new Map<string, RoomSubsection[]>(), nestedIds: new Set<string>() };
   listEl.replaceChildren();
   syncRoomListVrFilterOptions(items);
-  const topLevelTotal = items.filter((r) => !nestedIds.has(r.id)).length;
-  const visibleTopLevel = visibleTopLevelRooms(items, nestedIds);
+  const topLevelTotal = items.length;
+  const visibleTopLevel = visibleTopLevelRooms(items);
   if (countEl) {
     countEl.textContent = roomListCountLabel(visibleTopLevel.length, topLevelTotal);
     countEl.title =
@@ -3556,11 +4152,11 @@ function renderRoomList(): void {
   } catch (err) {
     console.warn("renderRoomList: boolean metadata failed", err);
   }
-  for (const id of [...expandedComposeIds]) {
-    if (!childrenByParent.has(id)) expandedComposeIds.delete(id);
+  for (const id of [...expandedComposeSourcePanels]) {
+    const still = items.some((r) => r.id === id && isComposeResultRoom(r));
+    if (!still) expandedComposeSourcePanels.delete(id);
   }
   items.forEach((r, index) => {
-    if (nestedIds.has(r.id)) return;
     if (!roomMatchesVrFilter(r, roomListVrFilter)) return;
     try {
       renderRoomListItem(listEl, r, index, items.length, {
@@ -3569,7 +4165,6 @@ function renderRoomList(): void {
         supersededIds,
         boolGroups,
         allItems: items,
-        childRooms: childrenByParent.get(r.id) || [],
       });
     } catch (err) {
       console.warn("renderRoomList: item failed", r.id, err);
@@ -3579,12 +4174,17 @@ function renderRoomList(): void {
       listEl.appendChild(fallback);
     }
   });
-  if (pendingRoom?.editingId) {
+  if (pendingRoom?.editingId && !roomListRefreshQuiet) {
     // Keep the active (red) component row in view; ignore prior scroll restore.
     scrollActiveRoomListItemIntoView(listEl, pendingRoom.editingId);
   } else {
-    listEl.scrollTop = scrollTop;
+    listScroller.scrollTop = scrollTop;
   }
+}
+
+/** Sidebar (of de lijst zelf) is de scroller — niet een krappe geneste list-viewport. */
+function resolveRoomListScrollParent(listEl: HTMLElement): HTMLElement {
+  return (listEl.closest(".engineer-sidebar") as HTMLElement | null) || listEl;
 }
 
 /** Ensure the currently edited component stays visible in the saved-components list. */
@@ -3596,7 +4196,20 @@ function scrollActiveRoomListItemIntoView(listEl: HTMLUListElement, roomId: stri
       ) as HTMLElement | null) ||
       (listEl.querySelector(".drawing-list-item.selected") as HTMLElement | null);
     if (!li) return;
-    li.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
+    // Scroll de rechterkolom — nooit li.scrollIntoView (dat springt de pagina/PDF).
+    const scroller = resolveRoomListScrollParent(listEl);
+    const scrollerRect = scroller.getBoundingClientRect();
+    const liRect = li.getBoundingClientRect();
+    const viewTop = scroller.scrollTop;
+    const liTop = viewTop + (liRect.top - scrollerRect.top);
+    const liBottom = liTop + liRect.height;
+    const viewBottom = viewTop + scroller.clientHeight;
+    const pad = 8;
+    if (liTop < viewTop + pad) {
+      scroller.scrollTop = Math.max(0, liTop - pad);
+    } else if (liBottom > viewBottom - pad) {
+      scroller.scrollTop = Math.max(0, liBottom - scroller.clientHeight + pad);
+    }
   };
   // After DOM replace + layout; double-rAF covers sticky sidebar measure.
   requestAnimationFrame(() => requestAnimationFrame(run));
@@ -3613,12 +4226,9 @@ function renderRoomListItem(
     supersededIds: Set<string>;
     boolGroups: Map<string, BoolListRole>;
     allItems: RoomSubsection[];
-    childRooms?: RoomSubsection[];
-    nested?: boolean;
   },
 ): void {
   const { allowSetSelect, booleanSourceIds, supersededIds, boolGroups, allItems } = meta;
-  const childRooms = meta.childRooms || [];
     const li = document.createElement("li");
     li.className = "drawing-list-item";
     li.dataset.roomId = r.id;
@@ -3633,7 +4243,10 @@ function renderRoomListItem(
     if (boolOp === "compose" || boolOp === "difference") {
       li.classList.add("drawing-list-item--composed");
     }
-    if (meta.nested) li.classList.add("drawing-list-item--compose-child");
+    // Groene markering: origineel dat deel uitmaakt van een ±-compositie (blijft top-level).
+    if (allowSetSelect && booleanSourceIds.has(r.id) && !isComposeResultRoom(r)) {
+      li.classList.add("drawing-list-item--compose-source");
+    }
 
     if (allowSetSelect) {
       const cb = document.createElement("input");
@@ -3650,6 +4263,7 @@ function renderRoomListItem(
         updateBooleanPreview();
         void defaultMaterialFromDifferenceSubject();
         renderRoomList();
+        if (pendingRoom?.editingId === r.id) syncKierSuggestUi();
       });
       li.appendChild(cb);
     }
@@ -3663,7 +4277,10 @@ function renderRoomListItem(
       ? composeConstituentsMissingMaterial(r, allItems)
       : [];
     const ledGreen = hasMaterial && missingSources.length === 0;
-    const hasVgVr = r.vg_nr != null && r.vr_nr != null;
+    const hasVg =
+      r.vg_nr != null && Number.isFinite(Number(r.vg_nr)) && Number(r.vg_nr) > 0;
+    const hasVr = Boolean(normalizeVrNr(r.vr_nr));
+    const hasVgVr = hasVg && hasVr;
     const oriCodes = Array.isArray(r.analysis?.expected_orientaties)
       ? r.analysis!.expected_orientaties!
           .map((c) => normalizeOrientatieCode(c))
@@ -3681,14 +4298,14 @@ function renderRoomListItem(
     let gaBit = "";
     if (allowSetSelect) {
       if (supersededIds.has(r.id)) {
-        gaBit = " · bron (vervangen in berekening)";
+        gaBit = " · bron van ± (zelfde materiaal → netto)";
       } else if (booleanSourceIds.has(r.id)) {
-        gaBit = " · bron (blijft in berekening)";
+        gaBit = " · bron van ±";
       } else if (missingSources.length) {
         gaBit = ` · bronnen zonder materiaal: ${missingSources.map((s) => s.label || "?").join(", ")}`;
-      } else if (r.vr_nr && hasMaterial) {
+      } else if (hasVr && hasMaterial) {
         gaBit = " · in berekening";
-      } else if (r.vr_nr) {
+      } else if (hasVr) {
         gaBit = " · berekening: nog materiaal toevoegen";
       }
     }
@@ -3702,14 +4319,45 @@ function renderRoomListItem(
       r.label || "(zonder label)",
       composedBit,
       matBit,
-      oriBit,
+      // Oriëntatie staat apart als badge (floormap); niet ook in de tekstregel.
+      isFloormapKind() ? "" : oriBit,
       levelLabel(r.level_hint),
       roomMetricsLabel(r),
     ].filter(Boolean);
+
+    // Inner wrapper: flex/grid on <button> is unreliable in WebKit — children (VG/VR) can vanish.
+    const inner = document.createElement("span");
+    inner.className = "drawing-list-select-inner";
+
+    const metaRow = document.createElement("span");
+    metaRow.className = "drawing-list-meta";
+
     const vgVrBadge = document.createElement("span");
-    vgVrBadge.className = hasVgVr ? "drawing-list-vgvr" : "drawing-list-vgvr drawing-list-vgvr--missing";
-    vgVrBadge.textContent = hasVgVr ? `VG ${r.vg_nr} · VR ${r.vr_nr}` : "geen VG/VR";
-    info.appendChild(vgVrBadge);
+    vgVrBadge.className = hasVgVr
+      ? "drawing-list-vgvr"
+      : "drawing-list-vgvr drawing-list-vgvr--missing";
+    if (hasVgVr) {
+      vgVrBadge.textContent = `VG ${Number(r.vg_nr)} · VR ${normalizeVrNr(r.vr_nr)}`;
+    } else if (hasVg || hasVr) {
+      vgVrBadge.textContent = [
+        hasVg ? `VG ${Number(r.vg_nr)}` : "VG —",
+        hasVr ? `VR ${normalizeVrNr(r.vr_nr)}` : "VR —",
+      ].join(" · ");
+      vgVrBadge.classList.add("drawing-list-vgvr--partial");
+    } else {
+      vgVrBadge.textContent = "geen VG/VR";
+    }
+    metaRow.appendChild(vgVrBadge);
+
+    if (isFloormapKind()) {
+      const oriBadge = document.createElement("span");
+      oriBadge.className = oriCodes.length
+        ? "drawing-list-ori"
+        : "drawing-list-ori drawing-list-ori--missing";
+      oriBadge.textContent = oriCodes.length ? `ori ${oriCodes.join(",")}` : "ori ontbreekt";
+      oriBadge.title = "Klik de regel om geveloriëntaties te bewerken (bovenaan in de zijbalk)";
+      metaRow.appendChild(oriBadge);
+    }
     if (allowSetSelect) {
       const led = document.createElement("span");
       led.className = "scale-calibrated-led";
@@ -3730,21 +4378,28 @@ function renderRoomListItem(
             : "Nog geen materiaal",
         );
       }
-      info.appendChild(led);
+      metaRow.appendChild(led);
     }
+    inner.appendChild(metaRow);
+
     const labelSpan = document.createElement("span");
     labelSpan.className = "drawing-list-select-label";
     labelSpan.textContent = `${parts.join(" · ")}${gaBit}${linkBit}`;
-    info.appendChild(labelSpan);
+    inner.appendChild(labelSpan);
+    info.appendChild(inner);
     info.title = missingSources.length
       ? `Samengesteld component: eerst materiaal op bronnen (${missingSources.map((s) => s.label || "?").join(", ")})`
       : boolOp === "compose" || boolOp === "difference"
-      ? "Samengesteld component (+/−) — netto uit geselecteerde delen"
-      : supersededIds.has(r.id)
-      ? "Bron van een setbewerking met hetzelfde materiaal — vervangen door het netto-component"
+      ? "Samengesteld component (+/−) — netto uit geselecteerde delen; Bronnen verwijst naar de originelen in de lijst"
       : booleanSourceIds.has(r.id)
-        ? "Bron van een setbewerking met ander materiaal — blijft beschikbaar in de berekening (bijv. glas)"
-        : allowSetSelect && !hasMaterial
+      ? (() => {
+          const parents = composeParentsOfSource(r.id, allItems);
+          const names = parents.map((p) => p.label || "±").join(", ");
+          return names
+            ? `Bron van samengesteld component: ${names} (blijft in de lijst, kiesbaar voor vlaktoekenning)`
+            : "Bron van een setbewerking — blijft in de lijst en kiesbaar voor vlaktoekenning";
+        })()
+      : allowSetSelect && !hasMaterial
           ? "Nog geen materiaal (oranje) — klik om te bewerken of materiaal te koppelen"
           : "Klik om geometrie te bewerken";
     info.addEventListener("click", () => editRoom(r));
@@ -3786,9 +4441,9 @@ function renderRoomListItem(
       if (r.vg_nr != null) q.set("vg_nr", String(r.vg_nr));
       if (r.vr_nr != null && String(r.vr_nr).trim()) q.set("vr_nr", String(r.vr_nr).trim());
       ga.href = `/ga.html?${q.toString()}`;
-      ga.textContent = linked ? "Open berekening gevelwering" : "Koppel aan berekening gevelwering";
+      ga.textContent = linked ? "Definieer gevelvlakken" : "Koppel aan berekening gevelwering";
       ga.title = linked
-        ? "Open dit VG/VR in de berekening gevelwering"
+        ? "Definieer gevelvlakken voor dit VG/VR in de berekening"
         : "Neem VG/VR over in de berekening gevelwering";
       actions.appendChild(ga);
     }
@@ -3813,29 +4468,46 @@ function renderRoomListItem(
       actions.appendChild(dup);
     }
 
+    const seal = existingSealFor(r.id);
+    const setSelected = selectedSetIds.has(r.id);
     const canOfferKier =
       allowSetSelect &&
-      ledGreen &&
       !componentIsLengthQuantity(r) &&
       !r.analysis?.seal_for_subsection_id &&
       isClosedArea &&
       !isOpenComponent(r) &&
-      !meta.nested;
+      // Toevoegen: groene led + set-selectie; verwijderen altijd mogelijk.
+      (Boolean(seal) || (ledGreen && setSelected));
     if (canOfferKier) {
-      const seal = existingSealFor(r.id);
       const wrap = document.createElement("label");
       wrap.className = "drawing-list-kier";
+      const canCheck = setSelected || Boolean(seal);
       wrap.title = seal
         ? `Kierdichting gekoppeld (${seal.analysis?.catalog_id || DEFAULT_KIER_CATALOG_ID}). Uitvinken verwijdert dit lengtecomponent.`
-        : `Voeg kierdichting toe (standaard ${DEFAULT_KIER_CATALOG_ID}) met de omtreklengte van dit vlak. Lengtes van hetzelfde type worden opgeteld.`;
+        : setSelected
+          ? `Voeg kierdichting toe (standaard ${DEFAULT_KIER_CATALOG_ID}) met de omtreklengte van dit vlak. Lengtes van hetzelfde type worden opgeteld.`
+          : "Vink eerst het component aan (selectie) om kierdichting toe te voegen";
       const cb = document.createElement("input");
       cb.type = "checkbox";
       cb.className = "drawing-list-kier-cb";
       cb.checked = Boolean(seal);
+      cb.disabled = !canCheck;
       cb.addEventListener("click", (ev) => ev.stopPropagation());
       cb.addEventListener("change", (ev) => {
         ev.stopPropagation();
-        void toggleKierSealForRoom(r, cb.checked);
+        if (cb.checked && !selectedSetIds.has(r.id)) {
+          cb.checked = Boolean(existingSealFor(r.id));
+          setStatus("Vink eerst het component aan (selectie links) om kierdichting toe te voegen", "err");
+          return;
+        }
+        // Keep frame checkbox («Kierdichting voor dit vlak») in sync when editing this component.
+        if (pendingRoom?.editingId === r.id && kierSuggestCb) {
+          kierSuggestCb.checked = cb.checked;
+          kierSuggestCb.dataset.userTouched = "1";
+        }
+        void toggleKierSealForRoom(r, cb.checked).then(() => {
+          if (pendingRoom?.editingId === r.id) syncKierSuggestUi();
+        });
       });
       wrap.appendChild(cb);
       const txt = document.createElement("span");
@@ -3849,7 +4521,7 @@ function renderRoomListItem(
     saveBtn.type = "button";
     saveBtn.textContent = "Opslaan";
     const editingThis = pendingRoom?.editingId === r.id;
-    const kier = !isFloormapKind() && selectedIsKierdichting();
+    const kier = !isFloormapKind() && pendingSaveIsLength();
     const canSaveThis = Boolean(
       editingThis &&
         pendingRoom &&
@@ -3865,7 +4537,11 @@ function renderRoomListItem(
       : "Open dit component (klik de regel) om te bewerken, daarna Opslaan";
     saveBtn.addEventListener("click", (ev) => {
       ev.stopPropagation();
-      if (!canSaveThis) return;
+      ev.preventDefault();
+      if (!pendingRoom || pendingRoom.editingId !== r.id) {
+        setStatus("Open dit component eerst (klik de regel) om te bewerken", "err");
+        return;
+      }
       void savePendingRoom();
     });
     actions.appendChild(saveBtn);
@@ -3873,33 +4549,38 @@ function renderRoomListItem(
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "secondary";
-    btn.textContent = "Verwijderen";
+    btn.textContent = pendingDeleteId === r.id ? "Bevestig wissen" : "Verwijderen";
+    if (pendingDeleteId === r.id) {
+      btn.classList.remove("secondary");
+      btn.title = "Nogmaals klikken wist dit component permanent";
+    } else {
+      btn.title = isComposeResultRoom(r)
+        ? "Verwijdert alleen dit samengestelde resultaat; broncomponenten blijven bestaan"
+        : "Permanent verwijderen";
+    }
     btn.addEventListener("click", (ev) => {
       ev.stopPropagation();
       void deleteRoom(r.id);
     });
     actions.appendChild(btn);
 
-    if (childRooms.length) {
-      const expanded = composeGroupExpanded(r.id, childRooms);
-      const editingChild = Boolean(
-        pendingRoom?.editingId && childRooms.some((k) => k.id === pendingRoom?.editingId),
-      );
+    const sourceRefs =
+      allowSetSelect && isComposed ? collectComposeSourceRefs(r, allItems) : [];
+    if (sourceRefs.length) {
+      const expanded = expandedComposeSourcePanels.has(r.id);
       const toggle = document.createElement("button");
       toggle.type = "button";
       toggle.className = "secondary drawing-list-compose-toggle";
       toggle.textContent = expanded
-        ? `▾ Bronnen (${childRooms.length})`
-        : `▸ Bronnen (${childRooms.length})`;
-      toggle.title = expanded
-        ? "Constituenten van dit samengestelde component inklappen"
-        : "Constituenten van dit samengestelde component tonen";
+        ? `▾ Bronnen (${sourceRefs.length})`
+        : `▸ Bronnen (${sourceRefs.length})`;
+      toggle.title =
+        "Toon welke originelen in de lijst bij dit samengestelde component horen (klik een naam om ernaar te springen)";
       toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
-      toggle.disabled = editingChild && expanded && !expandedComposeIds.has(r.id);
       toggle.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        if (expandedComposeIds.has(r.id)) expandedComposeIds.delete(r.id);
-        else expandedComposeIds.add(r.id);
+        if (expandedComposeSourcePanels.has(r.id)) expandedComposeSourcePanels.delete(r.id);
+        else expandedComposeSourcePanels.add(r.id);
         renderRoomList();
       });
       actions.insertBefore(toggle, actions.firstChild);
@@ -3907,23 +4588,46 @@ function renderRoomListItem(
 
     li.appendChild(actions);
 
-    if (childRooms.length && composeGroupExpanded(r.id, childRooms)) {
-      const nested = document.createElement("ul");
-      nested.className = "drawing-list-children";
-      nested.setAttribute("aria-label", `Constituenten van ${r.label || "samengesteld component"}`);
-      for (const child of childRooms) {
-        const childIndex = allItems.findIndex((x) => x.id === child.id);
-        renderRoomListItem(nested, child, childIndex >= 0 ? childIndex : index, total, {
-          allowSetSelect,
-          booleanSourceIds,
-          supersededIds,
-          boolGroups,
-          allItems,
-          childRooms: [],
-          nested: true,
+    if (sourceRefs.length && expandedComposeSourcePanels.has(r.id)) {
+      const refs = document.createElement("div");
+      refs.className = "drawing-list-compose-refs";
+      refs.setAttribute("role", "group");
+      refs.setAttribute(
+        "aria-label",
+        `Bronnen van ${r.label || "samengesteld component"} (verwijzingen naar de lijst)`,
+      );
+      const intro = document.createElement("p");
+      intro.className = "drawing-list-compose-refs-hint";
+      intro.textContent =
+        "Originelen blijven in de lijst (groene markering). Klik een bron om ernaar te springen:";
+      refs.appendChild(intro);
+      for (const ref of sourceRefs) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "drawing-list-compose-ref";
+        if (ref.missing) row.classList.add("is-missing");
+        row.title = ref.missing
+          ? "Bron ontbreekt in deze sectie"
+          : `Ga naar «${ref.label}» in de lijst`;
+        const signEl = document.createElement("span");
+        signEl.className = "drawing-list-compose-ref-sign";
+        signEl.textContent = ref.sign;
+        const nameEl = document.createElement("span");
+        nameEl.className = "drawing-list-compose-ref-label";
+        nameEl.textContent = ref.missing ? `${ref.label} (ontbreekt)` : ref.label;
+        row.appendChild(signEl);
+        row.appendChild(nameEl);
+        row.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          if (ref.missing) {
+            setStatus(`Bron «${ref.label}» ontbreekt in deze sectie`, "err");
+            return;
+          }
+          focusComposeSourceInList(ref.id);
         });
+        refs.appendChild(row);
       }
-      li.appendChild(nested);
+      li.appendChild(refs);
     }
 
     listEl.appendChild(li);
@@ -3970,9 +4674,11 @@ function normalizeSection(s: Partial<FloormapSection> & { id: string }): Floorma
 async function ensureSectionInList(sectionId: string): Promise<boolean> {
   if (sections.some((s) => s.id === sectionId)) return true;
   try {
-    const data = await apiGet<{ section: FloormapSection }>(
-      `/api/floormap/section?section_id=${encodeURIComponent(sectionId)}`,
-    );
+    const data = bppPhase1Enabled()
+      ? await bppGetFloormapSection(invokeString, auth!.token, sectionId)
+      : await apiGet<{ section: FloormapSection }>(
+          `/api/floormap/section?section_id=${encodeURIComponent(sectionId)}`,
+        );
     if (!data.section?.id) return false;
     sections = [normalizeSection(data.section), ...sections.filter((s) => s.id !== data.section.id)];
     renderSectionList();
@@ -3980,6 +4686,112 @@ async function ensureSectionInList(sectionId: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+type SubsectionSaveResult = {
+  subsection_id: string;
+  area_m2?: number | null;
+  perimeter_m?: number | null;
+  analysis?: SubsectionAnalysis;
+  area_norm?: number;
+  vg_nr?: number | null;
+  vr_nr?: string | null;
+};
+
+async function saveDrawingSubsection(body: Record<string, unknown>): Promise<SubsectionSaveResult> {
+  if (!auth?.token) throw new Error("Niet ingelogd");
+  if (bppPhase1Enabled()) {
+    const saved = await bppSaveDrawingSubsection(invokeString, auth.token, body);
+    return {
+      subsection_id: saved.subsection_id,
+      area_m2: saved.area_m2,
+      perimeter_m: saved.perimeter_m,
+      analysis: saved.analysis as SubsectionAnalysis | undefined,
+      area_norm: saved.area_norm,
+      vg_nr: saved.vg_nr != null ? Number(saved.vg_nr) : null,
+      vr_nr: saved.vr_nr != null && String(saved.vr_nr).trim() ? String(saved.vr_nr).trim() : null,
+    };
+  }
+  return apiPost<SubsectionSaveResult>("/api/floormap/subsections", body);
+}
+
+async function deleteDrawingSubsection(subsectionId: string): Promise<void> {
+  if (!auth?.token) throw new Error("Niet ingelogd");
+  if (bppPhase1Enabled()) {
+    await bppDeleteDrawingSubsection(invokeString, auth.token, subsectionId);
+    return;
+  }
+  await apiDelete(`/api/floormap/subsections?subsection_id=${encodeURIComponent(subsectionId)}`);
+}
+
+async function reorderDrawingSubsections(sectionId: string, orderedIds: string[]): Promise<void> {
+  if (!auth?.token) throw new Error("Niet ingelogd");
+  if (bppPhase1Enabled()) {
+    await bppReorderDrawingSubsections(invokeString, auth.token, sectionId, orderedIds);
+    return;
+  }
+  await apiPost("/api/floormap/subsections/reorder", {
+    section_id: sectionId,
+    ordered_ids: orderedIds,
+  });
+}
+
+function mapSubsectionRows(raw: Array<Record<string, unknown>>): RoomSubsection[] {
+  return (raw || []).map((r) => ({
+    ...(r as unknown as RoomSubsection),
+    points: coerceRingPoints(r.points),
+    vg_nr: r.vg_nr != null ? Number(r.vg_nr) : null,
+    vr_nr: r.vr_nr != null && String(r.vr_nr).trim() ? String(r.vr_nr).trim() : null,
+    area_norm: r.area_norm != null ? Number(r.area_norm) : null,
+    perimeter_norm: r.perimeter_norm != null ? Number(r.perimeter_norm) : null,
+    area_m2: r.area_m2 != null ? Math.round(Number(r.area_m2) * 100) / 100 : null,
+    perimeter_m: r.perimeter_m != null ? Math.round(Number(r.perimeter_m) * 100) / 100 : null,
+    metres_per_norm_unit:
+      r.metres_per_norm_unit != null && Number(r.metres_per_norm_unit) > 0
+        ? Number(r.metres_per_norm_unit)
+        : null,
+    sort_order: Number.isFinite(Number(r.sort_order)) ? Number(r.sort_order) : 0,
+    analysis: (() => {
+      if (!(r.analysis && typeof r.analysis === "object")) return null;
+      const a = r.analysis as SubsectionAnalysis;
+      const holes = Array.isArray(a.holes)
+        ? a.holes.map((h) => coerceRingPoints(h)).filter((h) => h.length >= 3)
+        : undefined;
+      return { ...a, holes };
+    })(),
+  }));
+}
+
+async function persistSectionScale(opts: {
+  section_id: string;
+  metres_per_norm_unit: number;
+  scale_ratio?: number | null;
+  scale_source: string;
+  scale_aspect_yx?: number | null;
+}): Promise<void> {
+  if (!auth?.token) throw new Error("Niet ingelogd");
+  if (bppPhase1Enabled()) {
+    await bppSaveFloormapScale(invokeString, auth.token, opts);
+    return;
+  }
+  await apiPost("/api/floormap/scale", {
+    section_id: opts.section_id,
+    metres_per_norm_unit: opts.metres_per_norm_unit,
+    scale_ratio: opts.scale_ratio ?? null,
+    scale_source: opts.scale_source,
+    scale_aspect_yx: opts.scale_aspect_yx ?? null,
+  });
+}
+
+async function fetchFloormapSections(buildingId: string): Promise<FloormapSection[]> {
+  if (bppPhase1Enabled()) {
+    const data = await bppListFloormapSections(invokeString, auth!.token, buildingId);
+    return (data.sections || []).map((s) => normalizeSection(s));
+  }
+  const data = await apiGet<{ sections: FloormapSection[] }>(
+    `/api/floormap/sections?building_id=${encodeURIComponent(buildingId)}`,
+  );
+  return (data.sections || []).map((s) => normalizeSection(s));
 }
 
 async function loadFloormapSections(bid: string): Promise<void> {
@@ -3998,10 +4810,8 @@ async function loadFloormapSections(bid: string): Promise<void> {
   try {
     await refreshBuildingMeta();
     await refreshLinkedRooms();
-    const data = await apiGet<{ sections: FloormapSection[] }>(
-      `/api/floormap/sections?building_id=${encodeURIComponent(buildingId)}`,
-    );
-    sections = (data.sections || []).map((s) => normalizeSection(s));
+    const data = await fetchFloormapSections(buildingId);
+    sections = data;
     if (URL_SECTION) {
       await ensureSectionInList(URL_SECTION);
     }
@@ -4028,44 +4838,37 @@ async function loadFloormapSections(bid: string): Promise<void> {
 
 async function loadRooms(): Promise<void> {
   if (!auth?.token || !activeSection) return;
+  const epoch = ++roomsLoadEpoch;
+  const sectionId = activeSection.id;
   try {
-    const data = await apiGet<{ subsections: RoomSubsection[] }>(
-      `/api/floormap/subsections?section_id=${encodeURIComponent(activeSection.id)}`,
-    );
-    rooms = (data.subsections || []).map((r) => ({
-      ...r,
-      points: coerceRingPoints(r.points),
-      vg_nr: r.vg_nr != null ? Number(r.vg_nr) : null,
-      vr_nr: r.vr_nr != null && String(r.vr_nr).trim() ? String(r.vr_nr).trim() : null,
-      area_norm: r.area_norm != null ? Number(r.area_norm) : null,
-      perimeter_norm: r.perimeter_norm != null ? Number(r.perimeter_norm) : null,
-      area_m2: r.area_m2 != null ? Math.round(Number(r.area_m2) * 100) / 100 : null,
-      perimeter_m: r.perimeter_m != null ? Math.round(Number(r.perimeter_m) * 100) / 100 : null,
-      metres_per_norm_unit:
-        r.metres_per_norm_unit != null && Number(r.metres_per_norm_unit) > 0
-          ? Number(r.metres_per_norm_unit)
-          : null,
-      sort_order: Number.isFinite(Number(r.sort_order)) ? Number(r.sort_order) : 0,
-      analysis: (() => {
-        if (!(r.analysis && typeof r.analysis === "object")) return null;
-        const a = r.analysis as SubsectionAnalysis;
-        const holes = Array.isArray(a.holes)
-          ? a.holes.map((h) => coerceRingPoints(h)).filter((h) => h.length >= 3)
-          : undefined;
-        return { ...a, holes };
-      })(),
-    }));
-    rooms.sort((a, b) => a.sort_order - b.sort_order || a.label.localeCompare(b.label));
+    const raw = bppPhase1Enabled()
+      ? (await bppListDrawingSubsections(invokeString, auth.token, sectionId)).subsections
+      : (
+          await apiGet<{ subsections: RoomSubsection[] }>(
+            `/api/floormap/subsections?section_id=${encodeURIComponent(sectionId)}`,
+          )
+        ).subsections;
+    // A newer load (or save patch) won the race — drop this reply.
+    if (epoch !== roomsLoadEpoch || activeSection?.id !== sectionId) return;
+    let mapped = mapSubsectionRows(raw as Array<Record<string, unknown>>);
+    mapped = mergeRoomsWithLocalPatches(mapped);
+    mapped.sort((a, b) => a.sort_order - b.sort_order || a.label.localeCompare(b.label));
+    rooms = mapped;
     selectedSetIds = new Set([...selectedSetIds].filter((id) => rooms.some((r) => r.id === id)));
     for (const id of [...constituentSigns.keys()]) {
       if (!selectedSetIds.has(id)) constituentSigns.delete(id);
     }
     renderRoomList();
+    drawOverlay();
   } catch (err) {
     // Keep the previous in-memory list visible — never wipe the UI on a fetch error.
-    // (Previously this set rooms=[] which made the whole component list disappear.)
+    if (epoch === roomsLoadEpoch) {
+      renderRoomList();
+      drawOverlay();
+    }
     throw err;
   }
+  if (epoch !== roomsLoadEpoch || activeSection?.id !== sectionId) return;
   try {
     updateBooleanPreview();
   } catch {
@@ -4076,13 +4879,20 @@ async function loadRooms(): Promise<void> {
   } catch {
     /* in-memory scale is enough */
   }
+  if (epoch !== roomsLoadEpoch || activeSection?.id !== sectionId) return;
   try {
     await refreshLinkedRooms();
+    if (epoch !== roomsLoadEpoch || activeSection?.id !== sectionId) return;
     renderRoomList();
+    drawOverlay();
   } catch {
     /* optional GA overlay */
   }
-  drawOverlay();
+  if (epoch === roomsLoadEpoch) {
+    requestAnimationFrame(() => {
+      if (epoch === roomsLoadEpoch) drawOverlay();
+    });
+  }
 }
 
 /** If the floormap has no scale but rooms do, restore it so edits need no recalibration. */
@@ -4107,7 +4917,7 @@ async function restoreScaleFromRooms(): Promise<void> {
   updateScaleUi();
   updateMeasureReadouts();
   try {
-    await apiPost("/api/floormap/scale", {
+    await persistSectionScale({
       section_id: activeSection.id,
       metres_per_norm_unit: mpu,
       scale_ratio: activeSection.scale_ratio,
@@ -4127,7 +4937,7 @@ async function ensureScaleAspectSynced(): Promise<void> {
   const prev = activeSection.scale_aspect_yx;
   if (prev != null && Math.abs(prev - aspect) < 1e-6) return;
   try {
-    await apiPost("/api/floormap/scale", {
+    await persistSectionScale({
       section_id: activeSection.id,
       metres_per_norm_unit: mpu,
       scale_ratio: activeSection.scale_ratio,
@@ -4148,6 +4958,8 @@ async function openSection(sectionId: string): Promise<void> {
   if (!sec || !auth?.token) return;
   endDiscovery();
   endCalibrate();
+  localRoomPatches.clear();
+  roomsLoadEpoch += 1;
   activeSection = sec;
   const n = partNoun(sec.region_kind);
   syncWorkspaceLabels(sec.region_kind);
@@ -4261,7 +5073,7 @@ async function tryDetectPdfScale(sec: FloormapSection): Promise<void> {
     if (found == null || !(cropWidthPdfPts > 0)) return;
     const mpu = metresPerNormFromPaperScale(found, cropWidthPdfPts);
     const aspect = activeScaleAspect();
-    await apiPost("/api/floormap/scale", {
+    await persistSectionScale({
       section_id: sec.id,
       metres_per_norm_unit: mpu,
       scale_ratio: found,
@@ -4423,13 +5235,52 @@ function drawPolyline(
   }
 }
 
+/**
+ * Bronnen tijdelijk niet tekenen wanneer een ±-resultaat in focus is,
+ * zodat alleen het netto-oppervlak (outer − holes) zichtbaar is.
+ * Uitzondering: als bronnen zelf ook in de set-selectie staan (nieuwe compositie).
+ */
+function sourceIdsHiddenForComposeNetPreview(): Set<string> {
+  const hide = new Set<string>();
+  const addSourcesOf = (compose: RoomSubsection) => {
+    const src = compose.analysis?.source_subsection_ids;
+    if (!Array.isArray(src)) return;
+    for (const sid of src) {
+      if (sid && sid !== compose.id) hide.add(sid);
+    }
+  };
+
+  if (pendingRoom?.editingId) {
+    const editing = rooms.find((r) => r.id === pendingRoom!.editingId);
+    if (editing && isComposeResultRoom(editing)) addSourcesOf(editing);
+  }
+
+  for (const id of selectedSetIds) {
+    const r = rooms.find((x) => x.id === id);
+    if (!r || !isComposeResultRoom(r)) continue;
+    const src = r.analysis?.source_subsection_ids || [];
+    // Niet verbergen als de gebruiker bronnen mee-selecteert voor een volgende ±.
+    if (src.some((sid) => sid && selectedSetIds.has(sid))) continue;
+    addSourcesOf(r);
+  }
+  return hide;
+}
+
 function drawOverlay(): void {
   const ctx = overlayCanvas.getContext("2d");
   if (!ctx) return;
   ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
+  // Bij focus op een ±-resultaat: verberg bronnen zodat alleen het netto-vlak (outer − holes) zichtbaar is.
+  const hideSourceIds = sourceIdsHiddenForComposeNetPreview();
+
   for (const r of rooms) {
     if (!r.points?.length) continue;
+    // Active edit is drawn once below in green — skip the stale copy.
+    if (pendingRoom?.editingId === r.id) continue;
+    // VR-lijstfilter geldt ook voor de tekening (geen “onzichtbare” componenten).
+    if (!roomMatchesVrFilter(r, roomListVrFilter)) continue;
+    if (hideSourceIds.has(r.id)) continue;
     const selected = selectedSetIds.has(r.id);
     const touched = touchedRoomIds.has(r.id);
     const holes = Array.isArray(r.analysis?.holes)
@@ -4440,7 +5291,7 @@ function drawOverlay(): void {
     const fill = lengthComp
       ? ""
       : selected
-        ? "rgba(21,101,192,0.18)"
+        ? "rgba(21,101,192,0.22)"
         : touched
           ? "rgba(0,131,143,0.16)"
           : "rgba(106,27,154,0.12)";
@@ -4841,6 +5692,115 @@ function showDiscoveryCandidate(): void {
   scrollToRing(discovery.current);
 }
 
+function discoverMinAreaFraction(): number {
+  if (!discoverMinSizeEl) return 0;
+  const v = Number(discoverMinSizeEl.value);
+  if (!Number.isFinite(v)) return 0;
+  return Math.max(0, Math.min(1, v / 100));
+}
+
+function updateDiscoverMinLabel(): void {
+  if (!discoverMinValEl || !discoverMinSizeEl) return;
+  discoverMinValEl.textContent = `${discoverMinSizeEl.value}%`;
+}
+
+/** Outer contour for façade interior discovery: editing room, or selected set (largest). */
+function resolveDiscoveryOuter(): RoomSubsection | null {
+  if (isFloormapKind()) return null;
+  if (pendingRoom?.editingId && pendingRoom.closed && pendingRoom.points.length >= 3) {
+    const editing = rooms.find((r) => r.id === pendingRoom!.editingId);
+    if (editing) {
+      return {
+        ...editing,
+        points: closeRing(pendingRoom.points.map((p) => ({ ...p }))),
+      };
+    }
+  }
+  const selected = rooms.filter((r) => selectedSetIds.has(r.id) && !componentIsLengthQuantity(r));
+  if (selected.length >= 1) return differenceSubject(selected);
+  return null;
+}
+
+function openingOverlapsExisting(normRing: Pt[], outerId: string): boolean {
+  const area = shoelaceArea(normRing);
+  if (area < 1e-10) return true;
+  const ca = ringCentroidNorm(normRing);
+  const ra = Math.sqrt(area / Math.PI);
+  for (const r of rooms) {
+    if (r.id === outerId || componentIsLengthQuantity(r)) continue;
+    const ar = shoelaceArea(r.points);
+    if (ar < 1e-10) continue;
+    const cb = ringCentroidNorm(r.points);
+    const rb = Math.sqrt(ar / Math.PI);
+    const dist = Math.hypot(ca.x - cb.x, ca.y - cb.y);
+    const ratio = Math.min(area, ar) / Math.max(area, ar);
+    if (dist < (ra + rb) * 0.4 && ratio > 0.5) return true;
+    if (ratio > 0.55 && (ringFullyContained(normRing, r.points) || ringFullyContained(r.points, normRing))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function ringCentroidNorm(ring: Pt[]): Pt {
+  let x = 0;
+  let y = 0;
+  const n = Math.max(1, ring.length);
+  for (const p of ring) {
+    x += p.x;
+    y += p.y;
+  }
+  return { x: x / n, y: y / n };
+}
+
+async function autoSaveDiscoveredOpenings(
+  openings: DiscoveredOpening[],
+  outer: RoomSubsection,
+): Promise<number> {
+  if (!activeSection || !auth || !cropBitmap) return 0;
+  const mpu = activeScaleMpu();
+  const aspect = activeScaleAspect();
+  const level = outer.level_hint || roomLevelSelect.value || "OTHER";
+  const vg = outer.vg_nr != null ? Number(outer.vg_nr) : parseVgVrInputs().vg_nr;
+  const vr =
+    outer.vr_nr != null && String(outer.vr_nr).trim()
+      ? String(outer.vr_nr).trim()
+      : parseVgVrInputs().vr_nr;
+  const oris = Array.isArray(outer.analysis?.expected_orientaties)
+    ? outer.analysis!.expected_orientaties!
+    : [];
+  const corrections = outer.analysis?.orientatie_correcties;
+  let savedN = 0;
+  for (const o of openings) {
+    const points = ensureEditablePolyline(
+      pixelsToSectionNorm(o.points, cropBitmap.width, cropBitmap.height),
+      16,
+    );
+    if (!ringFullyContained(points, outer.points)) continue;
+    if (openingOverlapsExisting(points, outer.id)) continue;
+    const body: Record<string, unknown> = {
+      section_id: activeSection.id,
+      label: o.suggestedLabel,
+      level_hint: level,
+      vg_nr: vg,
+      vr_nr: vr,
+      points,
+      metres_per_norm_unit: mpu ?? undefined,
+      scale_aspect_yx: aspect,
+      analysis: {
+        discovered_from_outer_id: outer.id,
+        discovery_kind: o.kind,
+        ...(oris.length ? { expected_orientaties: oris } : {}),
+        ...(corrections ? { orientatie_correcties: corrections } : {}),
+      },
+    };
+    const saved = await saveDrawingSubsection(body);
+    markRoomTouched(saved.subsection_id);
+    savedN++;
+  }
+  return savedN;
+}
+
 async function startDiscovery(): Promise<void> {
   if (!cropBitmap || !activeSection) {
     setStatus(`Open eerst een ${activePartNoun().title.toLowerCase()}`, "err");
@@ -4848,11 +5808,10 @@ async function startDiscovery(): Promise<void> {
   }
   endCalibrate();
   void endDetail();
-  clearPendingRoom();
   if (measure.tool !== "off") clearMeasure(false);
   discoverBtn.disabled = true;
   if (discoverBtnSide) discoverBtnSide.disabled = true;
-  setStatus(`${activePartNoun().plural.charAt(0).toUpperCase() + activePartNoun().plural.slice(1)} ontdekken…`, "busy");
+
   // Sample from an offscreen copy — never getImageData on the live view canvas.
   const sample = document.createElement("canvas");
   sample.width = cropBitmap.width;
@@ -4866,6 +5825,63 @@ async function startDiscovery(): Promise<void> {
   }
   sampleCtx.drawImage(cropBitmap, 0, 0);
   const img = sampleCtx.getImageData(0, 0, sample.width, sample.height);
+
+  // Gevel: ontdek openingen binnen een outer VR-component (bitmap-analyse).
+  if (!isFloormapKind()) {
+    const outer = resolveDiscoveryOuter();
+    if (!outer || outer.points.length < 3) {
+      setStatus(
+        "Selecteer eerst de buitencontour in de lijst (checkbox), of open die ter bewerking — daarna Ontdek openingen",
+        "err",
+      );
+      discoverBtn.disabled = false;
+      if (discoverBtnSide) discoverBtnSide.disabled = false;
+      return;
+    }
+    setStatus(`Openingen zoeken in «${outer.label || "buitencontour"}»…`, "busy");
+    let found: DiscoveredOpening[] = [];
+    try {
+      found = discoverInteriorOpenings(img, outer.points, {
+        minAreaFraction: discoverMinAreaFraction(),
+      });
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "Ontdekken mislukt", "err");
+      discoverBtn.disabled = false;
+      if (discoverBtnSide) discoverBtnSide.disabled = false;
+      return;
+    }
+    await paintCropView();
+    if (!found.length) {
+      setStatus(
+        "Geen openingen in de bitmap gevonden binnen deze buitencontour — teken handmatig of controleer contrast",
+        "err",
+      );
+      discoverBtn.disabled = false;
+      if (discoverBtnSide) discoverBtnSide.disabled = false;
+      return;
+    }
+    try {
+      const n = await autoSaveDiscoveredOpenings(found, outer);
+      await loadRooms();
+      fillVgVrSuggestions();
+      drawOverlay();
+      setStatus(
+        n > 0
+          ? `${n} opening(en) toegevoegd onder VG ${outer.vg_nr ?? "?"} · VR ${outer.vr_nr ?? "?"} (Rond kozijn / Kozijn, groot→klein)`
+          : "Kandidaten overlapten bestaande componenten — niets nieuws toegevoegd",
+        n > 0 ? "ok" : "busy",
+      );
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err), "err");
+    } finally {
+      discoverBtn.disabled = false;
+      if (discoverBtnSide) discoverBtnSide.disabled = false;
+    }
+    return;
+  }
+
+  clearPendingRoom();
+  setStatus(`${activePartNoun().plural.charAt(0).toUpperCase() + activePartNoun().plural.slice(1)} ontdekken…`, "busy");
   let found: ReturnType<typeof discoverRoomPolylines> = [];
   try {
     found = discoverRoomPolylines(img);
@@ -4921,7 +5937,7 @@ async function acceptDiscovery(): Promise<void> {
     setStatus("Ruimte opslaan…", "busy");
     try {
       const mpu = activeScaleMpu();
-      const saved = await apiPost<{ subsection_id: string }>("/api/floormap/subsections", {
+      const saved = await saveDrawingSubsection({
         section_id: activeSection.id,
         label,
         level_hint: level,
@@ -4949,14 +5965,21 @@ async function acceptDiscovery(): Promise<void> {
     }
     return;
   }
+  const vgVr = parseVgVrInputs();
+  if (vgVr.error) {
+    setStatus(vgVr.error, "err");
+    return;
+  }
   discoveryAcceptBtn.disabled = true;
   setStatus("Component opslaan…", "busy");
   try {
     const mpu = activeScaleMpu();
-    const saved = await apiPost<{ subsection_id: string }>("/api/floormap/subsections", {
+    const saved = await saveDrawingSubsection({
       section_id: activeSection.id,
       label,
       level_hint: level,
+      vg_nr: vgVr.vg_nr,
+      vr_nr: vgVr.vr_nr,
       points,
       metres_per_norm_unit: mpu ?? undefined,
       scale_aspect_yx: activeScaleAspect(),
@@ -4966,8 +5989,12 @@ async function acceptDiscovery(): Promise<void> {
     discovery.index += 1;
     showDiscoveryCandidate();
     if (discovery && discovery.index < discovery.candidates.length) {
+      const vgBit =
+        vgVr.vg_nr != null && vgVr.vr_nr
+          ? ` · VG ${vgVr.vg_nr} · VR ${vgVr.vr_nr}`
+          : " · nog geen VG/VR";
       setStatus(
-        `Opgeslagen ${label} — volgende kandidaat (${discovery.index + 1} van ${discovery.candidates.length})`,
+        `Opgeslagen ${label}${vgBit} — volgende kandidaat (${discovery.index + 1} van ${discovery.candidates.length})`,
         "ok",
       );
     }
@@ -5050,16 +6077,16 @@ function simplifyActiveOutline(): void {
 
 function nudgeCurrent(dx: number, dy: number): void {
   if (discovery?.current) {
-    discovery.current = translateRing(discovery.current, dx, dy);
+    discovery.current = translateRingUnclamped(discovery.current, dx, dy);
     discovery.candidates[discovery.index] = closeRing(discovery.current);
     updateMeasureReadouts();
     drawOverlay();
     return;
   }
   if (pendingRoom?.closed) {
-    pendingRoom.points = translateRing(pendingRoom.points, dx, dy);
+    pendingRoom.points = translateRingUnclamped(pendingRoom.points, dx, dy);
     if (pendingRoom.holes?.length) {
-      pendingRoom.holes = pendingRoom.holes.map((h) => translateRing(h, dx, dy));
+      pendingRoom.holes = pendingRoom.holes.map((h) => translateRingUnclamped(h, dx, dy));
     }
     updateMeasureReadouts();
     scheduleRoomListRefresh();
@@ -5116,7 +6143,7 @@ async function finishCalibrate(): Promise<void> {
     return;
   }
   try {
-    await apiPost("/api/floormap/scale", {
+    await persistSectionScale({
       section_id: activeSection.id,
       metres_per_norm_unit: mpu,
       scale_ratio: null,
@@ -5137,19 +6164,58 @@ async function finishCalibrate(): Promise<void> {
   }
 }
 
+function clearPendingDeleteConfirm(): void {
+  pendingDeleteId = null;
+  if (pendingDeleteTimer != null) {
+    window.clearTimeout(pendingDeleteTimer);
+    pendingDeleteTimer = null;
+  }
+}
+
 async function deleteRoom(id: string): Promise<void> {
-  const label = rooms.find((r) => r.id === id)?.label || "dit component";
-  if (!confirm(`«${label}» permanent verwijderen?`)) return;
+  const room = rooms.find((r) => r.id === id);
+  const label = room?.label || "dit component";
+  const isComposed = room ? isComposeResultRoom(room) : false;
+  // Two-step confirm: window.confirm is sometimes blocked (nothing appears to happen).
+  if (pendingDeleteId !== id) {
+    clearPendingDeleteConfirm();
+    pendingDeleteId = id;
+    pendingDeleteTimer = window.setTimeout(() => {
+      pendingDeleteId = null;
+      pendingDeleteTimer = null;
+      renderRoomList();
+    }, 8000);
+    renderRoomList();
+    setStatus(
+      isComposed
+        ? `Bevestig wissen van «${label}» (bronnen blijven behouden) — klik nogmaals op Bevestig wissen`
+        : `Bevestig wissen van «${label}» — klik nogmaals op Bevestig wissen`,
+      "busy",
+    );
+    return;
+  }
+  clearPendingDeleteConfirm();
   try {
-    await apiDelete(`/api/floormap/subsections?subsection_id=${encodeURIComponent(id)}`);
+    setStatus(`Verwijderen: «${label}»…`, "busy");
+    await deleteDrawingSubsection(id);
     if (pendingRoom?.editingId === id) clearPendingRoom();
     if (touchedRoomIds.delete(id)) persistTouchedRoomIds();
     selectedSetIds.delete(id);
     constituentSigns.delete(id);
     await loadRooms();
-    setStatus("Component verwijderd", "ok");
+    setStatus(
+      isComposed
+        ? `Samengesteld component verwijderd (bronnen blijven behouden)`
+        : "Component verwijderd",
+      "ok",
+    );
   } catch (err) {
-    setStatus(err instanceof Error ? err.message : String(err), "err");
+    const raw = err instanceof Error ? err.message : String(err);
+    const msg = /restrict|foreign key|verblijfsruimte/i.test(raw)
+      ? `Kan «${label}» niet verwijderen: nog gekoppeld aan een verblijfsruimte of andere data. ${raw}`
+      : raw;
+    setStatus(msg, "err");
+    renderRoomList();
   }
 }
 
@@ -5186,10 +6252,10 @@ async function moveRoom(index: number, delta: -1 | 1): Promise<void> {
     console.warn("moveRoom: local render failed", err);
   }
   try {
-    await apiPost("/api/floormap/subsections/reorder", {
-      section_id: activeSection.id,
-      ordered_ids: rooms.map((r) => r.id).filter(Boolean),
-    });
+    await reorderDrawingSubsections(
+      activeSection.id,
+      rooms.map((r) => r.id).filter(Boolean),
+    );
     setStatus("Volgorde opgeslagen", "ok");
   } catch (err) {
     rooms = prevOrder.map((p) => {
@@ -5522,9 +6588,9 @@ window.addEventListener("mousemove", (ev) => {
     const dy = norm.y - pendingRoom.dragBodyLast.y;
     if (Math.hypot(dx, dy) > 1e-9) {
       if (pendingRoom.closed) {
-        pendingRoom.points = translateRing(pendingRoom.points, dx, dy);
+        pendingRoom.points = translateRingUnclamped(pendingRoom.points, dx, dy);
         if (pendingRoom.holes?.length && !pendingIsLengthComponent()) {
-          pendingRoom.holes = pendingRoom.holes.map((h) => translateRing(h, dx, dy));
+          pendingRoom.holes = pendingRoom.holes.map((h) => translateRingUnclamped(h, dx, dy));
         }
       } else {
         pendingRoom.points = pendingRoom.points.map((p) => ({ x: p.x + dx, y: p.y + dy }));
@@ -5590,6 +6656,7 @@ setClearSelBtn?.addEventListener("click", () => {
 roomVrFilterEl?.addEventListener("change", () => {
   roomListVrFilter = roomVrFilterEl.value;
   renderRoomList();
+  drawOverlay();
 });
 materialCategoryEl?.addEventListener("change", () => {
   if (materialFilterEl) materialFilterEl.value = "";
@@ -5630,25 +6697,34 @@ favoriteRemoveBtn?.addEventListener("click", () => {
   );
 });
 presetSaveBtn?.addEventListener("click", () => {
-  if (!buildingId) return;
+  if (!buildingId || !auth?.token) return;
   const name = window.prompt("Naam voor deze favorieten-preset:");
   if (!name?.trim()) return;
-  void apiPost("/api/floormap/material-favorite-presets", {
-    action: "save",
-    name: name.trim(),
-    building_id: buildingId,
-  })
+  const run = bppPhase1Enabled()
+    ? bppMaterialFavoritePresetAction(invokeString, auth.token, {
+        action: "save",
+        name: name.trim(),
+        building_id: buildingId,
+      })
+    : apiPost("/api/floormap/material-favorite-presets", {
+        action: "save",
+        name: name.trim(),
+        building_id: buildingId,
+      });
+  void run
     .then((data: { material_count?: number }) => {
       setStatus(`Preset opgeslagen (${data.material_count ?? "?"} materialen)`, "ok");
     })
     .catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
 });
 presetApplyBtn?.addEventListener("click", () => {
-  if (!buildingId) return;
+  if (!buildingId || !auth?.token) return;
   void (async () => {
-    const data = await apiGet<{
-      presets: Array<{ preset_id: string; name: string; material_count: number }>;
-    }>("/api/floormap/material-favorite-presets");
+    const data = bppPhase1Enabled()
+      ? await bppListMaterialFavoritePresets(invokeString, auth!.token)
+      : await apiGet<{
+          presets: Array<{ preset_id: string; name: string; material_count: number }>;
+        }>("/api/floormap/material-favorite-presets");
     const presets = data.presets || [];
     if (!presets.length) {
       setStatus("Geen presets beschikbaar", "err");
@@ -5666,11 +6742,19 @@ presetApplyBtn?.addEventListener("click", () => {
     ) {
       return;
     }
-    await apiPost("/api/floormap/material-favorite-presets", {
-      action: "apply",
-      preset_id: preset.preset_id,
-      building_id: buildingId,
-    });
+    if (bppPhase1Enabled()) {
+      await bppMaterialFavoritePresetAction(invokeString, auth!.token, {
+        action: "apply",
+        preset_id: preset.preset_id,
+        building_id: buildingId,
+      });
+    } else {
+      await apiPost("/api/floormap/material-favorite-presets", {
+        action: "apply",
+        preset_id: preset.preset_id,
+        building_id: buildingId,
+      });
+    }
     await loadFavoriteMaterials();
     setStatus(`Preset «${preset.name}» toegepast`, "ok");
   })().catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
@@ -5982,7 +7066,25 @@ customMatToggleBtn?.addEventListener("click", () => {
 });
 
 kierSuggestCb?.addEventListener("change", () => {
-  if (kierSuggestCb) kierSuggestCb.dataset.userTouched = "1";
+  if (!kierSuggestCb) return;
+  kierSuggestCb.dataset.userTouched = "1";
+  const editingId = pendingRoom?.editingId;
+  if (editingId) {
+    const room = rooms.find((r) => r.id === editingId);
+    if (room && !componentIsLengthQuantity(room)) {
+      if (kierSuggestCb.checked && !selectedSetIds.has(editingId)) {
+        kierSuggestCb.checked = Boolean(existingSealFor(editingId));
+        setStatus("Vink eerst het component aan (selectie links) om kierdichting toe te voegen", "err");
+        syncKierSuggestUi();
+        return;
+      }
+      // Same action as the list «Kier» checkbox — keep both linked.
+      void toggleKierSealForRoom(room, kierSuggestCb.checked).then(() => {
+        syncKierSuggestUi();
+      });
+      return;
+    }
+  }
   syncKierSuggestUi();
 });
 kierSuggestNewBtn?.addEventListener("click", () => {
@@ -6034,6 +7136,8 @@ zoomFitBtn.addEventListener("click", () => {
 });
 discoverBtn.addEventListener("click", () => void startDiscovery());
 discoverBtnSide?.addEventListener("click", () => void startDiscovery());
+discoverMinSizeEl?.addEventListener("input", updateDiscoverMinLabel);
+updateDiscoverMinLabel();
 calibrateBtn.addEventListener("click", () => startCalibrate());
 detailBtn?.addEventListener("click", () => startDetailTool());
 detailCloseBtn?.addEventListener("click", () => {

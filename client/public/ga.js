@@ -610,6 +610,50 @@ Dit wist berekeningen, tekeningen en rapportmappen. Dit kan niet ongedaan worden
   };
 }
 
+// src/bpp-api.ts
+function parseBppJson(ret) {
+  if (ret.startsWith("ERROR")) throw new Error(ret);
+  try {
+    return JSON.parse(ret);
+  } catch {
+    throw new Error(`Ongeldig JSON-antwoord van bppServer: ${ret.slice(0, 240)}`);
+  }
+}
+async function bppListFloormapSections(invoke, token, buildingId2) {
+  const ret = await invoke("API_ListFloormapSections", [token, buildingId2]);
+  const data = parseBppJson(ret);
+  return { sections: data.sections || [] };
+}
+function bppPhase1Enabled() {
+  try {
+    return localStorage.getItem("GEVELWERING_BPP_HTTP") !== "1";
+  } catch {
+    return true;
+  }
+}
+async function bppListDrawingSubsections(invoke, token, sectionId) {
+  const ret = await invoke("API_ListDrawingSubsections", [token, sectionId]);
+  const data = parseBppJson(ret);
+  return { subsections: data.subsections || [] };
+}
+async function bppListVrFacadeComponents(invoke, token, buildingId2, vrNr) {
+  const ret = await invoke("API_ListVrFacadeComponents", [token, buildingId2, vrNr]);
+  const data = parseBppJson(ret);
+  return {
+    ...data,
+    eligible: data.eligible || []
+  };
+}
+async function bppListMaterialAlternatives(invoke, token, materialId, limit = 6) {
+  const ret = await invoke("API_ListMaterialAlternatives", [token, materialId, String(limit)]);
+  const data = parseBppJson(ret);
+  return { alternatives: data.alternatives || [], reason: data.reason };
+}
+async function bppSaveSubsectionMaterial(invoke, token, subsectionId, materialId) {
+  const ret = await invoke("API_SaveSubsectionMaterial", [token, subsectionId, materialId]);
+  return parseBppJson(ret);
+}
+
 // src/ga.ts
 var BPP_WS = resolveBppWsUrl();
 var AUTH_KEY = "app_gevelwering_engineer_auth";
@@ -1008,14 +1052,14 @@ function roomFitsSelectedVg(room) {
 }
 async function loadGeometryOptions() {
   if (!buildingId || !auth) return;
-  const sections = await apiGet(`/api/floormap/sections?building_id=${encodeURIComponent(buildingId)}`);
+  const sectionRows = bppPhase1Enabled() ? (await bppListFloormapSections(invokeString, auth.token, buildingId)).sections : (await apiGet(`/api/floormap/sections?building_id=${encodeURIComponent(buildingId)}`)).sections;
   const rooms = [];
   floormapRoomsById = /* @__PURE__ */ new Map();
-  for (const sec of sections.sections || []) {
+  for (const sec of sectionRows || []) {
     const kind = String(sec.region_kind || "").toUpperCase();
-    const sub = await apiGet(`/api/floormap/subsections?section_id=${encodeURIComponent(sec.id)}`);
+    if (kind !== "FLOORMAP") continue;
+    const sub = bppPhase1Enabled() ? await bppListDrawingSubsections(invokeString, auth.token, sec.id) : await apiGet(`/api/floormap/subsections?section_id=${encodeURIComponent(sec.id)}`);
     for (const s of sub.subsections || []) {
-      if (kind !== "FLOORMAP") continue;
       const expected = Array.isArray(s.analysis?.expected_orientaties) ? s.analysis.expected_orientaties.map((c) => normalizeOrientatie(c)).filter(
         (c) => ["N", "NO", "O", "ZO", "Z", "ZW", "W", "NW"].includes(c)
       ) : [];
@@ -1035,7 +1079,7 @@ async function loadGeometryOptions() {
         id: s.id,
         section_id: sec.id,
         label: s.label,
-        area_m2: s.area_m2,
+        area_m2: s.area_m2 != null ? Number(s.area_m2) : null,
         region_kind: kind,
         section_label: sec.label || kind,
         vg_nr: s.vg_nr != null ? Number(s.vg_nr) : null,
@@ -1794,7 +1838,7 @@ async function loadFacadesForSelectedVr() {
     return;
   }
   try {
-    const data = await apiGet(
+    const data = bppPhase1Enabled() ? await bppListVrFacadeComponents(invokeString, auth.token, buildingId, vrNr) : await apiGet(
       `/api/floormap/vr-components?building_id=${encodeURIComponent(buildingId)}&vr_nr=${encodeURIComponent(vrNr)}`
     );
     vrFacades = (data.eligible || []).map((s) => ({
@@ -3708,7 +3752,7 @@ async function runAnalyze() {
     const need = deficit > 0 ? minRaDeltaForRprime(result.elements, m.elementIndex, deficit) : 0;
     let alts = [];
     try {
-      const data = await apiGet(
+      const data = bppPhase1Enabled() ? await bppListMaterialAlternatives(invokeString, auth.token, m.materialId, 8) : await apiGet(
         `/api/floormap/material-alternatives?material_id=${encodeURIComponent(m.materialId)}&limit=8`
       );
       alts = Array.isArray(data.alternatives) ? data.alternatives : [];
@@ -3773,7 +3817,7 @@ async function applyAnalyzeMaterial(subsectionIds, materialId, name, fromMateria
   let appliedCatalog = null;
   let appliedName = name;
   for (const sid of targets) {
-    const ret = await apiPost("/api/floormap/subsection-material", {
+    const ret = bppPhase1Enabled() ? await bppSaveSubsectionMaterial(invokeString, auth.token, sid, materialId) : await apiPost("/api/floormap/subsection-material", {
       subsection_id: sid,
       material_id: materialId
     });

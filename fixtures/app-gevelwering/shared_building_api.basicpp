@@ -33,12 +33,20 @@ DIM SHARED g_auth_user_id$
 DIM SHARED g_auth_token$
 
 PROCEDURE API_Bootstrap() AS STRING
-    DIM conn$
-    IF g_bootstrapped% <> 0 AND g_conn% > 0 THEN
-        IF POSTGRES_IS_CONNECTED(g_conn%) <> 0 THEN
-            RETURN "OK"
+    DIM conn$, rid%
+
+    REM Always (re)connect after start.sh DDL so CREATE OR REPLACE FUNCTION
+    REM bodies are visible (avoids stale PL/pgSQL plans on a long-lived g_conn%).
+    IF g_bootstrapped% <> 0 THEN
+        IF g_conn% > 0 THEN
+            POSTGRES_CLOSE(g_conn%)
+            g_conn% = 0
+        END IF
+        IF g_db IS NOT NULL THEN
+            g_db.Disconnect()
         END IF
     END IF
+    g_bootstrapped% = 0
 
     conn$ = ENV$("BPP_PG_CONN")
     IF conn$ = "" THEN
@@ -57,6 +65,8 @@ PROCEDURE API_Bootstrap() AS STRING
     IF g_conn% <= 0 THEN
         RETURN "ERROR: POSTGRES_CREATE failed for " + conn$
     END IF
+
+    rid% = POSTGRES_QUERY(g_conn%, "DISCARD PLANS")
 
     g_bootstrapped% = 1
     g_auth_user_id$ = ""
@@ -3060,4 +3070,644 @@ PROCEDURE API_SaveFloormapScale(session_token$, section_id$, metres_per_norm_uni
     END IF
 
     RETURN "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "section_id" + CHR$(34) + ":" + CHR$(34) + sec_id$ + CHR$(34) + "," + CHR$(34) + "metres_per_norm_unit" + CHR$(34) + ":" + mpu$ + "," + CHR$(34) + "scale_aspect_yx" + CHR$(34) + ":" + aspect$ + "," + CHR$(34) + "scale_source" + CHR$(34) + ":" + CHR$(34) + src$ + CHR$(34) + "}"
+END PROCEDURE
+
+' ---------------------------------------------------------------------------
+' Phase 2 — drawing subsections (requires sql/app_gevelwering_0_2_30.sql)
+' ---------------------------------------------------------------------------
+
+PROCEDURE API_ListDrawingSubsections(session_token$, section_id$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, sec_id$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR section_id$ = "" THEN
+        RETURN "ERROR: session_token and section_id are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sec_id$ = SUBSTITUTE$(section_id$, "'", "''")
+
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_list_drawing_subsections('" + sec_id$ + "'::uuid)::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: list subsections failed: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: list subsections failed"
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_GetFloormapSection(session_token$, section_id$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, sec_id$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR section_id$ = "" THEN
+        RETURN "ERROR: session_token and section_id are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sec_id$ = SUBSTITUTE$(section_id$, "'", "''")
+
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_get_floormap_section('" + sec_id$ + "'::uuid)::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: get section failed: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: scalable section not found"
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    IF INSTR(out$, CHR$(34) + "ok" + CHR$(34) + ":false") > 0 THEN
+        RETURN "ERROR: scalable section not found"
+    END IF
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_DeleteDrawingSubsection(session_token$, subsection_id$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, sub_id$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR subsection_id$ = "" THEN
+        RETURN "ERROR: session_token and subsection_id are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sub_id$ = SUBSTITUTE$(subsection_id$, "'", "''")
+
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_delete_drawing_subsection('" + sub_id$ + "'::uuid)::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: delete subsection failed: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: delete subsection failed"
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    IF INSTR(out$, CHR$(34) + "ok" + CHR$(34) + ":false") > 0 THEN
+        RETURN "ERROR: subsection not found"
+    END IF
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_ReorderDrawingSubsections(session_token$, section_id$, ordered_ids_csv$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, sec_id$, ids$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR section_id$ = "" OR ordered_ids_csv$ = "" THEN
+        RETURN "ERROR: session_token, section_id, and ordered_ids_csv are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sec_id$ = SUBSTITUTE$(section_id$, "'", "''")
+    ids$ = SUBSTITUTE$(ordered_ids_csv$, "'", "''")
+
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_reorder_drawing_subsections('" + sec_id$ + "'::uuid, "
+    sql$ = sql$ + "string_to_array('" + ids$ + "', ',')::uuid[])::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: reorder subsections failed: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: reorder subsections failed"
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_SaveDrawingSubsection(session_token$, payload_json$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, user_id$, payload$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR payload_json$ = "" THEN
+        RETURN "ERROR: session_token and payload_json are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    payload$ = SUBSTITUTE$(payload_json$, "'", "''")
+
+    sql$ = "SELECT u.id::text AS user_id, u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    user_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "user_id")
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_save_drawing_subsection('" + user_id$ + "'::uuid, "
+    sql$ = sql$ + "'" + payload$ + "'::jsonb)::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: save subsection failed"
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_ListVrFacadeComponents(session_token$, building_id$, vr_nr$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, b_id$, vr$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR building_id$ = "" OR vr_nr$ = "" THEN
+        RETURN "ERROR: session_token, building_id, and vr_nr are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    b_id$ = SUBSTITUTE$(building_id$, "'", "''")
+    vr$ = SUBSTITUTE$(vr_nr$, "'", "''")
+
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_list_vr_facade_components('" + b_id$ + "'::uuid, '" + vr$ + "')::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: list VR components failed: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: list VR components failed"
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    RETURN out$
+END PROCEDURE
+
+' ---------------------------------------------------------------------------
+' Phase 4 — materials, favorites, subsection-material (sql/app_gevelwering_0_2_32.sql)
+' ---------------------------------------------------------------------------
+
+PROCEDURE API_ListMaterialCategories(session_token$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: session_token is required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_list_material_categories()::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: list material categories failed: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_ListMaterials(session_token$, master_category$, category$, q$, limit$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, mc$, cat$, qq$, lim$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: session_token is required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    mc$ = SUBSTITUTE$(master_category$, "'", "''")
+    cat$ = SUBSTITUTE$(category$, "'", "''")
+    qq$ = SUBSTITUTE$(q$, "'", "''")
+    lim$ = SUBSTITUTE$(limit$, "'", "''")
+    IF lim$ = "" THEN
+        lim$ = "800"
+    END IF
+
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_list_materials('" + mc$ + "', '" + cat$ + "', '" + qq$ + "', " + lim$ + "::int)::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_CreateMaterial(session_token$, payload_json$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, user_id$, payload$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR payload_json$ = "" THEN
+        RETURN "ERROR: session_token and payload_json are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    payload$ = SUBSTITUTE$(payload_json$, "'", "''")
+
+    sql$ = "SELECT u.id::text AS user_id, u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    user_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "user_id")
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_create_material('" + user_id$ + "'::uuid, '" + payload$ + "'::jsonb)::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_ListMaterialAlternatives(session_token$, material_id$, limit$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, mid$, lim$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR material_id$ = "" THEN
+        RETURN "ERROR: session_token and material_id are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    mid$ = SUBSTITUTE$(material_id$, "'", "''")
+    lim$ = SUBSTITUTE$(limit$, "'", "''")
+    IF lim$ = "" THEN
+        lim$ = "6"
+    END IF
+
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_list_material_alternatives('" + mid$ + "'::uuid, " + lim$ + "::int)::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_SaveSubsectionMaterial(session_token$, subsection_id$, material_id$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, sid$, mid$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR subsection_id$ = "" OR material_id$ = "" THEN
+        RETURN "ERROR: session_token, subsection_id, and material_id are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sid$ = SUBSTITUTE$(subsection_id$, "'", "''")
+    mid$ = SUBSTITUTE$(material_id$, "'", "''")
+
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_save_subsection_material('" + sid$ + "'::uuid, '" + mid$ + "'::uuid)::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_ListMaterialFavorites(session_token$, building_id$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, b_id$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR building_id$ = "" THEN
+        RETURN "ERROR: session_token and building_id are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    b_id$ = SUBSTITUTE$(building_id$, "'", "''")
+
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_list_material_favorites('" + b_id$ + "'::uuid)::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: list favorites failed: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_AddMaterialFavorite(session_token$, building_id$, material_id$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, b_id$, mid$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR building_id$ = "" OR material_id$ = "" THEN
+        RETURN "ERROR: session_token, building_id, and material_id are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    b_id$ = SUBSTITUTE$(building_id$, "'", "''")
+    mid$ = SUBSTITUTE$(material_id$, "'", "''")
+
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_add_material_favorite('" + b_id$ + "'::uuid, '" + mid$ + "'::uuid)::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_RemoveMaterialFavorite(session_token$, building_id$, material_id$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, b_id$, mid$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR building_id$ = "" OR material_id$ = "" THEN
+        RETURN "ERROR: session_token, building_id, and material_id are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    b_id$ = SUBSTITUTE$(building_id$, "'", "''")
+    mid$ = SUBSTITUTE$(material_id$, "'", "''")
+
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_remove_material_favorite('" + b_id$ + "'::uuid, '" + mid$ + "'::uuid)::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_ListMaterialFavoritePresets(session_token$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: session_token is required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_list_material_favorite_presets()::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: list presets failed: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_MaterialFavoritePresetAction(session_token$, payload_json$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, user_id$, payload$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR payload_json$ = "" THEN
+        RETURN "ERROR: session_token and payload_json are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    payload$ = SUBSTITUTE$(payload_json$, "'", "''")
+
+    sql$ = "SELECT u.id::text AS user_id, u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    user_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "user_id")
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_material_favorite_preset_action('" + user_id$ + "'::uuid, '" + payload$ + "'::jsonb)::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    RETURN out$
 END PROCEDURE

@@ -85,6 +85,28 @@ function initPasswordToggles(root = document) {
   root.querySelectorAll('input[type="password"]').forEach(enhancePasswordInput);
 }
 
+// src/bpp-api.ts
+function parseBppJson(ret) {
+  if (ret.startsWith("ERROR")) throw new Error(ret);
+  try {
+    return JSON.parse(ret);
+  } catch {
+    throw new Error(`Ongeldig JSON-antwoord van bppServer: ${ret.slice(0, 240)}`);
+  }
+}
+async function bppListProjectDocuments(invoke, token, buildingId) {
+  const ret = await invoke("API_ListProjectDocuments", [token, buildingId]);
+  const data = parseBppJson(ret);
+  return { documents: data.documents || [] };
+}
+function bppPhase1Enabled() {
+  try {
+    return localStorage.getItem("GEVELWERING_BPP_HTTP") !== "1";
+  } catch {
+    return true;
+  }
+}
+
 // src/app.ts
 var AUTH_KEY = "app_gevelwering_auth";
 var BPP_WS = resolveBppWsUrl();
@@ -786,22 +808,38 @@ async function refreshProjectDocuments() {
   }
   lastProjectId = projectId;
   drawingFileInput.disabled = currentProjectStatus !== null && currentProjectStatus !== "INITIAL_REQUEST";
-  const res = await fetch(`/api/drawings/list?building_id=${encodeURIComponent(projectId)}`, {
-    credentials: "include",
-    headers: apiAuthHeaders(auth.token)
-  });
-  let parsed;
-  try {
-    parsed = await res.json();
-  } catch {
-    drawingUploadHintEl.textContent = `Tekeningen laden mislukt (HTTP ${res.status})`;
-    return;
+  let docs = [];
+  if (bppPhase1Enabled()) {
+    try {
+      const data = await bppListProjectDocuments(invokeString, auth.token, projectId);
+      docs = (data.documents || []).map((d) => ({
+        id: d.id,
+        filename: d.filename,
+        file_ext: d.file_ext,
+        byte_size: Number(d.byte_size) || 0
+      }));
+    } catch (err) {
+      drawingUploadHintEl.textContent = err instanceof Error ? err.message : "Tekeningen laden mislukt";
+      return;
+    }
+  } else {
+    const res = await fetch(`/api/drawings/list?building_id=${encodeURIComponent(projectId)}`, {
+      credentials: "include",
+      headers: apiAuthHeaders(auth.token)
+    });
+    let parsed;
+    try {
+      parsed = await res.json();
+    } catch {
+      drawingUploadHintEl.textContent = `Tekeningen laden mislukt (HTTP ${res.status})`;
+      return;
+    }
+    if (!res.ok || !parsed.ok) {
+      drawingUploadHintEl.textContent = parsed.error || `Tekeningen laden mislukt (HTTP ${res.status})`;
+      return;
+    }
+    docs = parsed.documents ?? [];
   }
-  if (!res.ok || !parsed.ok) {
-    drawingUploadHintEl.textContent = parsed.error || `Tekeningen laden mislukt (HTTP ${res.status})`;
-    return;
-  }
-  const docs = parsed.documents ?? [];
   updateSubmitDrawingsButton(docs.length);
   if (docs.length === 0) {
     drawingUploadHintEl.textContent = "Nog geen tekeningen ge\xFCpload.";

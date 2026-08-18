@@ -3,6 +3,7 @@ import { resolveBppWsUrl } from "./ws-url";
 import { initPasswordToggles } from "./password-toggle";
 import { initEngineerLayoutSplit } from "./layout-split";
 import { mountProjectMenu, type ProjectMenuApi } from "./project-menu";
+import { bppDeleteDrawingRegion, bppPhase1Enabled, bppSaveFloormapScale } from "./bpp-api";
 import {
   metresPerNormFromCalibration,
   normalizeAspectYx,
@@ -894,55 +895,36 @@ function drawMeasureOverlay(ctx: CanvasRenderingContext2D): void {
 
 async function saveSectionScale(sectionId: string, mpu: number, aspectYx: number): Promise<void> {
   if (!auth?.token) throw new Error("Niet ingelogd");
-
-  let httpErr = "";
-  try {
-    const res = await fetch("/api/floormap/scale", {
-      method: "POST",
-      credentials: "include",
-      headers: apiAuthHeaders(auth.token, true),
-      body: JSON.stringify({
-        section_id: sectionId,
-        metres_per_norm_unit: mpu,
-        scale_ratio: null,
-        scale_source: "CALIBRATED",
-        scale_aspect_yx: aspectYx,
-      }),
+  if (bppPhase1Enabled()) {
+    await bppSaveFloormapScale(invokeString, auth.token, {
+      section_id: sectionId,
+      metres_per_norm_unit: mpu,
+      scale_ratio: null,
+      scale_source: "CALIBRATED",
+      scale_aspect_yx: aspectYx,
     });
-    let body: { ok?: boolean; error?: string } = {};
-    try {
-      body = (await res.json()) as { ok?: boolean; error?: string };
-    } catch {
-      /* non-JSON */
-    }
-    if (res.ok && body.ok) return;
-    httpErr = body.error || `Schaal opslaan mislukt (HTTP ${res.status})`;
-    if (res.status === 401 || res.status === 403 || res.status === 400) {
-      throw new Error(httpErr);
-    }
-  } catch (err) {
-    if (err instanceof Error && /Authorization|engineer access|invalid section|metres_per_norm/i.test(err.message)) {
-      throw err;
-    }
-    if (!httpErr && err instanceof Error) httpErr = err.message;
+    return;
   }
-
-  // WS fallback — re-INCLUDE so facade support is loaded without restarting bppServer
-  await send(
-    "exec.request",
-    { code: 'INCLUDE "fixtures/app-gevelwering/shared_building_api.basicpp"\n' },
-    "exec.completed",
-  );
-  const ret = await invokeString("API_SaveFloormapScale", [
-    auth.token,
-    sectionId,
-    String(mpu),
-    "NULL",
-    "CALIBRATED",
-    String(aspectYx),
-  ]);
-  if (ret.startsWith("ERROR")) {
-    throw new Error(httpErr ? `${ret} (HTTP: ${httpErr})` : ret);
+  const res = await fetch("/api/floormap/scale", {
+    method: "POST",
+    credentials: "include",
+    headers: apiAuthHeaders(auth.token, true),
+    body: JSON.stringify({
+      section_id: sectionId,
+      metres_per_norm_unit: mpu,
+      scale_ratio: null,
+      scale_source: "CALIBRATED",
+      scale_aspect_yx: aspectYx,
+    }),
+  });
+  let body: { ok?: boolean; error?: string } = {};
+  try {
+    body = (await res.json()) as { ok?: boolean; error?: string };
+  } catch {
+    /* non-JSON */
+  }
+  if (!res.ok || !body.ok) {
+    throw new Error(body.error || `Schaal opslaan mislukt (HTTP ${res.status})`);
   }
 }
 
@@ -1431,19 +1413,28 @@ async function deleteRegion(regionId: string): Promise<void> {
   }
   if (!window.confirm("Deze sectie verwijderen?")) return;
   setStatus("Sectie verwijderen…", "busy");
-  const res = await fetch(`/api/drawings/sections?section_id=${encodeURIComponent(regionId)}`, {
-    method: "DELETE",
-    credentials: "include",
-    headers: apiAuthHeaders(auth.token),
-  });
-  let parsed: { ok?: boolean; error?: string } = {};
   try {
-    parsed = (await res.json()) as { ok?: boolean; error?: string };
-  } catch {
-    /* ignore */
-  }
-  if (!res.ok || !parsed.ok) {
-    setStatus(parsed.error || `Sectie verwijderen mislukt (HTTP ${res.status})`, "err");
+    if (bppPhase1Enabled()) {
+      await bppDeleteDrawingRegion(invokeString, auth.token, regionId);
+    } else {
+      const res = await fetch(`/api/drawings/sections?section_id=${encodeURIComponent(regionId)}`, {
+        method: "DELETE",
+        credentials: "include",
+        headers: apiAuthHeaders(auth.token),
+      });
+      let parsed: { ok?: boolean; error?: string } = {};
+      try {
+        parsed = (await res.json()) as { ok?: boolean; error?: string };
+      } catch {
+        /* ignore */
+      }
+      if (!res.ok || !parsed.ok) {
+        setStatus(parsed.error || `Sectie verwijderen mislukt (HTTP ${res.status})`, "err");
+        return;
+      }
+    }
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
     return;
   }
   activeProject.regions = activeProject.regions.filter((r) => r.id !== regionId);
@@ -1458,23 +1449,35 @@ async function deleteRegion(regionId: string): Promise<void> {
 
 async function clearAllSections(): Promise<void> {
   if (!auth?.token || !activeProject || !activeDocumentId) return;
-  const n = regionsForActiveDoc().length;
+  const toDelete = regionsForActiveDoc();
+  const n = toDelete.length;
   if (n < 1) return;
   if (!window.confirm(`Alle ${n} sectie(s) van deze tekening verwijderen?`)) return;
   setStatus("Alle secties verwijderen…", "busy");
-  const res = await fetch(`/api/drawings/sections?document_id=${encodeURIComponent(activeDocumentId)}`, {
-    method: "DELETE",
-    credentials: "include",
-    headers: apiAuthHeaders(auth.token),
-  });
-  let parsed: { ok?: boolean; error?: string; deleted_count?: number } = {};
   try {
-    parsed = (await res.json()) as { ok?: boolean; error?: string; deleted_count?: number };
-  } catch {
-    /* ignore */
-  }
-  if (!res.ok || !parsed.ok) {
-    setStatus(parsed.error || `Secties wissen mislukt (HTTP ${res.status})`, "err");
+    if (bppPhase1Enabled()) {
+      for (const r of toDelete) {
+        if (r.id) await bppDeleteDrawingRegion(invokeString, auth.token, r.id);
+      }
+    } else {
+      const res = await fetch(`/api/drawings/sections?document_id=${encodeURIComponent(activeDocumentId)}`, {
+        method: "DELETE",
+        credentials: "include",
+        headers: apiAuthHeaders(auth.token),
+      });
+      let parsed: { ok?: boolean; error?: string; deleted_count?: number } = {};
+      try {
+        parsed = (await res.json()) as { ok?: boolean; error?: string; deleted_count?: number };
+      } catch {
+        /* ignore */
+      }
+      if (!res.ok || !parsed.ok) {
+        setStatus(parsed.error || `Secties wissen mislukt (HTTP ${res.status})`, "err");
+        return;
+      }
+    }
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
     return;
   }
   activeProject.regions = activeProject.regions.filter((r) => r.document_id !== activeDocumentId);
@@ -1483,7 +1486,7 @@ async function clearAllSections(): Promise<void> {
   clearPendingMark();
   renderRegionList();
   drawRegionsOverlay();
-  setStatus(`${parsed.deleted_count ?? n} sectie(s) verwijderd`, "ok");
+  setStatus(`${n} sectie(s) verwijderd`, "ok");
 }
 
 /**

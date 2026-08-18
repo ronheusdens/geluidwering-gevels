@@ -1,18 +1,17 @@
 /**
  * Floormap room subsection API — engineer-only.
- * POST/GET/DELETE /api/floormap/subsections
- * POST /api/floormap/scale
- * Auth: Bearer token or app_gevelwering_session cookie.
+ * @deprecated Phase 4b — archived HTTP fallback. Prefer bppServer WSS (client/src/bpp-api.ts).
+ * Loaded only when GEVELWERING_BPP_ONLY is unset/0.
  */
-import { getPool } from "./pg-config.mjs";
+import { getPool } from "../pg-config.mjs";
 import {
   corsHeaders,
   jsonWithSecurity,
   parseSessionToken,
   requireHttpsOrReject,
   securityHeaders,
-} from "./http-security.mjs";
-import { composeSourcesMaterialComplete, partitionVrGaComponents } from "./ga-vr-components.mjs";
+} from "../http-security.mjs";
+import { composeSourcesMaterialComplete, partitionVrGaComponents } from "../ga-vr-components.mjs";
 import {
   MATERIAL_RUBRIEKEN,
   formatRubriekLabel,
@@ -20,7 +19,7 @@ import {
   isLengthQuantityRubriek,
   rubriekByName,
   subrubriekenFor,
-} from "./material-taxonomy.mjs";
+} from "../material-taxonomy.mjs";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -249,6 +248,7 @@ const SECTION_SELECT_SQL = `SELECT r.id::text AS id,
        FROM app_gevelwering.drawing_region r`;
 
 /** GET /api/floormap/section?section_id= — one scalable section (floormap/façade/…) */
+/** @deprecated Phase 2 — prefer API_GetFloormapSection via WSS (client/src/bpp-api.ts). */
 export async function handleFloormapSectionGet(req, res, url) {
   if (requireHttpsOrReject(req, res)) return;
   if (req.method !== "GET") {
@@ -294,6 +294,7 @@ export async function handleFloormapSectionGet(req, res, url) {
 }
 
 /** GET /api/floormap/sections?building_id=  (floormaps, façades, sections, cross-sections) */
+/** @deprecated Phase 1 — prefer API_ListFloormapSections via WSS (client/src/bpp-api.ts). */
 export async function handleFloormapSectionsList(req, res, url) {
   if (requireHttpsOrReject(req, res)) return;
   if (req.method !== "GET") {
@@ -336,6 +337,7 @@ export async function handleFloormapSectionsList(req, res, url) {
 }
 
 /** GET /api/floormap/subsections?section_id= */
+/** @deprecated Phase 2 — prefer API_ListDrawingSubsections via WSS (client/src/bpp-api.ts). */
 export async function handleFloormapSubsectionsList(req, res, url) {
   if (requireHttpsOrReject(req, res)) return;
   if (req.method !== "GET") {
@@ -416,6 +418,7 @@ export async function handleFloormapSubsectionsList(req, res, url) {
  * Façade/section components for one VR, ready for GA gevelwering.
  * Excludes boolean/set sources to avoid double-counting composites.
  */
+/** @deprecated Phase 3 — prefer API_ListVrFacadeComponents via WSS (client/src/bpp-api.ts). */
 export async function handleFloormapVrComponentsList(req, res, url) {
   if (requireHttpsOrReject(req, res)) return;
   if (req.method !== "GET") {
@@ -695,6 +698,7 @@ export async function handleFloormapVrComponentsList(req, res, url) {
 }
 
 /** POST /api/floormap/subsections  body: { section_id, label, level_hint, vg_nr?, vr_nr?, points, subsection_id?, metres_per_norm_unit? } */
+/** @deprecated Phase 2 — prefer API_SaveDrawingSubsection via WSS (client/src/bpp-api.ts). */
 export async function handleFloormapSubsectionSave(req, res) {
   if (requireHttpsOrReject(req, res)) return;
   if (req.method !== "POST") {
@@ -1129,6 +1133,7 @@ export async function handleFloormapSubsectionSave(req, res) {
 }
 
 /** DELETE /api/floormap/subsections?subsection_id= */
+/** @deprecated Phase 2 — prefer API_DeleteDrawingSubsection via WSS (client/src/bpp-api.ts). */
 export async function handleFloormapSubsectionDelete(req, res, url) {
   if (requireHttpsOrReject(req, res)) return;
   if (req.method !== "DELETE") {
@@ -1176,6 +1181,7 @@ export async function handleFloormapSubsectionDelete(req, res, url) {
  * body: { section_id, ordered_ids: string[] }
  * Sets sort_order = index for each id; ordered_ids must match all subsections of the section.
  */
+/** @deprecated Phase 2 — prefer API_ReorderDrawingSubsections via WSS (client/src/bpp-api.ts). */
 export async function handleFloormapSubsectionsReorder(req, res) {
   if (requireHttpsOrReject(req, res)) return;
   if (req.method !== "POST") {
@@ -1277,6 +1283,7 @@ export async function handleFloormapSubsectionsReorder(req, res) {
 }
 
 /** GET /api/floormap/material-categories — GG rubrieken 1–9 (+ optional subrubrieken) */
+/** @deprecated Phase 4 — prefer API_ListMaterialCategories via WSS (client/src/bpp-api.ts). */
 export async function handleFloormapMaterialCategoriesGet(req, res, url) {
   if (requireHttpsOrReject(req, res)) return;
   if (req.method !== "GET") {
@@ -1349,6 +1356,7 @@ export async function handleFloormapMaterialCategoriesGet(req, res, url) {
  * Shared catalog pick list for façade set-ops (engineer).
  * `category` filters by subrubriek name (optional).
  */
+/** @deprecated Phase 4 — prefer API_ListMaterials via WSS (client/src/bpp-api.ts). */
 export async function handleFloormapMaterialsList(req, res, url) {
   if (requireHttpsOrReject(req, res)) return;
   if (req.method !== "GET") {
@@ -1474,6 +1482,7 @@ export async function handleFloormapMaterialsList(req, res, url) {
  * Engineer: materiaal toevoegen aan de gedeelde catalogus (source=app, id A#####).
  * body: { name, ra_dba, rubriek_nr, subrubriek_nr?, category?, subsection_id? }
  */
+/** @deprecated Phase 4 — prefer API_CreateMaterial via WSS (client/src/bpp-api.ts). */
 export async function handleFloormapMaterialCreate(req, res) {
   if (requireHttpsOrReject(req, res)) return;
   if (req.method !== "POST") {
@@ -1661,6 +1670,7 @@ export async function handleFloormapMaterialCreate(req, res) {
  * GET /api/floormap/material-alternatives?material_id=&limit=
  * Same rubriek (+ subrubriek if set) with higher RA — for GA «Analyseer» suggestions.
  */
+/** @deprecated Phase 4 — prefer API_ListMaterialAlternatives via WSS (client/src/bpp-api.ts). */
 export async function handleFloormapMaterialAlternatives(req, res, url) {
   if (requireHttpsOrReject(req, res)) return;
   if (req.method !== "GET") {
@@ -1795,6 +1805,7 @@ export async function handleFloormapMaterialAlternatives(req, res, url) {
  * body: { subsection_id, material_id }
  * Update only the material binding on a façade/section component (GA Analyseer → Pas toe).
  */
+/** @deprecated Phase 4 — prefer API_SaveSubsectionMaterial via WSS (client/src/bpp-api.ts). */
 export async function handleFloormapSubsectionMaterial(req, res) {
   if (requireHttpsOrReject(req, res)) return;
   if (req.method !== "POST") {
@@ -1906,6 +1917,7 @@ export async function handleFloormapSubsectionMaterial(req, res) {
 }
 
 /** POST /api/floormap/scale  body: { section_id, metres_per_norm_unit, scale_ratio?, scale_source, scale_aspect_yx? } */
+/** @deprecated Phase 1 — prefer API_SaveFloormapScale via WSS. */
 export async function handleFloormapScaleSave(req, res) {
   if (requireHttpsOrReject(req, res)) return;
   if (req.method !== "POST") {

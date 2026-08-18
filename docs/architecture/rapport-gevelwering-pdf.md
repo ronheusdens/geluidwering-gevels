@@ -59,9 +59,16 @@ Versie in bestandsnaam: `YYYY.WWWW-gevelwering-<adres-kort>-vN.pdf`
 | Variant | `variant.omschrijving` |
 
 ### B. Geluidbelasting
-- Rij: spectrum (Spectrum 1 / 2 / custom) met octaafbanden 63…2000 Hz **wanneer beschikbaar**
-- Kolom **Totaal** = `geluidsbelasting_dba` (Lb)
-- *Huidige demobeperking:* alleen Lb-totaal verplicht; octaafbanden leeg of vaste Spectrum-2-index tot spectraal model er is
+- Rij: spectrum met octaafbanden 63…2000 Hz + **Totaal**
+- **Spectrum 2 (verkeersgeluid, index Atr)** — vaste waarden in rapportage:
+
+| 63 | 125 | 250 | 500 | 1000 | 2000 | Totaal |
+|----|-----|-----|-----|------|------|--------|
+| 43,0 | 47,0 | 51,0 | 54,0 | 57,0 | 55,0 | 61,0 |
+
+- Bron in code: `client/lib/geluidbelasting-spectra.mjs` → tabel in `report-api.mjs`
+- Kolom **Totaal** voor Spectrum 2 = index Atr (61,0 dB); project-Lb staat ook in de variantbalk
+- Spectrum 1: octaafbanden nog leeg; Lb-totaal van de variant
 
 ### C. Verblijfsgebieden (samenvatting)
 Kolommen: Omschrijving · Stot [m²] · Vtot [m³] · GA;k [dB] · Voldoet  

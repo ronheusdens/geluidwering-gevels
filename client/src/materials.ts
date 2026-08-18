@@ -8,6 +8,14 @@ import {
   rubriekByName,
   subrubriekenFor,
 } from "../lib/material-taxonomy.mjs";
+import {
+  bppAddMaterialFavorite,
+  bppListMaterialFavoritePresets,
+  bppListMaterialFavorites,
+  bppMaterialFavoritePresetAction,
+  bppPhase1Enabled,
+  bppRemoveMaterialFavorite,
+} from "./bpp-api";
 
 type Envelope = {
   v: number;
@@ -189,9 +197,11 @@ async function syncFavoriteCheckbox(): Promise<void> {
     return;
   }
   try {
-    const data = await httpJson<{ materials: Array<{ material_id: string }> }>(
-      `/api/floormap/material-favorites?building_id=${encodeURIComponent(contextBuildingId)}`,
-    );
+    const data = bppPhase1Enabled()
+      ? await bppListMaterialFavorites(invokeString, auth.token, contextBuildingId)
+      : await httpJson<{ materials: Array<{ material_id: string }> }>(
+          `/api/floormap/material-favorites?building_id=${encodeURIComponent(contextBuildingId)}`,
+        );
     favoriteEl.checked = (data.materials || []).some((m) => m.material_id === mid);
   } catch {
     favoriteEl.checked = false;
@@ -203,10 +213,16 @@ async function setFavoriteForSelection(on: boolean): Promise<void> {
   const mid = (selectedId || idEl.value || "").trim();
   if (!mid) return;
   if (on) {
-    await httpJson("/api/floormap/material-favorites", {
-      method: "POST",
-      body: JSON.stringify({ building_id: contextBuildingId, material_id: mid }),
-    });
+    if (bppPhase1Enabled()) {
+      await bppAddMaterialFavorite(invokeString, auth.token, contextBuildingId, mid);
+    } else {
+      await httpJson("/api/floormap/material-favorites", {
+        method: "POST",
+        body: JSON.stringify({ building_id: contextBuildingId, material_id: mid }),
+      });
+    }
+  } else if (bppPhase1Enabled()) {
+    await bppRemoveMaterialFavorite(invokeString, auth.token, contextBuildingId, mid);
   } else {
     await httpJson(
       `/api/floormap/material-favorites?building_id=${encodeURIComponent(contextBuildingId)}&material_id=${encodeURIComponent(mid)}`,
@@ -218,9 +234,11 @@ async function setFavoriteForSelection(on: boolean): Promise<void> {
 async function loadPresets(): Promise<void> {
   if (!presetListEl || !presetEmptyEl || !auth?.token) return;
   try {
-    const data = await httpJson<{
-      presets: Array<{ preset_id: string; name: string; material_count: number }>;
-    }>("/api/floormap/material-favorite-presets");
+    const data = bppPhase1Enabled()
+      ? await bppListMaterialFavoritePresets(invokeString, auth.token)
+      : await httpJson<{
+          presets: Array<{ preset_id: string; name: string; material_count: number }>;
+        }>("/api/floormap/material-favorite-presets");
     const presets = data.presets || [];
     presetListEl.replaceChildren();
     presetEmptyEl.classList.toggle("hidden", presets.length > 0);
@@ -236,10 +254,17 @@ async function loadPresets(): Promise<void> {
       renameBtn.addEventListener("click", () => {
         const name = window.prompt("Nieuwe preset-naam:", p.name);
         if (!name?.trim() || name.trim() === p.name) return;
-        void httpJson("/api/floormap/material-favorite-presets", {
-          method: "POST",
-          body: JSON.stringify({ action: "rename", preset_id: p.preset_id, name: name.trim() }),
-        })
+        const run = bppPhase1Enabled()
+          ? bppMaterialFavoritePresetAction(invokeString, auth!.token, {
+              action: "rename",
+              preset_id: p.preset_id,
+              name: name.trim(),
+            })
+          : httpJson("/api/floormap/material-favorite-presets", {
+              method: "POST",
+              body: JSON.stringify({ action: "rename", preset_id: p.preset_id, name: name.trim() }),
+            });
+        void run
           .then(() => loadPresets())
           .then(() => setStatus(`Preset hernoemd naar «${name.trim()}»`, "ok"))
           .catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
@@ -250,10 +275,16 @@ async function loadPresets(): Promise<void> {
       delBtn.textContent = "Verwijderen";
       delBtn.addEventListener("click", () => {
         if (!window.confirm(`Preset «${p.name}» verwijderen?`)) return;
-        void httpJson("/api/floormap/material-favorite-presets", {
-          method: "POST",
-          body: JSON.stringify({ action: "delete", preset_id: p.preset_id }),
-        })
+        const run = bppPhase1Enabled()
+          ? bppMaterialFavoritePresetAction(invokeString, auth!.token, {
+              action: "delete",
+              preset_id: p.preset_id,
+            })
+          : httpJson("/api/floormap/material-favorite-presets", {
+              method: "POST",
+              body: JSON.stringify({ action: "delete", preset_id: p.preset_id }),
+            });
+        void run
           .then(() => loadPresets())
           .then(() => setStatus(`Preset «${p.name}» verwijderd`, "ok"))
           .catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
@@ -1030,13 +1061,22 @@ editorForm.addEventListener("submit", async (ev) => {
     await loadList(saved.material_id || null);
     if (wantFav && saved.material_id) {
       try {
-        await httpJson("/api/floormap/material-favorites", {
-          method: "POST",
-          body: JSON.stringify({
-            building_id: contextBuildingId,
-            material_id: saved.material_id,
-          }),
-        });
+        if (bppPhase1Enabled()) {
+          await bppAddMaterialFavorite(
+            invokeString,
+            auth!.token,
+            contextBuildingId!,
+            saved.material_id,
+          );
+        } else {
+          await httpJson("/api/floormap/material-favorites", {
+            method: "POST",
+            body: JSON.stringify({
+              building_id: contextBuildingId,
+              material_id: saved.material_id,
+            }),
+          });
+        }
         if (favoriteEl) favoriteEl.checked = true;
       } catch (favErr) {
         setStatus(

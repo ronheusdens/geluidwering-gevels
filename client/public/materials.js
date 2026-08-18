@@ -196,6 +196,45 @@ function formatSubrubriekLabel(s) {
   return `${s.nr} - ${s.name}`;
 }
 
+// src/bpp-api.ts
+function parseBppJson(ret) {
+  if (ret.startsWith("ERROR")) throw new Error(ret);
+  try {
+    return JSON.parse(ret);
+  } catch {
+    throw new Error(`Ongeldig JSON-antwoord van bppServer: ${ret.slice(0, 240)}`);
+  }
+}
+function bppPhase1Enabled() {
+  try {
+    return localStorage.getItem("GEVELWERING_BPP_HTTP") !== "1";
+  } catch {
+    return true;
+  }
+}
+async function bppListMaterialFavorites(invoke, token, buildingId) {
+  const ret = await invoke("API_ListMaterialFavorites", [token, buildingId]);
+  const data = parseBppJson(ret);
+  return { materials: data.materials || [] };
+}
+async function bppAddMaterialFavorite(invoke, token, buildingId, materialId) {
+  const ret = await invoke("API_AddMaterialFavorite", [token, buildingId, materialId]);
+  parseBppJson(ret);
+}
+async function bppRemoveMaterialFavorite(invoke, token, buildingId, materialId) {
+  const ret = await invoke("API_RemoveMaterialFavorite", [token, buildingId, materialId]);
+  parseBppJson(ret);
+}
+async function bppListMaterialFavoritePresets(invoke, token) {
+  const ret = await invoke("API_ListMaterialFavoritePresets", [token]);
+  const data = parseBppJson(ret);
+  return { presets: data.presets || [] };
+}
+async function bppMaterialFavoritePresetAction(invoke, token, body) {
+  const ret = await invoke("API_MaterialFavoritePresetAction", [token, JSON.stringify(body)]);
+  return parseBppJson(ret);
+}
+
 // src/materials.ts
 var BPP_WS = resolveBppWsUrl();
 var AUTH_KEY = "app_gevelwering_admin_auth";
@@ -316,7 +355,7 @@ async function syncFavoriteCheckbox() {
     return;
   }
   try {
-    const data = await httpJson(
+    const data = bppPhase1Enabled() ? await bppListMaterialFavorites(invokeString, auth.token, contextBuildingId) : await httpJson(
       `/api/floormap/material-favorites?building_id=${encodeURIComponent(contextBuildingId)}`
     );
     favoriteEl.checked = (data.materials || []).some((m) => m.material_id === mid);
@@ -329,10 +368,16 @@ async function setFavoriteForSelection(on) {
   const mid = (selectedId || idEl.value || "").trim();
   if (!mid) return;
   if (on) {
-    await httpJson("/api/floormap/material-favorites", {
-      method: "POST",
-      body: JSON.stringify({ building_id: contextBuildingId, material_id: mid })
-    });
+    if (bppPhase1Enabled()) {
+      await bppAddMaterialFavorite(invokeString, auth.token, contextBuildingId, mid);
+    } else {
+      await httpJson("/api/floormap/material-favorites", {
+        method: "POST",
+        body: JSON.stringify({ building_id: contextBuildingId, material_id: mid })
+      });
+    }
+  } else if (bppPhase1Enabled()) {
+    await bppRemoveMaterialFavorite(invokeString, auth.token, contextBuildingId, mid);
   } else {
     await httpJson(
       `/api/floormap/material-favorites?building_id=${encodeURIComponent(contextBuildingId)}&material_id=${encodeURIComponent(mid)}`,
@@ -343,7 +388,7 @@ async function setFavoriteForSelection(on) {
 async function loadPresets() {
   if (!presetListEl || !presetEmptyEl || !auth?.token) return;
   try {
-    const data = await httpJson("/api/floormap/material-favorite-presets");
+    const data = bppPhase1Enabled() ? await bppListMaterialFavoritePresets(invokeString, auth.token) : await httpJson("/api/floormap/material-favorite-presets");
     const presets = data.presets || [];
     presetListEl.replaceChildren();
     presetEmptyEl.classList.toggle("hidden", presets.length > 0);
@@ -359,10 +404,15 @@ async function loadPresets() {
       renameBtn.addEventListener("click", () => {
         const name = window.prompt("Nieuwe preset-naam:", p.name);
         if (!name?.trim() || name.trim() === p.name) return;
-        void httpJson("/api/floormap/material-favorite-presets", {
+        const run = bppPhase1Enabled() ? bppMaterialFavoritePresetAction(invokeString, auth.token, {
+          action: "rename",
+          preset_id: p.preset_id,
+          name: name.trim()
+        }) : httpJson("/api/floormap/material-favorite-presets", {
           method: "POST",
           body: JSON.stringify({ action: "rename", preset_id: p.preset_id, name: name.trim() })
-        }).then(() => loadPresets()).then(() => setStatus(`Preset hernoemd naar \xAB${name.trim()}\xBB`, "ok")).catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
+        });
+        void run.then(() => loadPresets()).then(() => setStatus(`Preset hernoemd naar \xAB${name.trim()}\xBB`, "ok")).catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
       });
       const delBtn = document.createElement("button");
       delBtn.type = "button";
@@ -370,10 +420,14 @@ async function loadPresets() {
       delBtn.textContent = "Verwijderen";
       delBtn.addEventListener("click", () => {
         if (!window.confirm(`Preset \xAB${p.name}\xBB verwijderen?`)) return;
-        void httpJson("/api/floormap/material-favorite-presets", {
+        const run = bppPhase1Enabled() ? bppMaterialFavoritePresetAction(invokeString, auth.token, {
+          action: "delete",
+          preset_id: p.preset_id
+        }) : httpJson("/api/floormap/material-favorite-presets", {
           method: "POST",
           body: JSON.stringify({ action: "delete", preset_id: p.preset_id })
-        }).then(() => loadPresets()).then(() => setStatus(`Preset \xAB${p.name}\xBB verwijderd`, "ok")).catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
+        });
+        void run.then(() => loadPresets()).then(() => setStatus(`Preset \xAB${p.name}\xBB verwijderd`, "ok")).catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
       });
       li.append(label, renameBtn, delBtn);
       presetListEl.appendChild(li);
@@ -1080,13 +1134,22 @@ editorForm.addEventListener("submit", async (ev) => {
     await loadList(saved.material_id || null);
     if (wantFav && saved.material_id) {
       try {
-        await httpJson("/api/floormap/material-favorites", {
-          method: "POST",
-          body: JSON.stringify({
-            building_id: contextBuildingId,
-            material_id: saved.material_id
-          })
-        });
+        if (bppPhase1Enabled()) {
+          await bppAddMaterialFavorite(
+            invokeString,
+            auth.token,
+            contextBuildingId,
+            saved.material_id
+          );
+        } else {
+          await httpJson("/api/floormap/material-favorites", {
+            method: "POST",
+            body: JSON.stringify({
+              building_id: contextBuildingId,
+              material_id: saved.material_id
+            })
+          });
+        }
         if (favoriteEl) favoriteEl.checked = true;
       } catch (favErr) {
         setStatus(

@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 /**
- * Acoustics P0/P1 UI server — static assets + drawing + floormap APIs.
+ * Acoustics UI server — static assets + session/reports/drawing binary + optional HTTP CRUD fallback.
  * Bind 127.0.0.1 by default; put Apache/nginx TLS in front for public www.
+ *
+ * GEVELWERING_BPP_ONLY=1 (recommended): migrated /api/floormap/* and drawing list/sections → 410.
+ * Unset/0: lazy-loads lib/deprecated/* for HTTP rollback.
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -14,26 +17,6 @@ import {
   handleDrawingSectionsDelete,
   handleDrawingUpload,
 } from "./lib/drawing-upload.mjs";
-import {
-  handleFloormapApiOptions,
-  handleFloormapMaterialAlternatives,
-  handleFloormapMaterialCategoriesGet,
-  handleFloormapMaterialCreate,
-  handleFloormapMaterialsList,
-  handleFloormapScaleSave,
-  handleFloormapSubsectionMaterial,
-  handleFloormapSectionGet,
-  handleFloormapSectionsList,
-  handleFloormapSubsectionDelete,
-  handleFloormapSubsectionSave,
-  handleFloormapSubsectionsList,
-  handleFloormapSubsectionsReorder,
-  handleFloormapVrComponentsList,
-} from "./lib/floormap-api.mjs";
-import {
-  handleMaterialFavoritePresets,
-  handleMaterialFavorites,
-} from "./lib/material-favorites-api.mjs";
 import {
   handleSessionApiOptions,
   handleSessionClear,
@@ -53,12 +36,71 @@ import {
   handleReportPublish,
 } from "./lib/report-api.mjs";
 import { closePool } from "./lib/pg-config.mjs";
-import { securityHeaders } from "./lib/http-security.mjs";
+import { corsHeaders, jsonWithSecurity, securityHeaders } from "./lib/http-security.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
 const port = Number(process.env.GEVELWERING_UI_PORT || 4173);
 const host = process.env.GEVELWERING_UI_HOST || "127.0.0.1";
+
+/** When set, migrated floormap/drawing CRUD returns 410 — use bppServer WSS instead. */
+const BPP_ONLY =
+  process.env.GEVELWERING_BPP_ONLY === "1" ||
+  /^true$/i.test(process.env.GEVELWERING_BPP_ONLY || "");
+
+/** Paths migrated to bppServer (phase 1–4). Kept as HTTP fallback unless BPP_ONLY. */
+const MIGRATED_TO_BPP = new Set([
+  "/api/floormap/section",
+  "/api/floormap/sections",
+  "/api/floormap/subsections",
+  "/api/floormap/subsections/reorder",
+  "/api/floormap/vr-components",
+  "/api/floormap/scale",
+  "/api/floormap/material-categories",
+  "/api/floormap/materials",
+  "/api/floormap/material-alternatives",
+  "/api/floormap/subsection-material",
+  "/api/floormap/material-favorites",
+  "/api/floormap/material-favorite-presets",
+  "/api/drawings/list",
+  "/api/drawings/sections",
+]);
+
+function respondBppGone(req, res) {
+  jsonWithSecurity(req, res, 410, {
+    ok: false,
+    error:
+      "endpoint migrated to bppServer WSS — set GEVELWERING_BPP_ONLY=0 for HTTP rollback, or use API_* via WebSocket",
+    bpp_only: true,
+  });
+}
+
+function handleMigratedApiOptions(req, res) {
+  res.writeHead(204, {
+    ...corsHeaders(req),
+    ...securityHeaders(req),
+  });
+  res.end();
+}
+
+/** @type {Promise<typeof import("./lib/deprecated/floormap-api.mjs")> | null} */
+let floormapApiPromise = null;
+/** @type {Promise<typeof import("./lib/deprecated/material-favorites-api.mjs")> | null} */
+let favoritesApiPromise = null;
+
+function loadFloormapApi() {
+  if (!floormapApiPromise) {
+    floormapApiPromise = import("./lib/deprecated/floormap-api.mjs");
+  }
+  return floormapApiPromise;
+}
+
+function loadFavoritesApi() {
+  if (!favoritesApiPromise) {
+    favoritesApiPromise = import("./lib/deprecated/material-favorites-api.mjs");
+  }
+  return favoritesApiPromise;
+}
 
 const types = {
   ".html": "text/html; charset=utf-8",
@@ -71,6 +113,15 @@ const types = {
 const server = http.createServer(async (req, res) => {
   const urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+
+  if (BPP_ONLY && MIGRATED_TO_BPP.has(urlPath)) {
+    if (req.method === "OPTIONS") {
+      handleMigratedApiOptions(req, res);
+      return;
+    }
+    respondBppGone(req, res);
+    return;
+  }
 
   if (urlPath === "/api/session") {
     if (req.method === "OPTIONS") {
@@ -223,68 +274,71 @@ const server = http.createServer(async (req, res) => {
     urlPath === "/api/floormap/material-favorite-presets"
   ) {
     if (req.method === "OPTIONS") {
-      handleFloormapApiOptions(req, res);
+      handleMigratedApiOptions(req, res);
       return;
     }
     try {
+      const fm = await loadFloormapApi();
       if (urlPath === "/api/floormap/section" && req.method === "GET") {
-        await handleFloormapSectionGet(req, res, url);
+        await fm.handleFloormapSectionGet(req, res, url);
         return;
       }
       if (urlPath === "/api/floormap/sections" && req.method === "GET") {
-        await handleFloormapSectionsList(req, res, url);
+        await fm.handleFloormapSectionsList(req, res, url);
         return;
       }
       if (urlPath === "/api/floormap/vr-components" && req.method === "GET") {
-        await handleFloormapVrComponentsList(req, res, url);
+        await fm.handleFloormapVrComponentsList(req, res, url);
         return;
       }
       if (urlPath === "/api/floormap/subsections/reorder" && req.method === "POST") {
-        await handleFloormapSubsectionsReorder(req, res);
+        await fm.handleFloormapSubsectionsReorder(req, res);
         return;
       }
       if (urlPath === "/api/floormap/subsections" && req.method === "GET") {
-        await handleFloormapSubsectionsList(req, res, url);
+        await fm.handleFloormapSubsectionsList(req, res, url);
         return;
       }
       if (urlPath === "/api/floormap/subsections" && req.method === "POST") {
-        await handleFloormapSubsectionSave(req, res);
+        await fm.handleFloormapSubsectionSave(req, res);
         return;
       }
       if (urlPath === "/api/floormap/subsections" && req.method === "DELETE") {
-        await handleFloormapSubsectionDelete(req, res, url);
+        await fm.handleFloormapSubsectionDelete(req, res, url);
         return;
       }
       if (urlPath === "/api/floormap/material-favorites") {
-        await handleMaterialFavorites(req, res, url);
+        const fav = await loadFavoritesApi();
+        await fav.handleMaterialFavorites(req, res, url);
         return;
       }
       if (urlPath === "/api/floormap/material-favorite-presets") {
-        await handleMaterialFavoritePresets(req, res, url);
+        const fav = await loadFavoritesApi();
+        await fav.handleMaterialFavoritePresets(req, res, url);
         return;
       }
       if (urlPath === "/api/floormap/scale" && req.method === "POST") {
-        await handleFloormapScaleSave(req, res);
+        await fm.handleFloormapScaleSave(req, res);
         return;
       }
       if (urlPath === "/api/floormap/material-categories" && req.method === "GET") {
-        await handleFloormapMaterialCategoriesGet(req, res, url);
+        await fm.handleFloormapMaterialCategoriesGet(req, res, url);
         return;
       }
       if (urlPath === "/api/floormap/materials" && req.method === "GET") {
-        await handleFloormapMaterialsList(req, res, url);
+        await fm.handleFloormapMaterialsList(req, res, url);
         return;
       }
       if (urlPath === "/api/floormap/materials" && req.method === "POST") {
-        await handleFloormapMaterialCreate(req, res);
+        await fm.handleFloormapMaterialCreate(req, res);
         return;
       }
       if (urlPath === "/api/floormap/material-alternatives" && req.method === "GET") {
-        await handleFloormapMaterialAlternatives(req, res, url);
+        await fm.handleFloormapMaterialAlternatives(req, res, url);
         return;
       }
       if (urlPath === "/api/floormap/subsection-material" && req.method === "POST") {
-        await handleFloormapSubsectionMaterial(req, res);
+        await fm.handleFloormapSubsectionMaterial(req, res);
         return;
       }
     } catch (err) {
@@ -332,8 +386,16 @@ server.listen(port, host, () => {
   const url = `http://${host}:${port}/`;
   console.log(`Gevelwering UI: ${url} (loopback — use Apache HTTPS in production)`);
   console.log(`Session API: POST/DELETE ${url}api/session`);
-  console.log(`Drawing API: POST ${url}api/drawings/upload  GET ${url}api/drawings/list`);
-  console.log(`Floormap API: GET ${url}api/floormap/sections  GET ${url}api/floormap/vr-components  POST ${url}api/floormap/subsections`);
+  console.log(`Drawing API: POST ${url}api/drawings/upload  GET ${url}api/drawings/download`);
+  if (BPP_ONLY) {
+    console.log(
+      `Floormap/drawing CRUD: 410 Gone (GEVELWERING_BPP_ONLY=1) — use bppServer WSS API_*`,
+    );
+  } else {
+    console.log(
+      `Floormap API (HTTP fallback via lib/deprecated/): ${url}api/floormap/* — set GEVELWERING_BPP_ONLY=1 to disable`,
+    );
+  }
   console.log(`bppServer WebSocket (dev): ws://127.0.0.1:18080/ws — prod: wss://<host>/ws`);
 });
 

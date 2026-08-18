@@ -44,6 +44,11 @@ SQL28="$SQL_DIR/app_gevelwering_0_2_26.sql"
 SQL29="$SQL_DIR/app_gevelwering_0_2_27.sql"
 SQL30="$SQL_DIR/app_gevelwering_0_2_28.sql"
 SQL31="$SQL_DIR/app_gevelwering_0_2_29.sql"
+SQL32="$SQL_DIR/app_gevelwering_0_2_30.sql"
+SQL33="$SQL_DIR/app_gevelwering_0_2_31.sql"
+SQL34="$SQL_DIR/app_gevelwering_0_2_32.sql"
+SQL35="$SQL_DIR/app_gevelwering_0_2_33.sql"
+SMOKE_SAVE_GEOM="$APP_ROOT/scripts/smoke-save-geometry.sh"
 
 BPP_PORT="${BPP_PORT:-18080}"
 UI_PORT="${GEVELWERING_UI_PORT:-4173}"
@@ -52,6 +57,8 @@ export BPP_PG_CONN="${BPP_PG_CONN:-/tmp:5432:${PG_DB}:$(whoami):}"
 # BASIC INCLUDE paths resolve against this app root (fixtures/app-gevelwering/...)
 export BASIC_CWD="$APP_ROOT"
 export GEVELWERING_UI_PORT="$UI_PORT"
+# Default: migrated floormap/drawing CRUD returns 410 (bpp WSS only). Set 0 for HTTP rollback.
+export GEVELWERING_BPP_ONLY="${GEVELWERING_BPP_ONLY:-1}"
 # Generated HTML reports: data/projecten/{slug}_{buildingId8}/rapporten/
 export GEVELWERING_PROJECTS_ROOT="${GEVELWERING_PROJECTS_ROOT:-$APP_ROOT/data/projecten}"
 mkdir -p "$GEVELWERING_PROJECTS_ROOT"
@@ -169,12 +176,40 @@ echo "Applying DDL $SQL30 (material favorites + presets, app_meta) to database $
 psql -d "$PG_DB" -f "$SQL30" >/dev/null
 echo "Applying DDL $SQL31 (client_ref = kenmerk opdrachtgever) to database ${PG_DB}..."
 psql -d "$PG_DB" -f "$SQL31" >/dev/null
+# Portable geometry helpers + hypot shim BEFORE subsection CRUD (0.2.30).
+echo "Applying DDL $SQL35 (portable euclid_len + hypot shim) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL35" >/dev/null
+echo "Applying DDL $SQL32 (bpp phase 2: subsection CRUD functions) to database ${PG_DB}..."
+psql -d "$PG_DB" -f "$SQL32" >/dev/null
+echo "Applying DDL $SQL33 (bpp phase 3: VR façade components for GA) to database ${PG_DB}..."
+psql -d "$PG_DB" -f "$SQL33" >/dev/null
+echo "Applying DDL $SQL34 (bpp phase 4: materials + favorites) to database ${PG_DB}..."
+psql -d "$PG_DB" -f "$SQL34" >/dev/null
+# Re-assert portable normalize_ring after 0.2.30 replace (idempotent).
+echo "Re-applying DDL $SQL35 (re-assert fw_normalize_ring portability) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL35" >/dev/null
+
+echo "Smoke: save-geometry path (hypot / normalize_ring)..."
+chmod +x "$SMOKE_SAVE_GEOM"
+"$SMOKE_SAVE_GEOM"
+
 # Ensure seeded flag after first successful catalog load
 psql -d "$PG_DB" -c \
   "INSERT INTO app_gevelwering.app_meta (key, value, updated_at)
    SELECT 'material_catalog_seeded', '1', now()
    WHERE EXISTS (SELECT 1 FROM app_gevelwering.material LIMIT 1)
    ON CONFLICT (key) DO NOTHING;" >/dev/null
+
+# Free port so a previous bppServer cannot keep a stale Postgres session.
+if command -v lsof >/dev/null 2>&1; then
+  old_bpp="$(lsof -tiTCP:"$BPP_PORT" -sTCP:LISTEN 2>/dev/null || true)"
+  if [[ -n "$old_bpp" ]]; then
+    echo "Stopping previous listener(s) on :$BPP_PORT ($old_bpp)..."
+    # shellcheck disable=SC2086
+    kill $old_bpp 2>/dev/null || true
+    sleep 0.3
+  fi
+fi
 
 echo "Starting bppServer on :$BPP_PORT (BASIC_CWD=$BASIC_CWD, bin=$BIN)..."
 "$BIN" --server --port "$BPP_PORT" &
@@ -193,6 +228,11 @@ if [[ ! -d node_modules ]]; then
   npm install
 fi
 npm run build
+if [[ "${GEVELWERING_BPP_ONLY}" == "1" ]]; then
+  echo "Node UI: GEVELWERING_BPP_ONLY=1 (migrated /api/floormap/* → 410 Gone)"
+else
+  echo "Node UI: GEVELWERING_BPP_ONLY=${GEVELWERING_BPP_ONLY} (HTTP CRUD fallback ON)"
+fi
 node serve.mjs &
 UI_PID=$!
 
