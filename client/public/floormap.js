@@ -4,6 +4,7 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __commonJS = (cb, mod) => function __require() {
   return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
 };
@@ -23,6 +24,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
   mod
 ));
+var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
 // node_modules/polygon-clipping/dist/polygon-clipping.umd.js
 var require_polygon_clipping_umd = __commonJS({
@@ -2293,6 +2295,14 @@ function removeRingVertex(points, index) {
   ring.splice(index, 1);
   return closeRing(ring);
 }
+function insertRingVertex(points, afterIndex, pt) {
+  const n = ringVertexCount(points);
+  if (n < 2) return null;
+  if (afterIndex < 0 || afterIndex >= n) return null;
+  const ring = points.slice(0, n);
+  ring.splice(afterIndex + 1, 0, { x: pt.x, y: pt.y });
+  return closeRing(ring);
+}
 function simplifyEditableRing(points, epsilon = 6e-3) {
   const before = ringVertexCount(points);
   if (before <= 3) return closeRing(points);
@@ -2580,6 +2590,71 @@ function composeConstituentsMissingMaterial(component, subsections) {
   return missing;
 }
 
+// src/floormap-seal.ts
+var KIER_SEAL_STROKE = "#e65100";
+var KIER_SEAL_STROKE_SELECTED = "#ff9800";
+var KIER_SEAL_STROKE_TOUCHED = "#f57c00";
+function readComponentSeal(analysis) {
+  const raw = analysis?.seal;
+  if (!raw || typeof raw !== "object") return null;
+  return {
+    enabled: Boolean(raw.enabled),
+    material_id: raw.material_id != null ? String(raw.material_id) : void 0,
+    catalog_id: raw.catalog_id != null ? String(raw.catalog_id) : void 0,
+    material_name: raw.material_name != null ? String(raw.material_name) : void 0,
+    master_category: raw.master_category != null ? String(raw.master_category) : void 0,
+    category: raw.category != null ? String(raw.category) : void 0,
+    rubriek_nr: raw.rubriek_nr != null ? Number(raw.rubriek_nr) : void 0,
+    length_m: raw.length_m != null && Number.isFinite(Number(raw.length_m)) ? Number(raw.length_m) : null
+  };
+}
+function componentSealEnabled(analysis) {
+  const s = readComponentSeal(analysis);
+  return Boolean(s?.enabled);
+}
+function isLegacySealSibling(analysis) {
+  return Boolean((analysis?.seal_for_subsection_id || "").toString().trim());
+}
+function sealCatalogLabel(analysis, fallback = "D02408") {
+  const s = readComponentSeal(analysis);
+  if (s?.enabled && (s.catalog_id || "").trim()) return String(s.catalog_id).trim();
+  if (isLegacySealSibling(analysis) && (analysis?.catalog_id || "").trim()) {
+    return String(analysis.catalog_id).trim();
+  }
+  return fallback;
+}
+function buildSealPayload(mat, lengthM, enabled = true) {
+  return {
+    enabled,
+    material_id: mat.material_id,
+    catalog_id: mat.catalog_id || void 0,
+    material_name: mat.name || void 0,
+    master_category: mat.master_category || void 0,
+    category: mat.category || void 0,
+    rubriek_nr: mat.rubriek_nr ?? 9,
+    length_m: lengthM != null && Number.isFinite(lengthM) ? lengthM : null
+  };
+}
+function clearSealPayload() {
+  return { enabled: false };
+}
+function mergeAnalysisWithSeal(prev, seal) {
+  const base = prev && typeof prev === "object" ? { ...prev } : {};
+  delete base.seal_for_subsection_id;
+  if (!seal || !seal.enabled) {
+    delete base.seal;
+    return base;
+  }
+  base.seal = { ...seal, enabled: true };
+  return base;
+}
+function sealMaterialKeyFromSeal(seal) {
+  if (!seal) return "";
+  if ((seal.material_id || "").trim()) return `id:${String(seal.material_id).trim()}`;
+  if ((seal.catalog_id || "").trim()) return `cat:${String(seal.catalog_id).trim().toUpperCase()}`;
+  return "";
+}
+
 // lib/material-taxonomy.mjs
 var MATERIAL_RUBRIEKEN = [
   { nr: 1, name: "Steenachtigen/beton/blokken" },
@@ -2590,7 +2665,9 @@ var MATERIAL_RUBRIEKEN = [
   { nr: 6, name: "Ventilatievoorzieningen" },
   { nr: 7, name: "Ventilatievoorzieningen oud (voor 1-1-2012)" },
   { nr: 8, name: "Lichte scheidingsconstructies" },
-  { nr: 9, name: "Kier- en naaddichtingsprofielen" }
+  { nr: 9, name: "Kier- en naaddichtingsprofielen" },
+  { nr: 10, name: "Losse materialen" },
+  { nr: 11, name: "Interieur" }
 ];
 function rubriekByName(name) {
   const n = String(name || "").trim().toLowerCase();
@@ -2889,9 +2966,8 @@ function pixelsToSectionNorm(points, canvasW, canvasH) {
     }))
   );
 }
-var CIRCLE_CIRC_MIN = 0.68;
+var LINE_REF_DIM = 640;
 var RECT_FILL_MIN = 0.72;
-var CIRCLE_FILL_MIN = 0.62;
 function circularityOf(ring) {
   const a = shoelaceArea(ring);
   const p = polylinePerimeter(ring);
@@ -2920,35 +2996,16 @@ function isContourAxisAligned(ring, angleTolDeg = 14) {
   return total >= 3 && aligned / total >= 0.72;
 }
 function classifyBlobShape(blob, ring) {
-  const circ = circularityOf(ring);
   const bw = blob.maxX - blob.minX + 1;
   const bh = blob.maxY - blob.minY + 1;
   const bboxArea = bw * bh;
   const fill = blob.pixels.length / Math.max(1, bboxArea);
   const aspect = Math.max(bw, bh) / Math.max(1, Math.min(bw, bh));
-  if (circ >= CIRCLE_CIRC_MIN && fill >= CIRCLE_FILL_MIN && aspect <= 1.4) {
-    return "circle";
-  }
-  if (circ < CIRCLE_CIRC_MIN && fill >= RECT_FILL_MIN) {
-    if (fill >= 0.86 || isContourAxisAligned(ring)) return "rect";
-  }
+  if (aspect > 12) return null;
+  if (fill < 0.32) return null;
+  if (fill >= RECT_FILL_MIN && (fill >= 0.86 || isContourAxisAligned(ring))) return "rect";
+  if (fill >= 0.55 && aspect <= 8) return "rect";
   return null;
-}
-function circleRingPx(cx, cy, r, segments = 24) {
-  const pts = [];
-  for (let i = 0; i < segments; i++) {
-    const t = i / segments * Math.PI * 2;
-    pts.push({ x: cx + r * Math.cos(t), y: cy + r * Math.sin(t) });
-  }
-  return closePx(pts);
-}
-function circleRingFromBlob(blob, w0, h0, sw, sh) {
-  const cx = (blob.minX + blob.maxX + 1) / 2 / sw * w0;
-  const cy = (blob.minY + blob.maxY + 1) / 2 / sh * h0;
-  const bw = (blob.maxX - blob.minX + 1) / sw * w0;
-  const bh = (blob.maxY - blob.minY + 1) / sh * h0;
-  const r = Math.min(bw, bh) * 0.48;
-  return circleRingPx(cx, cy, Math.max(2, r));
 }
 function rasterizeOuterMask(outerPx, sw, sh, w0, h0) {
   const mask = new Uint8Array(sw * sh);
@@ -3061,6 +3118,247 @@ function openingsTooSimilar(a, b) {
   const ratio = Math.min(aa, ab) / Math.max(aa, ab);
   return ratio > 0.55;
 }
+function edgeInk(ink, w, h) {
+  const out = new Uint8Array(ink.length);
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      if (!ink[i]) continue;
+      if (!ink[i - 1] || !ink[i + 1] || !ink[i - w] || !ink[i + w]) out[i] = 1;
+    }
+  }
+  return out;
+}
+function keepAxisAlignedInk(ink, w, h, minLen) {
+  const out = new Uint8Array(ink.length);
+  for (let y = 0; y < h; y++) {
+    let x = 0;
+    while (x < w) {
+      if (!ink[y * w + x]) {
+        x++;
+        continue;
+      }
+      const start = x;
+      while (x < w && ink[y * w + x]) x++;
+      if (x - start >= minLen) {
+        for (let xx = start; xx < x; xx++) out[y * w + xx] = 1;
+      }
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    let y = 0;
+    while (y < h) {
+      if (!ink[y * w + x]) {
+        y++;
+        continue;
+      }
+      const start = y;
+      while (y < h && ink[y * w + x]) y++;
+      if (y - start >= minLen) {
+        for (let yy = start; yy < y; yy++) out[yy * w + x] = 1;
+      }
+    }
+  }
+  return out;
+}
+function openingKindScore(kind) {
+  return kind === "line_rect" ? 3 : kind === "paper_pocket" ? 2 : 1;
+}
+function extractAxisSegs(mask, w, h, minLen) {
+  const hSegs = [];
+  const vSegs = [];
+  for (let y = 0; y < h; y++) {
+    let x = 0;
+    while (x < w) {
+      if (!mask[y * w + x]) {
+        x++;
+        continue;
+      }
+      const start = x;
+      while (x < w && mask[y * w + x]) x++;
+      if (x - start >= minLen) hSegs.push({ a: start, b: x - 1, c: y });
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    let y = 0;
+    while (y < h) {
+      if (!mask[y * w + x]) {
+        y++;
+        continue;
+      }
+      const start = y;
+      while (y < h && mask[y * w + x]) y++;
+      if (y - start >= minLen) vSegs.push({ a: start, b: y - 1, c: x });
+    }
+  }
+  return { h: hSegs, v: vSegs };
+}
+function clusterSegs(segs, bin) {
+  const sorted = segs.slice().sort((a, b) => a.c - b.c || a.a - b.a);
+  const clusters = [];
+  for (const s of sorted) {
+    const last = clusters[clusters.length - 1];
+    if (last && Math.abs(s.c - last.pos) <= bin) {
+      last.segs.push(s);
+      last.pos = (last.pos * (last.segs.length - 1) + s.c) / last.segs.length;
+    } else {
+      clusters.push({ pos: s.c, segs: [s] });
+    }
+  }
+  return clusters;
+}
+function intervalCover(segs, from, to) {
+  const span = to - from;
+  if (span <= 1) return 0;
+  const iv = [];
+  for (const s of segs) {
+    const a = Math.max(s.a, from);
+    const b = Math.min(s.b, to);
+    if (b > a) iv.push([a, b]);
+  }
+  if (!iv.length) return 0;
+  iv.sort((p, q) => p[0] - q[0]);
+  let covered = 0;
+  let cs = iv[0][0];
+  let ce = iv[0][1];
+  for (let i = 1; i < iv.length; i++) {
+    if (iv[i][0] <= ce + 1) ce = Math.max(ce, iv[i][1]);
+    else {
+      covered += ce - cs;
+      cs = iv[i][0];
+      ce = iv[i][1];
+    }
+  }
+  covered += ce - cs;
+  return covered / span;
+}
+function sideIsLocal(segs, from, to, minCover) {
+  const sideLen = to - from;
+  if (sideLen < 1) return false;
+  let maxLen = 0;
+  let maxOverlap = 0;
+  for (const s of segs) {
+    const ov = Math.min(s.b, to) - Math.max(s.a, from);
+    if (ov <= 0) continue;
+    if (ov > maxOverlap) maxOverlap = ov;
+    if (ov > sideLen * 0.5) maxLen = Math.max(maxLen, s.b - s.a);
+  }
+  if (maxOverlap / sideLen < minCover) return false;
+  if (maxLen > sideLen * 1.4) return false;
+  return true;
+}
+function rectInkFraction(ink, w, x0, y0, x1, y1) {
+  const ix0 = Math.ceil(x0) + 2;
+  const iy0 = Math.ceil(y0) + 2;
+  const ix1 = Math.floor(x1) - 2;
+  const iy1 = Math.floor(y1) - 2;
+  if (ix1 <= ix0 || iy1 <= iy0) return 1;
+  let n = 0;
+  let inkN = 0;
+  for (let y = iy0; y <= iy1; y++) {
+    for (let x = ix0; x <= ix1; x++) {
+      n++;
+      if (ink[y * w + x]) inkN++;
+    }
+  }
+  return n ? inkN / n : 1;
+}
+function lineDetectParams(sw, sh) {
+  const s = Math.min(sw, sh) / LINE_REF_DIM;
+  return {
+    minLen: Math.max(4, Math.round(8 * s)),
+    minSide: Math.max(6, Math.round(10 * s)),
+    clusterBin: Math.max(1, Math.round(2 * s)),
+    minCover: 0.68,
+    maxAspect: 8,
+    maxInteriorInk: 0.28,
+    nestTol: Math.max(2, Math.round(2 * s))
+  };
+}
+function findClosedLineRects(ink, search, sw, sh, p = lineDetectParams(sw, sh)) {
+  const edges = edgeInk(andMask(ink, search), sw, sh);
+  const { h, v } = extractAxisSegs(edges, sw, sh, p.minLen);
+  if (h.length < 2 || v.length < 2) return [];
+  let bin = p.clusterBin;
+  let hCl = clusterSegs(h, bin);
+  let vCl = clusterSegs(v, bin);
+  while ((hCl.length > 55 || vCl.length > 55) && bin < p.clusterBin + 3) {
+    bin += 1;
+    hCl = clusterSegs(h, bin);
+    vCl = clusterSegs(v, bin);
+  }
+  if (hCl.length < 2 || vCl.length < 2) return [];
+  const found = [];
+  for (let i = 0; i < vCl.length; i++) {
+    for (let j = i + 1; j < vCl.length; j++) {
+      const x0 = Math.min(vCl[i].pos, vCl[j].pos);
+      const x1 = Math.max(vCl[i].pos, vCl[j].pos);
+      const width = x1 - x0;
+      if (width < p.minSide) continue;
+      const left = vCl[i].pos <= vCl[j].pos ? vCl[i] : vCl[j];
+      const right = vCl[i].pos <= vCl[j].pos ? vCl[j] : vCl[i];
+      for (let pIdx = 0; pIdx < hCl.length; pIdx++) {
+        for (let q = pIdx + 1; q < hCl.length; q++) {
+          const y0 = Math.min(hCl[pIdx].pos, hCl[q].pos);
+          const y1 = Math.max(hCl[pIdx].pos, hCl[q].pos);
+          const height = y1 - y0;
+          if (height < p.minSide) continue;
+          const aspect = Math.max(width, height) / Math.min(width, height);
+          if (aspect > p.maxAspect) continue;
+          const top = hCl[pIdx].pos <= hCl[q].pos ? hCl[pIdx] : hCl[q];
+          const bot = hCl[pIdx].pos <= hCl[q].pos ? hCl[q] : hCl[pIdx];
+          if (intervalCover(top.segs, x0, x1) < p.minCover) continue;
+          if (intervalCover(bot.segs, x0, x1) < p.minCover) continue;
+          if (intervalCover(left.segs, y0, y1) < p.minCover) continue;
+          if (intervalCover(right.segs, y0, y1) < p.minCover) continue;
+          if (!sideIsLocal(top.segs, x0, x1, p.minCover)) continue;
+          if (!sideIsLocal(bot.segs, x0, x1, p.minCover)) continue;
+          if (!sideIsLocal(left.segs, y0, y1, p.minCover)) continue;
+          if (!sideIsLocal(right.segs, y0, y1, p.minCover)) continue;
+          if (rectInkFraction(ink, sw, x0, y0, x1, y1) > p.maxInteriorInk) continue;
+          found.push({ x0, y0, x1, y1, area: width * height });
+        }
+      }
+    }
+  }
+  found.sort((a, b) => b.area - a.area);
+  const kept = [];
+  for (const r of found) {
+    const nested = kept.some(
+      (k) => r.x0 >= k.x0 - p.nestTol && r.y0 >= k.y0 - p.nestTol && r.x1 <= k.x1 + p.nestTol && r.y1 <= k.y1 + p.nestTol
+    );
+    if (nested) continue;
+    const dup = kept.some((k) => {
+      const ox0 = Math.max(k.x0, r.x0);
+      const oy0 = Math.max(k.y0, r.y0);
+      const ox1 = Math.min(k.x1, r.x1);
+      const oy1 = Math.min(k.y1, r.y1);
+      if (ox1 <= ox0 || oy1 <= oy0) return false;
+      const inter = (ox1 - ox0) * (oy1 - oy0);
+      return inter / Math.min(k.area, r.area) > 0.7;
+    });
+    if (dup) continue;
+    kept.push(r);
+  }
+  return kept;
+}
+function lineRectToOpening(r, sw, sh, w0, h0) {
+  const ring = closePx([
+    { x: r.x0 / sw * w0, y: r.y0 / sh * h0 },
+    { x: r.x1 / sw * w0, y: r.y0 / sh * h0 },
+    { x: r.x1 / sw * w0, y: r.y1 / sh * h0 },
+    { x: r.x0 / sw * w0, y: r.y1 / sh * h0 }
+  ]);
+  const area = shoelaceArea(ring);
+  return {
+    points: ring,
+    areaPx: area,
+    kind: "line_rect",
+    shape: "rect",
+    circularity: circularityOf(ring),
+    suggestedLabel: suggestOpeningLabel("rect", 0)
+  };
+}
 function blobToOpening(blob, mask, sw, sh, w0, h0, kind) {
   let probe = null;
   const contour = traceContour(mask, sw, sh, blob);
@@ -3076,7 +3374,7 @@ function blobToOpening(blob, mask, sw, sh, w0, h0, kind) {
   }
   const shape = classifyBlobShape(blob, probe);
   if (!shape) return null;
-  const ring = shape === "circle" ? circleRingFromBlob(blob, w0, h0, sw, sh) : blobToRingPixels(blob, w0, h0, sw, sh);
+  const ring = blobToRingPixels(blob, w0, h0, sw, sh);
   const area = shoelaceArea(ring);
   if (area < 8) return null;
   const circ = circularityOf(ring);
@@ -3101,15 +3399,26 @@ function discoverInteriorOpenings(img, outerNorm, opts) {
   );
   const outerAreaPx = shoelaceArea(outerPx);
   if (outerAreaPx < 80) return [];
-  const scale = Math.min(1, 640 / Math.max(w0, h0));
+  const maxWorkDim = Math.max(64, Math.min(4096, opts?.maxWorkDim ?? 640));
+  const maxLineWorkDim = Math.max(64, Math.min(4096, opts?.maxLineWorkDim ?? maxWorkDim));
+  const scale = Math.min(1, maxWorkDim / Math.max(w0, h0));
   const sw = Math.max(40, Math.floor(w0 * scale));
   const sh = Math.max(40, Math.floor(h0 * scale));
+  const lineScale = Math.min(1, maxLineWorkDim / Math.max(w0, h0));
+  const lsw = Math.max(40, Math.floor(w0 * lineScale));
+  const lsh = Math.max(40, Math.floor(h0 * lineScale));
   const outerMask = rasterizeOuterMask(outerPx, sw, sh, w0, h0);
   const search = erodeMask(outerMask, sw, sh, 2);
+  const linePeel = Math.max(2, Math.round(2 * (Math.min(lsw, lsh) / LINE_REF_DIM)));
+  const lineOuterMask = rasterizeOuterMask(outerPx, lsw, lsh, w0, h0);
+  const lineSearch = erodeMask(lineOuterMask, lsw, lsh, linePeel);
   let searchCount = 0;
   for (let i = 0; i < search.length; i++) if (search[i]) searchCount++;
   if (searchCount < 40) return [];
   const inkRaw = toInkMap(img, sw, sh);
+  const inkLineFull = lsw === sw && lsh === sh ? inkRaw : toInkMap(img, lsw, lsh);
+  const lineParams = lineDetectParams(lsw, lsh);
+  const inkLine = keepAxisAlignedInk(inkLineFull, lsw, lsh, lineParams.minLen);
   let inkMorph = dilate(inkRaw, sw, sh);
   inkMorph = erode(inkMorph, sw, sh);
   const dark = andMask(inkRaw, search);
@@ -3141,17 +3450,366 @@ function discoverInteriorOpenings(img, outerNorm, opts) {
   };
   pushBlobs(dark, "dark_fill");
   pushBlobs(paperCavities, "paper_pocket");
-  raw.sort((a, b) => b.areaPx - a.areaPx);
+  for (const r of findClosedLineRects(inkLine, lineSearch, lsw, lsh)) {
+    const opening = lineRectToOpening(r, lsw, lsh, w0, h0);
+    if (opening.areaPx < minAreaImg || opening.areaPx > Math.min(maxAreaImg, outerAreaPx * 0.5)) continue;
+    const c = ringCentroid(opening.points);
+    if (!pointInRingLocal(c, outerPx)) continue;
+    raw.push(opening);
+  }
+  raw.sort((a, b) => {
+    const kd = openingKindScore(b.kind) - openingKindScore(a.kind);
+    if (kd) return kd;
+    return b.areaPx - a.areaPx;
+  });
   const kept = [];
   for (const o of raw) {
-    if (kept.some((k) => openingsTooSimilar(k.points, o.points))) continue;
+    const dupIdx = kept.findIndex((k) => openingsTooSimilar(k.points, o.points));
+    if (dupIdx >= 0) {
+      if (openingKindScore(o.kind) > openingKindScore(kept[dupIdx].kind)) {
+        kept[dupIdx] = o;
+      }
+      continue;
+    }
+    const c = ringCentroid(o.points);
+    if (kept.some(
+      (k) => k.areaPx > o.areaPx && o.areaPx < k.areaPx * 0.85 && pointInRingLocal(c, k.points)
+    )) {
+      continue;
+    }
     kept.push(o);
   }
   kept.sort((a, b) => b.areaPx - a.areaPx);
-  return kept.slice(0, 40).map((o, i) => ({
+  const result = kept.slice(0, 40).map((o, i) => ({
     ...o,
     suggestedLabel: suggestOpeningLabel(o.shape, i + 1)
   }));
+  if (opts?.meta) {
+    const kindCounts = {
+      dark_fill: 0,
+      paper_pocket: 0,
+      line_rect: 0
+    };
+    for (const o of result) kindCounts[o.kind]++;
+    opts.meta.inputW = w0;
+    opts.meta.inputH = h0;
+    opts.meta.workW = sw;
+    opts.meta.workH = sh;
+    opts.meta.lineWorkW = lsw;
+    opts.meta.lineWorkH = lsh;
+    opts.meta.kindCounts = kindCounts;
+  }
+  return result;
+}
+
+// src/floormap-helpers.ts
+function partNoun(kind) {
+  const k = String(kind || "FLOORMAP").toUpperCase();
+  if (k === "FLOORMAP") {
+    return { singular: "ruimte", plural: "ruimten", title: "Plattegrond", kindLabel: "Plattegrond" };
+  }
+  if (k === "FACADE") {
+    return { singular: "component", plural: "componenten", title: "Gevel", kindLabel: "Gevel" };
+  }
+  if (k === "CROSS_SECTION") {
+    return {
+      singular: "component",
+      plural: "componenten",
+      title: "Dwarsdoorsnede",
+      kindLabel: "Dwarsdoorsnede"
+    };
+  }
+  if (k === "SECTION") {
+    return {
+      singular: "component",
+      plural: "componenten",
+      title: "Doorsnede",
+      kindLabel: "Doorsnede"
+    };
+  }
+  return { singular: "component", plural: "componenten", title: "Tekening", kindLabel: "Tekening" };
+}
+function levelLabel(hint) {
+  switch (String(hint || "").toUpperCase()) {
+    case "SOUTERRAIN":
+      return "Souterrain";
+    case "GROUND":
+      return "Begane vloer";
+    case "BEL_ETAGE":
+      return "Bel-etage";
+    case "FIRST":
+      return "1e verdieping";
+    case "SECOND":
+      return "2e verdieping";
+    case "THIRD":
+      return "3e verdieping";
+    case "ROOF":
+      return "Zolder";
+    case "OTHER":
+      return "Overig";
+    default:
+      return hint || "Overig";
+  }
+}
+function levelSortRank(hint) {
+  switch (String(hint || "").toUpperCase()) {
+    case "SOUTERRAIN":
+      return 0;
+    case "GROUND":
+      return 1;
+    case "BEL_ETAGE":
+      return 2;
+    case "FIRST":
+      return 3;
+    case "SECOND":
+      return 4;
+    case "THIRD":
+      return 5;
+    case "ROOF":
+      return 6;
+    case "OTHER":
+      return 7;
+    default:
+      return 8;
+  }
+}
+function inferLevelHintFromLabel(label) {
+  const t = String(label || "").trim().toLowerCase().normalize("NFD").replace(/\p{M}/gu, "");
+  if (!t) return null;
+  if (/\bsouterrain\b/.test(t) || /\bkelder\b/.test(t)) return "SOUTERRAIN";
+  if (/\b(begane|bg\.?|parterre|ground)\b/.test(t) || /\bb\.?\s*g\.?\b/.test(t)) return "GROUND";
+  if (/\bbel[-\s]?etage\b/.test(t)) return "BEL_ETAGE";
+  if (/\b(zolder|dak|attic|roof)\b/.test(t)) return "ROOF";
+  if (/\b(3e|3de|derde)\b/.test(t) || /\bverdieping\s*3\b/.test(t)) return "THIRD";
+  if (/\b(2e|2de|tweede)\b/.test(t) || /\bverdieping\s*2\b/.test(t)) return "SECOND";
+  if (/\b(1e|1ste|eerste)\b/.test(t) || /\bverdieping\s*1\b/.test(t)) return "FIRST";
+  if (/\bverdieping\b/.test(t)) return "FIRST";
+  return null;
+}
+function normalizeOrientatieCode(raw) {
+  return String(raw || "").trim().toUpperCase();
+}
+function normalizeVrNr(v) {
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s || null;
+}
+function compareVrNr(a, b) {
+  const na = /^\d+$/.test(a) ? Number(a) : NaN;
+  const nb = /^\d+$/.test(b) ? Number(b) : NaN;
+  if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+  return a.localeCompare(b, "nl", { numeric: true });
+}
+function collectAvailableVrNrs(items) {
+  const set = /* @__PURE__ */ new Set();
+  for (const r of items) {
+    const vr = normalizeVrNr(r.vr_nr);
+    if (vr) set.add(vr);
+  }
+  return [...set].sort(compareVrNr);
+}
+function roomMatchesVrFilter(room, filter) {
+  if (!filter) return true;
+  return normalizeVrNr(room.vr_nr) === filter;
+}
+function roomListCountLabel(filter, visible, total) {
+  if (filter && visible !== total) return `${visible}/${total}`;
+  return String(total);
+}
+
+// src/floormap-canvas.ts
+function canvasToNorm(cx, cy, canvasWidth2, canvasHeight2) {
+  return {
+    x: Math.min(1, Math.max(0, cx / Math.max(1, canvasWidth2))),
+    y: Math.min(1, Math.max(0, cy / Math.max(1, canvasHeight2)))
+  };
+}
+function canvasToNormUnclamped(cx, cy, canvasWidth2, canvasHeight2) {
+  return {
+    x: cx / Math.max(1, canvasWidth2),
+    y: cy / Math.max(1, canvasHeight2)
+  };
+}
+function normToCanvas(p, canvasWidth2, canvasHeight2) {
+  return { x: p.x * canvasWidth2, y: p.y * canvasHeight2 };
+}
+function eventToCanvas(ev, rect, canvasWidth2, canvasHeight2) {
+  return {
+    x: (ev.clientX - rect.left) / Math.max(1, rect.width) * canvasWidth2,
+    y: (ev.clientY - rect.top) / Math.max(1, rect.height) * canvasHeight2
+  };
+}
+function normalizeNormRect(a, b) {
+  return {
+    x0: Math.min(a.x, b.x),
+    y0: Math.min(a.y, b.y),
+    x1: Math.max(a.x, b.x),
+    y1: Math.max(a.y, b.y)
+  };
+}
+function normRectRing(r) {
+  return [
+    { x: r.x0, y: r.y0 },
+    { x: r.x1, y: r.y0 },
+    { x: r.x1, y: r.y1 },
+    { x: r.x0, y: r.y1 }
+  ];
+}
+function normRectSizeOk(r) {
+  return r.x1 - r.x0 >= 8e-3 && r.y1 - r.y0 >= 8e-3;
+}
+function hitVertex(norm, points, canvasWidth2, canvasHeight2, pxRadius = 8) {
+  const n = points.length > 1 && Math.hypot(points[0].x - points[points.length - 1].x, points[0].y - points[points.length - 1].y) < 1e-6 ? points.length - 1 : points.length;
+  let best = -1;
+  let bestDist = Infinity;
+  const w = Math.max(1, canvasWidth2);
+  const h = Math.max(1, canvasHeight2);
+  for (let i = 0; i < n; i++) {
+    const dx = (points[i].x - norm.x) * w;
+    const dy = (points[i].y - norm.y) * h;
+    const d = Math.hypot(dx, dy);
+    if (d <= pxRadius && d < bestDist) {
+      bestDist = d;
+      best = i;
+    }
+  }
+  return best;
+}
+function vertexHitRadiusPx(detailActive) {
+  return detailActive ? 16 : 10;
+}
+function closeSnapRadiusPx(detailActive) {
+  return detailActive ? 22 : 16;
+}
+function normDistancePx(a, b, canvasWidth2, canvasHeight2) {
+  const w = Math.max(1, canvasWidth2);
+  const h = Math.max(1, canvasHeight2);
+  return Math.hypot((a.x - b.x) * w, (a.y - b.y) * h);
+}
+function canClosePolygonAtCursor(norm, points, canvasWidth2, canvasHeight2, detailActive) {
+  if (points.length < 3) return false;
+  return normDistancePx(norm, points[0], canvasWidth2, canvasHeight2) <= closeSnapRadiusPx(detailActive);
+}
+function vertexHandleRadiusPx(detailActive) {
+  return detailActive ? 5 : 2;
+}
+function polylineHitRadiusPx(detailActive) {
+  return detailActive ? 18 : 12;
+}
+function hitNearPolyline(norm, points, maxPx, canvasWidth2, canvasHeight2) {
+  return hitPolylineEdge(norm, points, maxPx, canvasWidth2, canvasHeight2) != null;
+}
+function hitPolylineEdge(norm, points, maxPx, canvasWidth2, canvasHeight2) {
+  if (points.length < 2) return null;
+  const p = normToCanvas(norm, canvasWidth2, canvasHeight2);
+  const max2 = maxPx * maxPx;
+  const w = Math.max(1, canvasWidth2);
+  const h = Math.max(1, canvasHeight2);
+  let best = null;
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    const abx = (b.x - a.x) * w;
+    const aby = (b.y - a.y) * h;
+    const apx = p.x - a.x * w;
+    const apy = p.y - a.y * h;
+    const ab2 = abx * abx + aby * aby;
+    const t = ab2 > 1e-12 ? Math.min(1, Math.max(0, (apx * abx + apy * aby) / ab2)) : 0;
+    if (t < 0.08 || t > 0.92) continue;
+    const qx = a.x + (b.x - a.x) * t;
+    const qy = a.y + (b.y - a.y) * t;
+    const dx = p.x - qx * w;
+    const dy = p.y - qy * h;
+    const d2 = dx * dx + dy * dy;
+    if (d2 <= max2 && (!best || d2 < best.distPx * best.distPx)) {
+      best = { segmentIndex: i, point: { x: qx, y: qy }, distPx: Math.sqrt(d2) };
+    }
+  }
+  return best;
+}
+function pointInRing2(pt, points) {
+  const n = points.length > 1 && Math.hypot(points[0].x - points[points.length - 1].x, points[0].y - points[points.length - 1].y) < 1e-6 ? points.length - 1 : points.length;
+  if (n < 3) return false;
+  let inside = false;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = points[i].x;
+    const yi = points[i].y;
+    const xj = points[j].x;
+    const yj = points[j].y;
+    const intersect = yi > pt.y !== yj > pt.y && pt.x < (xj - xi) * (pt.y - yi) / (yj - yi + 1e-15) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+// src/floormap-discovery.ts
+function discoveredOpeningToSectionPoints(normPoints, shape, minVerticesForComplex = 16) {
+  if (shape === "rect") return closeRing(normPoints);
+  return ensureEditablePolyline(normPoints, minVerticesForComplex);
+}
+function discoverMinAreaFractionFromPercent(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n / 100));
+}
+function buildDiscoveryLabel(partSingular, roomCount) {
+  return `${partSingular.charAt(0).toUpperCase() + partSingular.slice(1)} ${roomCount + 1}`;
+}
+function resolveDiscoveryOuter(opts) {
+  if (opts.isFloormapKind) return null;
+  const { pendingRoom: pendingRoom2, rooms: rooms2, selectedSetIds: selectedSetIds2, closeRing: closeRing2, isLengthComponent, differenceSubject: differenceSubject2 } = opts;
+  if (pendingRoom2?.editingId && pendingRoom2.closed && pendingRoom2.points.length >= 3) {
+    const editing = rooms2.find((r) => r.id === pendingRoom2.editingId);
+    if (editing) {
+      return {
+        ...editing,
+        points: closeRing2(pendingRoom2.points.map((p) => ({ ...p })))
+      };
+    }
+  }
+  const selected = rooms2.filter((r) => selectedSetIds2.has(r.id) && !isLengthComponent(r));
+  if (selected.length >= 1) return differenceSubject2(selected);
+  return null;
+}
+function ringCentroidNorm(ring) {
+  let x = 0;
+  let y = 0;
+  const n = Math.max(1, ring.length);
+  for (const p of ring) {
+    x += p.x;
+    y += p.y;
+  }
+  return { x: x / n, y: y / n };
+}
+function openingOverlapsExisting(normRing, outerId, rooms2, shoelaceArea2, isLengthComponent) {
+  const area = shoelaceArea2(normRing);
+  if (area < 1e-10) return true;
+  const ca = ringCentroidNorm(normRing);
+  const ra = Math.sqrt(area / Math.PI);
+  for (const r of rooms2) {
+    if (r.id === outerId || isLengthComponent(r)) continue;
+    const ar = shoelaceArea2(r.points);
+    if (ar < 1e-10) continue;
+    const cb = ringCentroidNorm(r.points);
+    const rb = Math.sqrt(ar / Math.PI);
+    const dist = Math.hypot(ca.x - cb.x, ca.y - cb.y);
+    const ratio = Math.min(area, ar) / Math.max(area, ar);
+    if (dist < (ra + rb) * 0.4 && ratio > 0.5) return true;
+    if (ratio > 0.55 && (ringFullyContained(normRing, r.points) || ringFullyContained(r.points, normRing))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// lib/material-kind-labels.mjs
+var MATERIAL_KIND_HOMOGENEOUS = "homogeneous";
+var MATERIAL_KIND_COMPOSITE = "composite_stack";
+function normalizeMaterialKind(kind) {
+  return kind === MATERIAL_KIND_COMPOSITE ? MATERIAL_KIND_COMPOSITE : MATERIAL_KIND_HOMOGENEOUS;
+}
+function materialKindInline(kind) {
+  return normalizeMaterialKind(kind) === MATERIAL_KIND_COMPOSITE ? "samengesteld" : "enkellaags";
 }
 
 // src/auth-store.ts
@@ -3242,8 +3900,8 @@ function initPasswordToggles(root = document) {
 }
 
 // src/app-version.ts
-var APP_VERSION = "0.1.0";
-var APP_NAME = "Geluidwering Gevels";
+var APP_VERSION = "0.72";
+var APP_NAME = "Stilte advies en meten";
 var USER_DOCS_HREF = "/handleiding.html";
 
 // src/project-menu.ts
@@ -3570,6 +4228,247 @@ Dit wist berekeningen, tekeningen en rapportmappen. Dit kan niet ongedaan worden
   };
 }
 
+// src/shared/bpp-session.ts
+var BppSession = class {
+  constructor(opts) {
+    __publicField(this, "ws", null);
+    __publicField(this, "sessionId", null);
+    __publicField(this, "auth", null);
+    __publicField(this, "reqCounter", 0);
+    __publicField(this, "pending", /* @__PURE__ */ new Map());
+    __publicField(this, "wsUrl");
+    __publicField(this, "authKey");
+    __publicField(this, "clientName");
+    __publicField(this, "cb");
+    /** Bumps on each connect() so stale open/close handlers are ignored. */
+    __publicField(this, "connectGen", 0);
+    __publicField(this, "reconnectTimer", null);
+    /** Resolvers waiting for WebSocket OPEN (login while still connecting). */
+    __publicField(this, "openWaiters", []);
+    this.wsUrl = opts.wsUrl;
+    this.authKey = opts.authKey;
+    this.clientName = opts.clientName;
+    this.cb = opts.callbacks;
+  }
+  nextRequestId(prefix) {
+    this.reqCounter += 1;
+    return `${prefix}_${this.reqCounter}_${Date.now()}`;
+  }
+  rejectAllPending(err) {
+    for (const [id, waiter] of this.pending) {
+      this.pending.delete(id);
+      waiter.reject(err);
+    }
+  }
+  rejectOpenWaiters(err) {
+    const waiters = this.openWaiters.splice(0);
+    for (const w of waiters) {
+      clearTimeout(w.timer);
+      w.reject(err);
+    }
+  }
+  resolveOpenWaiters() {
+    const waiters = this.openWaiters.splice(0);
+    for (const w of waiters) {
+      clearTimeout(w.timer);
+      w.resolve();
+    }
+  }
+  /** Wait until WS is OPEN (or fail). Used when user acts while still connecting. */
+  async whenOpen(timeoutMs = 12e3) {
+    if (this.ws?.readyState === WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState === WebSocket.CLOSED || this.ws.readyState === WebSocket.CLOSING) {
+      throw new Error(`WebSocket niet verbonden (${this.wsUrl}). Herlaad of start ./start.sh.`);
+    }
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const idx = this.openWaiters.findIndex((w) => w.timer === timer);
+        if (idx >= 0) this.openWaiters.splice(idx, 1);
+        reject(new Error(`WebSocket timeout \u2014 geen verbinding met ${this.wsUrl}`));
+      }, timeoutMs);
+      this.openWaiters.push({ resolve, reject, timer });
+    });
+  }
+  async send(type, payload, wantType) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      if (this.ws?.readyState === WebSocket.CONNECTING) {
+        await this.whenOpen();
+      } else {
+        throw new Error(`WebSocket niet open (${this.wsUrl}). Herlaad of start ./start.sh.`);
+      }
+    }
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error(`WebSocket niet open (${this.wsUrl}). Herlaad of start ./start.sh.`);
+    }
+    const request_id = this.nextRequestId(type.replace(".", "_"));
+    const env = { v: 1, type, request_id, payload };
+    if (this.sessionId && type !== "session.open") env.session_id = this.sessionId;
+    return new Promise((resolve, reject) => {
+      this.pending.set(request_id, { resolve, reject, want: wantType });
+      this.ws.send(JSON.stringify(env));
+    });
+  }
+  onMessage(raw) {
+    let env;
+    try {
+      env = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (env.type === "session.opened") {
+      const sid = typeof env.session_id === "string" && env.session_id || (typeof env.payload?.session_id === "string" ? env.payload.session_id : null);
+      if (sid) this.sessionId = sid;
+    }
+    if (env.type === "error") {
+      const waiter2 = this.pending.get(env.request_id);
+      if (waiter2) {
+        this.pending.delete(env.request_id);
+        waiter2.reject(new Error(JSON.stringify(env.payload ?? env)));
+      }
+      return;
+    }
+    const waiter = this.pending.get(env.request_id);
+    if (!waiter) return;
+    if (env.type === waiter.want || env.type.endsWith(".completed") || env.type === "exec.completed") {
+      if (env.type === "invoke.accepted" || env.type === "exec.accepted") return;
+      this.pending.delete(env.request_id);
+      waiter.resolve(env);
+    }
+  }
+  async invokeString(target, args) {
+    const inv = await this.send("invoke.request", { target_kind: "procedure", target, args }, "invoke.completed");
+    const ret = inv.payload?.return;
+    if (typeof ret !== "string") throw new Error(`Onverwacht antwoord van ${target}`);
+    return ret;
+  }
+  async loadSharedApi() {
+    await this.send(
+      "exec.request",
+      { code: 'INCLUDE "fixtures/app-gevelwering/shared_building_api.basicpp"\n' },
+      "exec.completed"
+    );
+    const bootRet = await this.invokeString("API_Bootstrap", []);
+    if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap mislukt: ${bootRet}`);
+  }
+  async bootstrapAndLogin(username, password) {
+    await this.whenOpen();
+    await this.loadSharedApi();
+    const ret = await this.invokeString("API_Login", [username, password]);
+    if (ret.startsWith("ERROR")) throw new Error(ret);
+    const parsed = JSON.parse(ret);
+    if (!parsed.ok || !parsed.token) throw new Error("Inloggen mislukt");
+    const info = {
+      token: parsed.token,
+      username: parsed.username || username,
+      display_name: parsed.display_name || username
+    };
+    this.auth = info;
+    this.storeAuth(info);
+    this.cb.onLogin(info);
+    return info;
+  }
+  storeAuth(info) {
+    storeAuth(this.authKey, info);
+    void syncSessionCookie(info?.token ?? null);
+  }
+  loadStoredAuth() {
+    return loadAuth(this.authKey);
+  }
+  logout() {
+    this.auth = null;
+    this.storeAuth(null);
+    this.cb.onLogout();
+  }
+  /**
+   * Open WS, session.open, loadSharedApi, validate stored token.
+   * Page-specific `onReady` callback fires after successful restore or login prompt.
+   */
+  connect(opts) {
+    const reconnectMs = opts?.reconnectMs ?? 1500;
+    if (this.reconnectTimer != null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    const gen = ++this.connectGen;
+    this.sessionId = null;
+    this.rejectAllPending(new Error("WebSocket herverbindt"));
+    this.rejectOpenWaiters(new Error("WebSocket herverbindt"));
+    const prev = this.ws;
+    this.ws = null;
+    if (prev && (prev.readyState === WebSocket.OPEN || prev.readyState === WebSocket.CONNECTING)) {
+      try {
+        prev.close();
+      } catch {
+      }
+    }
+    this.cb.onStatus(`Verbinden met ${this.wsUrl}\u2026`, "busy");
+    this.cb.onConnLed(false);
+    const ws = new WebSocket(this.wsUrl);
+    this.ws = ws;
+    ws.addEventListener("open", () => {
+      if (gen !== this.connectGen || this.ws !== ws) return;
+      this.cb.onConnLed(true);
+      this.resolveOpenWaiters();
+      void (async () => {
+        try {
+          await this.send("session.open", { client: this.clientName }, "session.opened");
+          if (gen !== this.connectGen) return;
+          await this.loadSharedApi();
+          if (gen !== this.connectGen) return;
+          const stored = this.loadStoredAuth();
+          if (stored?.token) {
+            const ret = await this.invokeString("API_ValidateSession", [stored.token]);
+            if (gen !== this.connectGen) return;
+            if (ret.startsWith("ERROR")) {
+              this.cb.onLogout();
+              this.cb.onStatus("Sessie verlopen \u2014 log in", "err");
+            } else {
+              this.auth = stored;
+              this.cb.onLogin(stored);
+              this.cb.onStatus("Gereed", "ok");
+            }
+          } else {
+            this.cb.onLogout();
+            this.cb.onStatus("Verbonden \u2014 log in", "ok");
+          }
+          if (gen !== this.connectGen) return;
+          await this.cb.onReady?.();
+        } catch (err) {
+          if (gen !== this.connectGen) return;
+          this.cb.onStatus(err instanceof Error ? err.message : String(err), "err");
+          this.cb.onLogout();
+        }
+      })();
+    });
+    ws.addEventListener("message", (ev) => {
+      if (this.ws !== ws) return;
+      this.onMessage(String(ev.data));
+    });
+    ws.addEventListener("close", () => {
+      if (gen !== this.connectGen) return;
+      if (this.ws === ws) this.ws = null;
+      this.sessionId = null;
+      this.rejectAllPending(new Error("WebSocket verbroken"));
+      this.rejectOpenWaiters(new Error("WebSocket verbroken"));
+      this.cb.onConnLed(false);
+      this.cb.onStatus(
+        reconnectMs > 0 ? `Verbinding verbroken \u2014 opnieuw verbinden\u2026 (${this.wsUrl})` : `Verbinding verbroken (${this.wsUrl})`,
+        "err"
+      );
+      if (reconnectMs > 0) {
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = null;
+          if (gen === this.connectGen) this.connect(opts);
+        }, reconnectMs);
+      }
+    });
+    ws.addEventListener("error", () => {
+      if (gen !== this.connectGen || this.ws !== ws) return;
+      this.cb.onStatus(`WebSocket-fout (${this.wsUrl})`, "err");
+    });
+  }
+};
+
 // src/bpp-api.ts
 function parseBppJson(ret) {
   if (ret.startsWith("ERROR")) throw new Error(ret);
@@ -3601,7 +4500,7 @@ async function bppSaveFloormapScale(invoke, token, opts) {
     opts.scale_source || "CALIBRATED",
     bppAspectArg(opts.scale_aspect_yx)
   ]);
-  parseBppJson(ret);
+  return parseBppJson(ret);
 }
 function bppPhase1Enabled() {
   try {
@@ -3694,8 +4593,49 @@ var params = new URLSearchParams(location.search);
 var BPP_WS = resolveBppWsUrl();
 var AUTH_KEY = "app_gevelwering_engineer_auth";
 var URL_BUILDING = params.get("building_id") || "";
-var URL_SECTION = params.get("section_id") || "";
 var COMPONENT_DRAFT_KEY = "app-gevelwering-fm-component-draft";
+var FM_LAST_SECTION_PREFIX = "app-gevelwering-fm-last-section:";
+function urlSectionId() {
+  return new URLSearchParams(location.search).get("section_id")?.trim() || "";
+}
+function lastSectionStorageKey(bid) {
+  return `${FM_LAST_SECTION_PREFIX}${bid.trim().toLowerCase()}`;
+}
+function readLastSectionId(bid) {
+  if (!bid) return "";
+  try {
+    return sessionStorage.getItem(lastSectionStorageKey(bid))?.trim() || "";
+  } catch {
+    return "";
+  }
+}
+function persistLastSectionId(bid, sectionId) {
+  if (!bid || !sectionId) return;
+  try {
+    sessionStorage.setItem(lastSectionStorageKey(bid), sectionId);
+  } catch {
+  }
+}
+function clearLastSectionId(bid) {
+  if (!bid) return;
+  try {
+    sessionStorage.removeItem(lastSectionStorageKey(bid));
+  } catch {
+  }
+}
+function syncFloormapLocation(sectionId) {
+  const url = new URL(location.href);
+  if (buildingId) url.searchParams.set("building_id", buildingId);
+  else url.searchParams.delete("building_id");
+  if (sectionId) url.searchParams.set("section_id", sectionId);
+  else url.searchParams.delete("section_id");
+  history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+function resolveSectionToOpen(bid) {
+  const fromUrl = urlSectionId();
+  if (fromUrl) return fromUrl;
+  return readLastSectionId(bid);
+}
 var MATERIAL_PICK_KEY = "app-gevelwering-material-pick";
 var connBarEl = document.getElementById("fm-conn-bar");
 var connLedEl = document.getElementById("fm-conn-led");
@@ -3724,7 +4664,6 @@ var zoomLabelEl = document.getElementById("fm-zoom-label");
 var discoverBtn = document.getElementById("fm-discover-btn");
 var discoverMinWrapEl = document.getElementById("fm-discover-min-wrap");
 var discoverMinSizeEl = document.getElementById("fm-discover-min-size");
-var discoverMinValEl = document.getElementById("fm-discover-min-val");
 var discoverHintEl = document.getElementById("fm-discover-hint");
 var calibrateBtn = document.getElementById("fm-calibrate-btn");
 var calibrateLedEl = document.getElementById("fm-calibrate-led");
@@ -3739,6 +4678,14 @@ var calibrateMetresInput = document.getElementById("fm-calibrate-metres");
 var calibrateApplyBtn = document.getElementById("fm-calibrate-apply-btn");
 var calibrateRepickBtn = document.getElementById("fm-calibrate-repick-btn");
 var calibrateHintEl = document.getElementById("fm-calibrate-hint");
+var copyLayoutBarEl = document.getElementById("fm-copy-layout-bar");
+var copyLayoutCb = document.getElementById("fm-copy-layout-cb");
+var copyLayoutControlsEl = document.getElementById("fm-copy-layout-controls");
+var copyLayoutSourceEl = document.getElementById("fm-copy-layout-source");
+var copyLayoutRemapVgCb = document.getElementById(
+  "fm-copy-layout-remap-vg"
+);
+var copyLayoutBtn = document.getElementById("fm-copy-layout-btn");
 var toolClearBtn = document.getElementById("fm-tool-clear-btn");
 var toolHintEl = document.getElementById("fm-tool-hint");
 var toolLengthMmEl = document.getElementById("fm-tool-length-mm");
@@ -3752,6 +4699,8 @@ var vgVrHintEl = document.getElementById("fm-vg-vr-hint");
 var expectedOriBlockEl = document.getElementById("fm-expected-ori-block");
 var expectedOriRowEl = document.getElementById("fm-expected-ori-row");
 var expectedOriCorrEl = document.getElementById("fm-ori-corr-rows");
+var componentOriBlockEl = document.getElementById("fm-component-ori-block");
+var componentOriEl = document.getElementById("fm-component-ori");
 var roomLevelSelect = document.getElementById("fm-room-level");
 var roomPendingHintEl = document.getElementById("fm-room-pending-hint");
 var roomDrawBtn = document.getElementById("fm-room-draw-btn");
@@ -3822,62 +4771,21 @@ var savedHeadingTextEl = document.getElementById("fm-saved-heading-text");
 var roomVrFilterEl = document.getElementById("fm-room-vr-filter");
 var savedVrFilterWrapEl = document.querySelector(".saved-vr-filter");
 var pickerHeadingEl = document.querySelector("#fm-picker-panel h2");
-var pickerHintEl = document.querySelector("#fm-picker-panel > .hint");
+var pickerHintEl = document.querySelector("#fm-picker-panel .fm-picker-head .hint");
+var vgVrOverviewBtn = document.getElementById("fm-vgvr-overview-btn");
+var vgVrOverviewDialog = document.getElementById("fm-vgvr-overview-dialog");
+var vgVrOverviewTitleEl = document.getElementById("fm-vgvr-overview-title");
+var vgVrOverviewMetaEl = document.getElementById("fm-vgvr-overview-meta");
+var vgVrOverviewBodyEl = document.getElementById("fm-vgvr-overview-body");
+var vgVrOverviewCopyBtn = document.getElementById("fm-vgvr-overview-copy");
 var pageTitleEl = document.querySelector("h1");
-function partNoun(kind) {
-  const k = String(kind || "FLOORMAP").toUpperCase();
-  if (k === "FLOORMAP") {
-    return { singular: "ruimte", plural: "ruimten", title: "Plattegrond", kindLabel: "Plattegrond" };
-  }
-  if (k === "FACADE") {
-    return { singular: "component", plural: "componenten", title: "Gevel", kindLabel: "Gevel" };
-  }
-  if (k === "CROSS_SECTION") {
-    return {
-      singular: "component",
-      plural: "componenten",
-      title: "Dwarsdoorsnede",
-      kindLabel: "Dwarsdoorsnede"
-    };
-  }
-  if (k === "SECTION") {
-    return {
-      singular: "component",
-      plural: "componenten",
-      title: "Doorsnede",
-      kindLabel: "Doorsnede"
-    };
-  }
-  return { singular: "component", plural: "componenten", title: "Tekening", kindLabel: "Tekening" };
-}
 function activePartNoun() {
   return partNoun(activeSection?.region_kind);
-}
-function levelLabel(hint) {
-  switch (String(hint || "").toUpperCase()) {
-    case "GROUND":
-      return "Begane vloer";
-    case "FIRST":
-      return "Verdieping";
-    case "SECOND":
-      return "2e verdieping";
-    case "THIRD":
-      return "3e verdieping";
-    case "ROOF":
-      return "Dak";
-    case "OTHER":
-      return "Overig";
-    default:
-      return hint || "Overig";
-  }
 }
 function isFloormapKind(kind) {
   return String(kind || activeSection?.region_kind || "FLOORMAP").toUpperCase() === "FLOORMAP";
 }
 var ORIENTATIE_CODES = ["N", "NO", "O", "ZO", "Z", "ZW", "W", "NW"];
-function normalizeOrientatieCode(raw) {
-  return String(raw || "").trim().toUpperCase();
-}
 function readExpectedOrientaties() {
   if (!expectedOriRowEl) return [];
   const out = [];
@@ -3957,6 +4865,69 @@ function setExpectedOrientaties(codes, correcties) {
 }
 function clearExpectedOrientaties() {
   setExpectedOrientaties([], {});
+}
+function readComponentOrientatie() {
+  const raw = componentOriEl?.value || "";
+  const code = normalizeOrientatieCode(raw);
+  return ORIENTATIE_CODES.includes(code) ? code : "";
+}
+var LAST_COMPONENT_ORI_KEY = "app-gevelwering-last-component-ori";
+function lastComponentOriStorageKey() {
+  return buildingId ? `${LAST_COMPONENT_ORI_KEY}:${buildingId}` : LAST_COMPONENT_ORI_KEY;
+}
+function loadLastComponentOrientatie() {
+  try {
+    const raw = sessionStorage.getItem(lastComponentOriStorageKey()) || "";
+    const code = normalizeOrientatieCode(raw);
+    return ORIENTATIE_CODES.includes(code) ? code : "";
+  } catch {
+    return "";
+  }
+}
+var lastComponentOrientatie = "";
+function rememberComponentOrientatie(code) {
+  const want = normalizeOrientatieCode(code || "");
+  if (!ORIENTATIE_CODES.includes(want)) return;
+  lastComponentOrientatie = want;
+  try {
+    sessionStorage.setItem(lastComponentOriStorageKey(), want);
+  } catch {
+  }
+}
+function refreshLastComponentOrientatieFromStorage() {
+  lastComponentOrientatie = loadLastComponentOrientatie();
+}
+function setComponentOrientatie(code) {
+  if (!componentOriEl) return;
+  const want = normalizeOrientatieCode(code || "");
+  componentOriEl.value = want && ORIENTATIE_CODES.includes(want) ? want : "";
+}
+function applyComponentOrientatieForEdit(saved) {
+  const fromSaved = normalizeOrientatieCode(saved || "");
+  const hasSaved = ORIENTATIE_CODES.includes(fromSaved);
+  if (hasSaved) {
+    setComponentOrientatie(fromSaved);
+    rememberComponentOrientatie(fromSaved);
+    return;
+  }
+  setComponentOrientatie(lastComponentOrientatie);
+}
+function clearComponentOrientatie() {
+  setComponentOrientatie("");
+}
+function gevelAnalysisForSave(prev, extra) {
+  const ori = readComponentOrientatie();
+  if (!ori) {
+    throw new Error("Kies een gevelori\xEBntatie (N\u2026NW) voor dit component");
+  }
+  const base = prev && typeof prev === "object" ? { ...prev } : {};
+  delete base.expected_orientaties;
+  delete base.orientatie_correcties;
+  return {
+    ...base,
+    ...extra || {},
+    orientatie: ori
+  };
 }
 function parseVgVrInputs() {
   const vgRaw = roomVgInput.value.trim();
@@ -4068,6 +5039,259 @@ function fillVgVrSuggestions() {
   roomVgInput.value = String(suggestVgNr());
   roomVrInput.value = String(suggestNextVrNr());
 }
+function vgVrPairKey(vg, vr) {
+  return `${vg}\0${normalizeVrNr(vr) || ""}`;
+}
+function floormapCopySourceCandidates() {
+  if (!activeSection) return [];
+  return sections.filter(
+    (s) => isFloormapKind(s.region_kind) && s.id !== activeSection.id && (s.room_count || 0) >= 1
+  ).slice().sort((a, b) => (a.label || "").localeCompare(b.label || "", "nl"));
+}
+function syncCopyLayoutUi() {
+  if (!copyLayoutBarEl) return;
+  const show = Boolean(activeSection && isFloormapKind());
+  copyLayoutBarEl.classList.toggle("hidden", !show);
+  if (!show) {
+    if (copyLayoutCb) copyLayoutCb.checked = false;
+    copyLayoutControlsEl?.classList.add("hidden");
+    return;
+  }
+  const enabled = Boolean(copyLayoutCb?.checked);
+  copyLayoutControlsEl?.classList.toggle("hidden", !enabled);
+  if (!copyLayoutSourceEl) return;
+  const prev = copyLayoutSourceEl.value;
+  const sources = floormapCopySourceCandidates();
+  copyLayoutSourceEl.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = sources.length ? "\u2014 kies plattegrond \u2014" : "\u2014 geen andere plattegrond met ruimten \u2014";
+  copyLayoutSourceEl.appendChild(placeholder);
+  for (const s of sources) {
+    const opt = document.createElement("option");
+    opt.value = s.id;
+    const n = s.room_count || 0;
+    opt.textContent = `${s.label || "Plattegrond"} (${n} ruimte${n === 1 ? "" : "n"})`;
+    copyLayoutSourceEl.appendChild(opt);
+  }
+  if (prev && sources.some((s) => s.id === prev)) copyLayoutSourceEl.value = prev;
+  if (copyLayoutBtn) {
+    copyLayoutBtn.disabled = !(enabled && copyLayoutSourceEl.value);
+  }
+}
+async function fetchSectionRooms(sectionId) {
+  if (!auth()?.token) return [];
+  const raw = bppPhase1Enabled() ? (await bppListDrawingSubsections(invokeString, auth().token, sectionId)).subsections : (await apiGet(
+    `/api/floormap/subsections?section_id=${encodeURIComponent(sectionId)}`
+  )).subsections;
+  return mapSubsectionRows(raw).sort(
+    (a, b) => a.sort_order - b.sort_order || a.label.localeCompare(b.label, "nl")
+  );
+}
+async function collectProjectVgVrPairs(excludeSectionId) {
+  const pairs = /* @__PURE__ */ new Set();
+  let maxVg = 0;
+  for (const s of sections) {
+    if (!isFloormapKind(s.region_kind)) continue;
+    if ((s.room_count || 0) < 1 && s.id !== activeSection?.id) continue;
+    const list = s.id === activeSection?.id ? rooms : await fetchSectionRooms(s.id);
+    const skipPairs = Boolean(excludeSectionId && s.id === excludeSectionId);
+    for (const r of list) {
+      if (r.vg_nr == null || !normalizeVrNr(r.vr_nr)) continue;
+      const vg = Number(r.vg_nr);
+      if (vg > maxVg) maxVg = vg;
+      if (!skipPairs) pairs.add(vgVrPairKey(vg, String(r.vr_nr)));
+    }
+  }
+  return { pairs, maxVg };
+}
+function isSimpleLayoutRoom(r) {
+  if (componentIsLengthQuantity(r)) return false;
+  if (isComposeResultRoom(r)) return false;
+  if (!r.points || r.points.length < 3) return false;
+  return true;
+}
+async function copyLayoutFromSection(sourceSectionId) {
+  if (!activeSection || !auth()?.token) {
+    setStatus("Geen plattegrond actief", "err");
+    return;
+  }
+  if (!isFloormapKind()) {
+    setStatus("Ruimte-indeling kopi\xEBren kan alleen op een plattegrond", "err");
+    return;
+  }
+  if (sourceSectionId === activeSection.id) {
+    setStatus("Kies een andere plattegrond als bron", "err");
+    return;
+  }
+  const sourceSec = sections.find((s) => s.id === sourceSectionId);
+  if (!sourceSec) {
+    setStatus("Bronplattegrond niet gevonden", "err");
+    return;
+  }
+  setStatus("Bronindeling laden\u2026", "busy");
+  const sourceRooms = (await fetchSectionRooms(sourceSectionId)).filter(isSimpleLayoutRoom);
+  if (!sourceRooms.length) {
+    setStatus("Bronplattegrond heeft geen kopieerbare ruimten", "err");
+    return;
+  }
+  if (rooms.length > 0) {
+    const ok = window.confirm(
+      `Deze plattegrond heeft al ${rooms.length} ruimte(n).
+
+Toch ${sourceRooms.length} ruimte(n) van \xAB${sourceSec.label || "bron"}\xBB toevoegen?`
+    );
+    if (!ok) {
+      setStatus("Kopi\xEBren geannuleerd", "err");
+      return;
+    }
+  } else {
+    const ok = window.confirm(
+      `${sourceRooms.length} ruimte(n) kopi\xEBren van \xAB${sourceSec.label || "bron"}\xBB naar \xAB${activeSection.label || "deze plattegrond"}\xBB?`
+    );
+    if (!ok) {
+      setStatus("Kopi\xEBren geannuleerd", "err");
+      return;
+    }
+  }
+  const remapVg = copyLayoutRemapVgCb?.checked !== false;
+  const { pairs: usedPairs, maxVg } = await collectProjectVgVrPairs(sourceSectionId);
+  const srcVgs = [
+    ...new Set(
+      sourceRooms.map((r) => r.vg_nr != null ? Number(r.vg_nr) : null).filter((v) => v != null && v > 0)
+    )
+  ].sort((a, b) => a - b);
+  const vgMap = /* @__PURE__ */ new Map();
+  if (remapVg) {
+    let next = Math.max(0, maxVg) + 1;
+    for (const vg of srcVgs) {
+      vgMap.set(vg, next++);
+    }
+  } else {
+    for (const vg of srcVgs) vgMap.set(vg, vg);
+    const conflicts = [];
+    for (const r of sourceRooms) {
+      if (r.vg_nr == null || !normalizeVrNr(r.vr_nr)) continue;
+      const key = vgVrPairKey(Number(r.vg_nr), String(r.vr_nr));
+      if (usedPairs.has(key)) {
+        conflicts.push(`VG ${r.vg_nr} \xB7 VR ${normalizeVrNr(r.vr_nr)}`);
+      }
+    }
+    if (conflicts.length) {
+      setStatus(
+        `VG/VR al in gebruik \u2014 vink \xABNieuwe VG-nummers\xBB aan, of kies andere nummers. Conflict: ${conflicts.slice(0, 4).join(", ")}${conflicts.length > 4 ? "\u2026" : ""}`,
+        "err"
+      );
+      return;
+    }
+  }
+  if (!(activeSection.metres_per_norm_unit != null && activeSection.metres_per_norm_unit > 0) && sourceSec.metres_per_norm_unit != null && sourceSec.metres_per_norm_unit > 0) {
+    try {
+      const aspect = sourceSec.scale_aspect_yx != null && sourceSec.scale_aspect_yx > 0 ? Number(sourceSec.scale_aspect_yx) : activeScaleAspect();
+      await persistSectionScale({
+        section_id: activeSection.id,
+        metres_per_norm_unit: Number(sourceSec.metres_per_norm_unit),
+        scale_ratio: sourceSec.scale_ratio,
+        scale_source: sourceSec.scale_source || "CALIBRATED",
+        scale_aspect_yx: aspect
+      });
+      activeSection.metres_per_norm_unit = Number(sourceSec.metres_per_norm_unit);
+      activeSection.scale_aspect_yx = aspect;
+      activeSection.scale_source = sourceSec.scale_source || "CALIBRATED";
+      activeSection.scale_ratio = sourceSec.scale_ratio;
+      const idx = sections.findIndex((s) => s.id === activeSection.id);
+      if (idx >= 0) sections[idx] = activeSection;
+      updateScaleUi();
+    } catch {
+    }
+  }
+  const level = roomLevelSelect.value || "OTHER";
+  const mpu = activeScaleMpu();
+  let savedN = 0;
+  if (copyLayoutBtn) copyLayoutBtn.disabled = true;
+  try {
+    for (let i = 0; i < sourceRooms.length; i++) {
+      const r = sourceRooms[i];
+      setStatus(`Ruimte ${i + 1}/${sourceRooms.length} kopi\xEBren\u2026`, "busy");
+      const srcVg = r.vg_nr != null ? Number(r.vg_nr) : null;
+      const vr = normalizeVrNr(r.vr_nr);
+      if (srcVg == null || !vr) {
+        throw new Error(`Ruimte \xAB${r.label}\xBB mist VG/VR`);
+      }
+      const vg = vgMap.get(srcVg) ?? srcVg;
+      const holes = Array.isArray(r.analysis?.holes) ? r.analysis.holes.map((h) => coerceRingPoints(h)).filter((h) => h.length >= 3) : [];
+      const analysis = analysisForDuplicate(r.analysis);
+      const body = {
+        section_id: activeSection.id,
+        label: r.label,
+        level_hint: level,
+        vg_nr: vg,
+        vr_nr: vr,
+        points: r.points.map((p) => ({ ...p })),
+        holes,
+        metres_per_norm_unit: mpu ?? void 0,
+        scale_aspect_yx: activeScaleAspect()
+      };
+      if (analysis) {
+        const a = { ...analysis };
+        if (holes.length) a.holes = holes;
+        body.analysis = a;
+      } else if (holes.length) {
+        body.analysis = { holes };
+      }
+      const saved = await postNewSubsection(body);
+      upsertOptimisticRoom({
+        id: saved.subsection_id,
+        section_id: activeSection.id,
+        label: r.label,
+        level_hint: level,
+        vg_nr: vg,
+        vr_nr: vr,
+        points: r.points.map((p) => ({ ...p })),
+        area_m2: saved.area_m2 != null ? Number(saved.area_m2) : r.area_m2,
+        area_norm: saved.area_norm != null ? Number(saved.area_norm) : r.area_norm,
+        perimeter_m: saved.perimeter_m != null ? Number(saved.perimeter_m) : r.perimeter_m,
+        perimeter_norm: null,
+        metres_per_norm_unit: mpu,
+        analysis_status: "ok",
+        sort_order: rooms.length,
+        analysis: analysis ?? null
+      });
+      usedPairs.add(vgVrPairKey(vg, vr));
+      savedN += 1;
+    }
+    await loadRooms({ preserveOrder: true });
+    try {
+      const fresh = await fetchFloormapSections(buildingId);
+      sections = fresh;
+      syncCopyLayoutUi();
+    } catch {
+      if (activeSection) {
+        activeSection.room_count = rooms.length;
+        const idx = sections.findIndex((s) => s.id === activeSection.id);
+        if (idx >= 0) sections[idx] = activeSection;
+      }
+    }
+    renderRoomList();
+    drawOverlay();
+    const vgNote = remapVg ? ` VG herschikt vanaf ${Math.max(0, maxVg) + 1}` : " (zelfde VG/VR als bron)";
+    setStatus(
+      `${savedN} ruimte(n) gekopieerd van \xAB${sourceSec.label || "bron"}\xBB.${vgNote}. Controleer labels/ori\xEBntaties.`,
+      "ok"
+    );
+    if (copyLayoutCb) copyLayoutCb.checked = false;
+    syncCopyLayoutUi();
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+    try {
+      await loadRooms();
+    } catch {
+    }
+    renderRoomList();
+    drawOverlay();
+    syncCopyLayoutUi();
+  }
+}
 function syncWorkspaceLabels(kind) {
   const n = partNoun(kind ?? activeSection?.region_kind);
   const floormap = isFloormapKind(kind ?? activeSection?.region_kind);
@@ -4086,13 +5310,14 @@ function syncWorkspaceLabels(kind) {
   }
   if (discoverMinWrapEl) discoverMinWrapEl.classList.toggle("hidden", floormap);
   if (discoverHintEl) {
-    discoverHintEl.textContent = floormap ? `Plattegrond: ruimten op de crop.` : "Gevel: selecteer buitencontour (VR), stel min. grootte in, daarna Ontdek openingen \u2014 alleen rechthoeken (H/V) en ronde vormen, groot\u2192klein.";
+    discoverHintEl.textContent = floormap ? `Plattegrond: ruimten op de crop.` : "Gevel: selecteer buitencontour (VR), stel filtergrootte in (grof \u2192 fijn), daarna Ontdek openingen \u2014 hi-res H/V-lijnen via server, fallback lokaal.";
   }
+  syncCopyLayoutUi();
   if (markRoomLegendEl) markRoomLegendEl.textContent = cap;
   roomDrawBtn.textContent = `Teken ${n.singular}`;
   roomSaveBtn.textContent = "Opslaan";
   roomLabelInput.placeholder = floormap ? "bijv. slaapkamer 1" : "bijv. raamstrook / paneel";
-  roomPendingHintEl.textContent = `Gebruik Teken ${n.singular} in Gereedschap, klik hoekpunten, sluit af en sla op. Dubbelklik een anker om te verwijderen; Vereenvoudig dunt de omtrek.`;
+  roomPendingHintEl.textContent = `Gebruik Teken ${n.singular} in Gereedschap, klik hoekpunten, sluit af en sla op. Dubbelklik een rand om een anker toe te voegen; dubbelklik een anker om te verwijderen; Vereenvoudig dunt de omtrek.`;
   if (roomDeleteBtn) {
     roomDeleteBtn.textContent = "Verwijderen";
     roomDeleteBtn.title = `Opgeslagen ${n.singular} permanent verwijderen`;
@@ -4118,10 +5343,16 @@ function syncWorkspaceLabels(kind) {
   vgVrRowEl?.classList.remove("hidden");
   if (vgVrHintEl) {
     vgVrHintEl.classList.remove("hidden");
-    vgVrHintEl.textContent = floormap ? "Zelfde VG + andere VR = ruimten in hetzelfde verblijfsgebied. VR is uniek per project (bijv. 1, 3A)." : "Koppel aan een VR (zelfde als plattegrond). Meerdere composities (materialen) binnen dezelfde buitencontour zijn mogelijk.";
+    vgVrHintEl.textContent = floormap ? "Zelfde VG + andere VR = ruimten in hetzelfde verblijfsgebied. De combinatie VG+VR is uniek (zelfde VR in een andere VG mag)." : "Koppel aan een VR (zelfde als plattegrond). Meerdere composities (materialen) binnen dezelfde buitencontour zijn mogelijk.";
   }
   expectedOriBlockEl?.classList.toggle("hidden", !floormap);
-  if (!floormap) clearExpectedOrientaties();
+  componentOriBlockEl?.classList.toggle("hidden", floormap);
+  if (!floormap) {
+    clearExpectedOrientaties();
+    setComponentOrientatie(lastComponentOrientatie);
+  } else {
+    clearComponentOrientatie();
+  }
   setOpsFieldset?.classList.toggle("hidden", floormap);
   materialBlockEl?.classList.toggle("hidden", floormap);
   if (floormap) kierSuggestEl?.classList.add("hidden");
@@ -4136,29 +5367,6 @@ function syncWorkspaceLabels(kind) {
   renderComposeParts();
 }
 var roomListVrFilter = "";
-function normalizeVrNr(v) {
-  if (v == null) return null;
-  const s = String(v).trim();
-  return s || null;
-}
-function compareVrNr(a, b) {
-  const na = /^\d+$/.test(a) ? Number(a) : NaN;
-  const nb = /^\d+$/.test(b) ? Number(b) : NaN;
-  if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
-  return a.localeCompare(b, "nl", { numeric: true });
-}
-function collectAvailableVrNrs(items) {
-  const set = /* @__PURE__ */ new Set();
-  for (const r of items) {
-    const vr = normalizeVrNr(r.vr_nr);
-    if (vr) set.add(vr);
-  }
-  return [...set].sort(compareVrNr);
-}
-function roomMatchesVrFilter(r, filter) {
-  if (!filter) return true;
-  return normalizeVrNr(r.vr_nr) === filter;
-}
 function syncRoomListVrFilterOptions(items) {
   if (!roomVrFilterEl) return;
   const vrs = collectAvailableVrNrs(items);
@@ -4181,16 +5389,11 @@ function syncRoomListVrFilterOptions(items) {
 function visibleTopLevelRooms(items) {
   return items.filter((r) => roomMatchesVrFilter(r, roomListVrFilter));
 }
-function roomListCountLabel(visible, total) {
-  if (roomListVrFilter && visible !== total) return `${visible}/${total}`;
-  return String(total);
+function roomListCountLabel2(visible, total) {
+  return roomListCountLabel(roomListVrFilter, visible, total);
 }
-var ws = null;
-var sessionId = null;
-var auth = null;
-var reqCounter = 0;
-var pending = /* @__PURE__ */ new Map();
 var buildingId = URL_BUILDING;
+refreshLastComponentOrientatieFromStorage();
 var buildingLabel = "";
 var buildingExternalRef = "";
 var projectMenu = null;
@@ -4200,9 +5403,77 @@ var rooms = [];
 var roomsLoadEpoch = 0;
 var localRoomPatches = /* @__PURE__ */ new Map();
 var LOCAL_ROOM_PATCH_TTL_MS = 45e3;
+var LOCAL_ROOM_PATCH_READD_MS = 12e3;
+var localRoomDeletions = /* @__PURE__ */ new Map();
+var sectionRoomsSnapshot = /* @__PURE__ */ new Map();
+function captureSectionRoomsSnapshot(sectionId) {
+  if (!sectionId || !rooms.length) return;
+  sectionRoomsSnapshot.set(
+    sectionId,
+    rooms.map((r) => ({
+      ...r,
+      points: r.points.map((p) => ({ ...p })),
+      analysis: r.analysis ? { ...r.analysis } : r.analysis
+    }))
+  );
+}
+function overlaySectionRoomsSnapshot(sectionId, list) {
+  const snap = sectionRoomsSnapshot.get(sectionId);
+  if (!snap?.length) return list;
+  const snapById = new Map(snap.map((r) => [normRoomId(r.id), r]));
+  const merged = list.map((r) => {
+    const s = snapById.get(normRoomId(r.id));
+    if (!s) return r;
+    const snapVr = normalizeVrNr(s.vr_nr);
+    const serverVr = normalizeVrNr(r.vr_nr);
+    const staleLabel = (s.label || "").trim() !== (r.label || "").trim();
+    const staleVgVr = s.vg_nr !== r.vg_nr || snapVr !== serverVr;
+    const useSnap = touchedRoomIds.has(normRoomId(r.id)) || localRoomPatches.has(r.id) || localRoomPatches.has(normRoomId(r.id)) || localLabelOverrides.has(normRoomId(r.id)) || staleLabel || staleVgVr;
+    if (!useSnap) return r;
+    return {
+      ...r,
+      label: s.label,
+      level_hint: s.level_hint || r.level_hint,
+      vg_nr: s.vg_nr,
+      vr_nr: s.vr_nr
+    };
+  });
+  const present = new Set(merged.map((r) => normRoomId(r.id)));
+  for (const s of snap) {
+    const id = normRoomId(s.id);
+    if (present.has(id) || isLocallyDeleted(s.id)) continue;
+    if (!touchedRoomIds.has(normRoomId(s.id)) && !localRoomPatches.has(id) && !localLabelOverrides.has(id)) {
+      continue;
+    }
+    merged.push(s);
+  }
+  return merged.sort(
+    (a, b) => a.sort_order - b.sort_order || a.label.localeCompare(b.label, "nl")
+  );
+}
+async function listSectionRoomsForOverview(sectionId) {
+  if (sectionId === activeSection?.id && rooms.length) {
+    const fetched = await fetchSectionRooms(sectionId);
+    let list2 = mergeRoomsWithLocalPatches(fetched);
+    const byId = new Map(list2.map((r) => [normRoomId(r.id), r]));
+    for (const r of rooms) byId.set(normRoomId(r.id), r);
+    list2 = [...byId.values()].sort(
+      (a, b) => a.sort_order - b.sort_order || a.label.localeCompare(b.label, "nl")
+    );
+    return overlaySectionRoomsSnapshot(sectionId, list2);
+  }
+  let list = mergeRoomsWithLocalPatches(await fetchSectionRooms(sectionId));
+  return overlaySectionRoomsSnapshot(sectionId, list);
+}
+function upsertOptimisticRoom(room) {
+  rooms = [...rooms.filter((r) => normRoomId(r.id) !== normRoomId(room.id)), room];
+  noteLocalRoomPatch(room);
+  markRoomTouched(room.id);
+}
 function noteLocalRoomPatch(room) {
-  const sid = (room.id || "").trim();
+  const sid = normRoomId(room.id);
   if (!sid || !room.points?.length) return;
+  noteLocalLabel(room.id, room.label);
   localRoomPatches.set(sid, {
     at: Date.now(),
     points: room.points.map((p) => ({ ...p })),
@@ -4224,13 +5495,111 @@ function pruneLocalRoomPatches() {
   for (const [id, p] of localRoomPatches) {
     if (now - p.at > LOCAL_ROOM_PATCH_TTL_MS) localRoomPatches.delete(id);
   }
+  for (const [id, at] of localRoomDeletions) {
+    if (now - at > LOCAL_ROOM_PATCH_TTL_MS) localRoomDeletions.delete(id);
+  }
+}
+function normRoomId(id) {
+  return String(id ?? "").trim().toLowerCase();
+}
+function isLocallyDeleted(id) {
+  const k = normRoomId(id);
+  return Boolean(k) && localRoomDeletions.has(k);
+}
+function noteLocalRoomDeletion(id) {
+  const sid = normRoomId(id);
+  if (!sid) return;
+  for (const key of [...localRoomPatches.keys()]) {
+    if (normRoomId(key) === sid) localRoomPatches.delete(key);
+  }
+  localRoomDeletions.set(sid, Date.now());
+}
+function syncPendingLabelToRooms() {
+  if (!pendingRoom) return;
+  const label = roomLabelInput.value.trim();
+  pendingRoom.label = label;
+  if (!pendingRoom.editingId || !label) return;
+  const i = rooms.findIndex((r) => normRoomId(r.id) === normRoomId(pendingRoom.editingId));
+  if (i < 0) return;
+  if (rooms[i].label === label) {
+    noteLocalLabel(rooms[i].id, label);
+    return;
+  }
+  const next = { ...rooms[i], label };
+  rooms[i] = next;
+  noteLocalRoomPatch(next);
+}
+function roomListDisplayLabel(r) {
+  if (pendingRoom?.editingId && normRoomId(pendingRoom.editingId) === normRoomId(r.id)) {
+    const live = (pendingRoom.label || roomLabelInput.value).trim();
+    if (live) return live;
+  }
+  const override = localLabelOverrides.get(normRoomId(r.id));
+  if (override) return override;
+  return r.label || "(zonder label)";
+}
+function dropLocallyDeletedRooms(list) {
+  if (!localRoomDeletions.size) return list;
+  return list.filter((r) => !isLocallyDeleted(r.id));
+}
+function ringsApproxEqual(a, b) {
+  if (!a?.length || !b?.length || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (Math.abs(a[i].x - b[i].x) > 1e-9 || Math.abs(a[i].y - b[i].y) > 1e-9) return false;
+  }
+  return true;
+}
+function localPatchCaughtUp(server, p) {
+  if (!ringsApproxEqual(server.points, p.points)) return false;
+  if ((p.label || "") && (server.label || "") !== (p.label || "")) return false;
+  if (p.vg_nr !== server.vg_nr) return false;
+  if ((p.vr_nr || null) !== (server.vr_nr || null)) return false;
+  const sSeal = readComponentSeal(server.analysis);
+  const pSeal = readComponentSeal(p.analysis);
+  const sOn = Boolean(sSeal?.enabled);
+  const pOn = Boolean(pSeal?.enabled);
+  if (sOn !== pOn) return false;
+  if (pOn) {
+    if ((sSeal?.material_id || "") !== (pSeal?.material_id || "")) return false;
+    if ((sSeal?.catalog_id || "") !== (pSeal?.catalog_id || "")) return false;
+  }
+  const sOri = normalizeOrientatieCode(server.analysis?.orientatie || "");
+  const pOri = normalizeOrientatieCode(p.analysis?.orientatie || "");
+  if (sOri !== pOri) return false;
+  const sMat = String(server.analysis?.material_id || "").trim();
+  const pMat = String(p.analysis?.material_id || "").trim();
+  if (sMat !== pMat) return false;
+  const sCat = String(server.analysis?.catalog_id || "").trim();
+  const pCat = String(p.analysis?.catalog_id || "").trim();
+  if (sCat !== pCat) return false;
+  return true;
+}
+function mergeAnalysisPreferPatch(server, patch) {
+  if (!patch) return server;
+  const merged = { ...server || {}, ...patch };
+  if (!componentSealEnabled(patch)) delete merged.seal;
+  if (Array.isArray(patch.holes)) merged.holes = patch.holes;
+  else if (server?.holes) merged.holes = server.holes;
+  return merged;
 }
 function mergeRoomsWithLocalPatches(incoming) {
   pruneLocalRoomPatches();
-  if (!localRoomPatches.size) return incoming;
-  const out = incoming.map((r) => {
-    const p = localRoomPatches.get(r.id);
+  const visible = dropLocallyDeletedRooms(incoming);
+  if (!localRoomPatches.size) return applyLocalLabelOverrides(visible);
+  const now = Date.now();
+  const out = visible.map((r) => {
+    const p = localRoomPatches.get(r.id) || localRoomPatches.get(normRoomId(r.id));
     if (!p) return r;
+    const age = now - p.at;
+    if (localPatchCaughtUp(r, p)) {
+      localRoomPatches.delete(normRoomId(r.id));
+      return r;
+    }
+    const labelStillStale = Boolean((p.label || "").trim()) && (p.label || "").trim() !== (r.label || "").trim();
+    if (age > LOCAL_ROOM_PATCH_TTL_MS && !labelStillStale) {
+      localRoomPatches.delete(normRoomId(r.id));
+      return r;
+    }
     return {
       ...r,
       points: p.points.map((pt) => ({ ...pt })),
@@ -4238,21 +5607,29 @@ function mergeRoomsWithLocalPatches(incoming) {
       level_hint: p.level_hint || r.level_hint,
       vg_nr: p.vg_nr,
       vr_nr: p.vr_nr,
-      area_m2: p.area_m2 != null ? p.area_m2 : r.area_m2,
-      area_norm: p.area_norm != null ? p.area_norm : r.area_norm,
-      perimeter_m: p.perimeter_m != null ? p.perimeter_m : r.perimeter_m,
-      analysis: p.analysis ? {
-        ...r.analysis || {},
-        ...p.analysis,
-        holes: Array.isArray(p.analysis.holes) ? p.analysis.holes : r.analysis?.holes
-      } : r.analysis
+      area_m2: r.area_m2 != null ? r.area_m2 : p.area_m2,
+      area_norm: r.area_norm != null ? r.area_norm : p.area_norm,
+      perimeter_m: r.perimeter_m != null ? r.perimeter_m : p.perimeter_m,
+      metres_per_norm_unit: r.metres_per_norm_unit != null && r.metres_per_norm_unit > 0 ? r.metres_per_norm_unit : activeScaleMpu(),
+      analysis: mergeAnalysisPreferPatch(r.analysis, p.analysis)
     };
   });
+  const activeId = activeSection?.id || "";
   for (const [id, p] of localRoomPatches) {
-    if (out.some((r) => r.id === id)) continue;
+    if (isLocallyDeleted(id)) continue;
+    const touched = touchedRoomIds.has(normRoomId(id));
+    if (now - p.at > LOCAL_ROOM_PATCH_READD_MS && !touched) {
+      localRoomPatches.delete(normRoomId(id));
+      continue;
+    }
+    if (out.some((r) => normRoomId(r.id) === normRoomId(id))) continue;
+    if (!activeId) {
+      localRoomPatches.delete(normRoomId(id));
+      continue;
+    }
     out.push({
       id,
-      section_id: activeSection?.id || "",
+      section_id: activeId,
       label: p.label,
       level_hint: p.level_hint,
       vg_nr: p.vg_nr,
@@ -4268,7 +5645,7 @@ function mergeRoomsWithLocalPatches(incoming) {
       analysis: p.analysis ?? null
     });
   }
-  return out;
+  return applyLocalLabelOverrides(out);
 }
 var selectedSetIds = /* @__PURE__ */ new Set();
 var constituentSigns = /* @__PURE__ */ new Map();
@@ -4289,14 +5666,18 @@ var kierMaterialsLoaded = false;
 var materialFilterTimer = null;
 var linkedRooms = /* @__PURE__ */ new Map();
 var TOUCHED_ROOMS_KEY = "app-gevelwering-touched-rooms";
+var LABEL_OVERRIDES_KEY = "app-gevelwering-label-overrides";
 var touchedRoomIds = loadTouchedRoomIds();
+var localLabelOverrides = loadLabelOverrides();
 function loadTouchedRoomIds() {
   try {
     const raw = sessionStorage.getItem(TOUCHED_ROOMS_KEY);
     if (!raw) return /* @__PURE__ */ new Set();
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return /* @__PURE__ */ new Set();
-    return new Set(arr.filter((x) => typeof x === "string" && x.length > 0));
+    return new Set(
+      arr.filter((x) => typeof x === "string" && x.length > 0).map((x) => normRoomId(x)).filter(Boolean)
+    );
   } catch {
     return /* @__PURE__ */ new Set();
   }
@@ -4307,8 +5688,59 @@ function persistTouchedRoomIds() {
   } catch {
   }
 }
+function loadLabelOverrides() {
+  try {
+    const raw = sessionStorage.getItem(LABEL_OVERRIDES_KEY);
+    if (!raw) return /* @__PURE__ */ new Map();
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return /* @__PURE__ */ new Map();
+    const out = /* @__PURE__ */ new Map();
+    for (const [k, v] of Object.entries(obj)) {
+      const id = normRoomId(k);
+      const label = typeof v === "string" ? v.trim() : "";
+      if (id && label) out.set(id, label);
+    }
+    return out;
+  } catch {
+    return /* @__PURE__ */ new Map();
+  }
+}
+function persistLabelOverrides() {
+  try {
+    sessionStorage.setItem(
+      LABEL_OVERRIDES_KEY,
+      JSON.stringify(Object.fromEntries(localLabelOverrides))
+    );
+  } catch {
+  }
+}
+function noteLocalLabel(id, label) {
+  const sid = normRoomId(id);
+  const text = (label || "").trim();
+  if (!sid || !text) return;
+  if (localLabelOverrides.get(sid) === text) return;
+  localLabelOverrides.set(sid, text);
+  persistLabelOverrides();
+}
+function applyLocalLabelOverrides(list) {
+  if (!localLabelOverrides.size) return list;
+  let changed = false;
+  const out = list.map((r) => {
+    const sid = normRoomId(r.id);
+    const want = localLabelOverrides.get(sid);
+    if (!want) return r;
+    if ((r.label || "").trim() === want) {
+      localLabelOverrides.delete(sid);
+      changed = true;
+      return r;
+    }
+    return { ...r, label: want };
+  });
+  if (changed) persistLabelOverrides();
+  return out;
+}
 function markRoomTouched(id) {
-  const sid = (id || "").trim();
+  const sid = normRoomId(id);
   if (!sid || touchedRoomIds.has(sid)) return;
   touchedRoomIds.add(sid);
   persistTouchedRoomIds();
@@ -4340,12 +5772,12 @@ async function loadPdfDocumentCached(documentId) {
   ensurePdfjsWorker();
   const cached = pdfDocByDocumentId.get(documentId);
   if (cached) return cached;
-  let pending2 = pdfDocLoadPromises.get(documentId);
-  if (!pending2) {
-    pending2 = (async () => {
+  let pending = pdfDocLoadPromises.get(documentId);
+  if (!pending) {
+    pending = (async () => {
       const res = await fetch(`/api/drawings/download?document_id=${encodeURIComponent(documentId)}`, {
         credentials: "include",
-        headers: apiAuthHeaders(auth.token)
+        headers: apiAuthHeaders(auth().token)
       });
       if (!res.ok) throw new Error(`PDF laden mislukt (HTTP ${res.status})`);
       const buf = await res.arrayBuffer();
@@ -4354,19 +5786,21 @@ async function loadPdfDocumentCached(documentId) {
       pdfDocLoadPromises.delete(documentId);
       return doc;
     })();
-    pdfDocLoadPromises.set(documentId, pending2);
+    pdfDocLoadPromises.set(documentId, pending);
   }
-  return pending2;
+  return pending;
 }
 async function sectionThumbnailDataUrl(sec) {
   const hit = sectionThumbUrlCache.get(sec.id);
   if (hit) return hit;
-  if (!auth?.token) return null;
+  if (!auth()?.token) return null;
   try {
     const pdf = await loadPdfDocumentCached(sec.document_id);
     const pageNum = Math.min(pdf.numPages, Math.max(1, sec.page_index + 1));
     const page = await pdf.getPage(pageNum);
-    const rotation = typeof page.rotate === "number" ? page.rotate : 0;
+    const pageRotate = typeof page.rotate === "number" ? page.rotate : 0;
+    const viewRotate = Number(sec.view_rotate) || 0;
+    const rotation = (pageRotate + viewRotate) % 360;
     const baseVp = page.getViewport({ scale: 1, rotation });
     const cropWNorm = Math.max(1e-3, sec.x_max - sec.x_min);
     const cropPxW = cropWNorm * baseVp.width;
@@ -4462,28 +5896,13 @@ function setConnLed(connected) {
   connLedEl.classList.toggle("connected", connected);
   connLedEl.classList.toggle("disconnected", !connected);
 }
-function nextRequestId(prefix) {
-  reqCounter += 1;
-  return `${prefix}_${reqCounter}_${Date.now()}`;
-}
-function storeAuth2(info) {
-  storeAuth(AUTH_KEY, info);
-  void syncSessionCookie(info?.token ?? null);
-}
-function loadStoredAuth() {
-  return loadAuth(AUTH_KEY);
-}
 function showLogin() {
-  auth = null;
-  storeAuth2(null);
   loginPanelEl.classList.remove("hidden");
   panelEl.classList.add("hidden");
   if (fileMenuRoot) fileMenuRoot.hidden = true;
   projectMenu?.setEnabled(false);
 }
 function showPanel(info) {
-  auth = info;
-  storeAuth2(info);
   loginPanelEl.classList.add("hidden");
   panelEl.classList.remove("hidden");
   userLabelEl.textContent = `Ingelogd als ${info.display_name || info.username}`;
@@ -4491,14 +5910,37 @@ function showPanel(info) {
   projectMenu?.setEnabled(true);
   projectMenu?.refreshTitle();
 }
+var session = new BppSession({
+  wsUrl: resolveBppWsUrl(),
+  authKey: AUTH_KEY,
+  clientName: "app-gevelwering-floormap",
+  callbacks: {
+    onStatus: setStatus,
+    onConnLed: setConnLed,
+    onLogin: (info) => showPanel(info),
+    onLogout: () => showLogin(),
+    onReady: async () => {
+      if (session.auth) {
+        buildingInput.value = buildingId;
+        if (buildingId) await loadFloormapSections(buildingId);
+      }
+    }
+  }
+});
+function invokeString(target, args) {
+  return session.invokeString(target, args);
+}
+function auth() {
+  return session.auth;
+}
 async function refreshBuildingMeta() {
-  if (!auth?.token || !buildingId) {
+  if (!auth()?.token || !buildingId) {
     buildingLabel = "";
     buildingExternalRef = "";
     return;
   }
   try {
-    const ret = await invokeString("API_EngineerGetProject", [auth.token, buildingId]);
+    const ret = await invokeString("API_EngineerGetProject", [auth().token, buildingId]);
     if (ret.startsWith("ERROR")) return;
     const data = JSON.parse(ret);
     buildingLabel = data.label || "";
@@ -4506,79 +5948,13 @@ async function refreshBuildingMeta() {
   } catch {
   }
 }
-function send(type, payload, wantType) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    return Promise.reject(new Error("WebSocket niet open"));
-  }
-  const request_id = nextRequestId(type.replace(".", "_"));
-  const env = { v: 1, type, request_id, payload };
-  if (sessionId && type !== "session.open") env.session_id = sessionId;
-  return new Promise((resolve, reject) => {
-    pending.set(request_id, { resolve, reject, want: wantType });
-    ws.send(JSON.stringify(env));
-  });
-}
-function onMessage(raw) {
-  let env;
-  try {
-    env = JSON.parse(raw);
-  } catch {
-    return;
-  }
-  if (env.type === "session.opened") {
-    const sid = typeof env.session_id === "string" && env.session_id || (typeof env.payload?.session_id === "string" ? env.payload.session_id : null);
-    if (sid) sessionId = sid;
-  }
-  if (env.type === "error") {
-    const waiter2 = pending.get(env.request_id);
-    if (waiter2) {
-      pending.delete(env.request_id);
-      waiter2.reject(new Error(JSON.stringify(env.payload ?? env)));
-    }
-    return;
-  }
-  const waiter = pending.get(env.request_id);
-  if (!waiter) return;
-  if (env.type === waiter.want || env.type.endsWith(".completed") || env.type === "exec.completed") {
-    if (env.type === "invoke.accepted" || env.type === "exec.accepted") return;
-    pending.delete(env.request_id);
-    waiter.resolve(env);
-  }
-}
-async function invokeString(target, args) {
-  const inv = await send("invoke.request", { target_kind: "procedure", target, args }, "invoke.completed");
-  const ret = inv.payload?.return;
-  if (typeof ret !== "string") throw new Error(`Onverwacht antwoord van ${target}`);
-  return ret;
-}
-async function loadSharedApi() {
-  await send(
-    "exec.request",
-    { code: 'INCLUDE "fixtures/app-gevelwering/shared_building_api.basicpp"\n' },
-    "exec.completed"
-  );
-  const bootRet = await invokeString("API_Bootstrap", []);
-  if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap failed: ${bootRet}`);
-}
-async function bootstrapAndLogin(username, password) {
-  await loadSharedApi();
-  const ret = await invokeString("API_Login", [username, password]);
-  if (ret.startsWith("ERROR")) throw new Error(ret);
-  const parsed = JSON.parse(ret);
-  if (!parsed.ok || !parsed.token) throw new Error("Inloggen mislukt");
-  showPanel({
-    token: parsed.token,
-    username: parsed.username || username,
-    display_name: parsed.display_name || username
-  });
-}
 function authHeaders() {
-  return apiAuthHeaders(auth.token, true);
+  return apiAuthHeaders(auth().token, true);
 }
 async function apiGet(url) {
   const res = await fetch(url, {
     credentials: "include",
-    headers: apiAuthHeaders(auth.token)
+    headers: apiAuthHeaders(auth().token)
   });
   const body = await res.json();
   if (!res.ok || body.ok === false) {
@@ -4586,14 +5962,43 @@ async function apiGet(url) {
   }
   return body;
 }
-async function apiPost(url, payload) {
-  const res = await fetch(url, {
-    method: "POST",
-    credentials: "include",
-    headers: authHeaders(),
-    body: JSON.stringify(payload)
-  });
-  const body = await res.json();
+async function readJsonResponse(res) {
+  const text = await res.text();
+  if (!text.trim()) {
+    throw new Error(`HTTP ${res.status}: lege response (herstart Node serve.mjs?)`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    const snippet = text.replace(/\s+/g, " ").slice(0, 120);
+    throw new Error(`HTTP ${res.status}: geen JSON (${snippet})`);
+  }
+}
+async function apiPost(url, payload, opts) {
+  const timeoutMs = opts?.timeoutMs ?? 0;
+  const signal = timeoutMs > 0 && typeof AbortSignal !== "undefined" && "timeout" in AbortSignal ? AbortSignal.timeout(timeoutMs) : void 0;
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+      headers: authHeaders(),
+      body: JSON.stringify(payload),
+      signal
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (err instanceof TypeError || /networkerror|failed to fetch|load failed|network request failed/i.test(msg)) {
+      throw new Error(
+        "Node-server niet bereikbaar (poort 4173) \u2014 herstart ./start.sh en controleer of serve.mjs draait"
+      );
+    }
+    if (err instanceof DOMException && err.name === "TimeoutError") {
+      throw new Error("Server discover-time-out (>3 min) \u2014 PDF render duurt te lang");
+    }
+    throw err;
+  }
+  const body = await readJsonResponse(res);
   if (!res.ok || body.ok === false) {
     throw new Error(body.error || `HTTP ${res.status}`);
   }
@@ -4603,7 +6008,7 @@ async function apiDelete(url) {
   const res = await fetch(url, {
     method: "DELETE",
     credentials: "include",
-    headers: apiAuthHeaders(auth.token)
+    headers: apiAuthHeaders(auth().token)
   });
   const body = await res.json();
   if (!res.ok || body.ok === false) {
@@ -4719,7 +6124,7 @@ function updateToolHint() {
     return;
   }
   if (pendingRoom?.drawing && !pendingRoom.closed) {
-    toolHintEl.textContent = pendingRoom.points.length === 0 ? `Klik hoeken van de ${n.singular}. Omtrek wordt onderweg bijgewerkt; oppervlakte vanaf 3 punten.` : `${pendingRoom.points.length} hoekpunt(en). Sluit polygoon (\u22653) of klik bij het startpunt.`;
+    toolHintEl.textContent = pendingRoom.points.length === 0 ? `Klik hoeken van de ${n.singular}. Omtrek wordt onderweg bijgewerkt; oppervlakte vanaf 3 punten.` : `${pendingRoom.points.length} hoekpunt(en). Beweeg naar het startkruis (groen) en klik om te sluiten.`;
     return;
   }
   if (pendingRoom?.closed) {
@@ -4803,9 +6208,234 @@ function sectionKindOrder(kind) {
       return 9;
   }
 }
+function dominantLevelHint(roomsList, sectionLabel) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const r of roomsList) {
+    const h = String(r.level_hint || "").toUpperCase();
+    if (!h || h === "OTHER") continue;
+    counts.set(h, (counts.get(h) || 0) + 1);
+  }
+  let best = "";
+  let bestN = 0;
+  for (const [h, n] of counts) {
+    if (n > bestN) {
+      best = h;
+      bestN = n;
+    }
+  }
+  if (best) return best;
+  return inferLevelHintFromLabel(sectionLabel) || "OTHER";
+}
+function compareVrForOverview(a, b) {
+  try {
+    return compareVrNr(a, b);
+  } catch {
+    return a.localeCompare(b, "nl", { numeric: true, sensitivity: "base" });
+  }
+}
+var lastVgVrOverviewFloors = [];
+function vgVrOverviewSummaryText(floors) {
+  const nVr = floors.reduce((sum, f) => sum + f.rooms.length, 0);
+  const vgSet = /* @__PURE__ */ new Set();
+  for (const f of floors) {
+    for (const r of f.rooms) vgSet.add(r.vg);
+  }
+  const nVg = vgSet.size;
+  const vrLabel = nVr === 1 ? "toegekende verblijfsruimte" : "toegekende verblijfsruimten";
+  const vgLabel = nVg === 1 ? "verblijfsgebied" : "verblijfsgebieden";
+  return `${nVr} ${vrLabel} in ${nVg} ${vgLabel}.`;
+}
+function formatVgVrOverviewClipboard(floors) {
+  const title = buildingLabel || buildingExternalRef || buildingId || "Project";
+  const lines = [`VG/VR \u2014 ${title}`, vgVrOverviewSummaryText(floors), ""];
+  const withRooms = floors.filter((f) => f.rooms.length > 0);
+  const empty = floors.filter((f) => f.rooms.length === 0);
+  if (!withRooms.length) {
+    lines.push(floors.length ? "Nog geen VG/VR toegekend op plattegronden." : "Geen plattegronden in dit project.");
+    return lines.join("\n").trimEnd() + "\n";
+  }
+  for (const floor of withRooms) {
+    lines.push(`${levelLabel(floor.levelHint)} \u2014 ${floor.sectionLabel}`);
+    lines.push("VG	VR	Ruimte");
+    for (const r of floor.rooms) {
+      lines.push(`${r.vg}	${r.vr}	${r.label}`);
+    }
+    lines.push("");
+  }
+  if (empty.length) {
+    lines.push("Zonder VG/VR");
+    for (const floor of empty) {
+      lines.push(`- ${levelLabel(floor.levelHint)} \u2014 ${floor.sectionLabel}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n").trimEnd() + "\n";
+}
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  const ok = document.execCommand("copy");
+  ta.remove();
+  if (!ok) throw new Error("Clipboard niet beschikbaar");
+}
+async function copyVgVrOverviewToClipboard() {
+  if (!lastVgVrOverviewFloors.length && !sections.some((s) => isFloormapKind(s.region_kind))) {
+    setStatus("Geen VG/VR-overzicht om te kopi\xEBren", "err");
+    return;
+  }
+  try {
+    await copyTextToClipboard(formatVgVrOverviewClipboard(lastVgVrOverviewFloors));
+    setStatus("VG/VR-overzicht gekopieerd naar clipboard", "ok");
+    if (vgVrOverviewCopyBtn) {
+      const prev = vgVrOverviewCopyBtn.textContent;
+      vgVrOverviewCopyBtn.textContent = "Gekopieerd";
+      window.setTimeout(() => {
+        if (vgVrOverviewCopyBtn) vgVrOverviewCopyBtn.textContent = prev || "Naar clipboard";
+      }, 1400);
+    }
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+  }
+}
+async function buildVgVrOverview() {
+  const floors = [];
+  for (const s of sections) {
+    if (!isFloormapKind(s.region_kind)) continue;
+    const list = await listSectionRoomsForOverview(s.id);
+    const assigned = [];
+    for (const r of list) {
+      if (r.vg_nr == null || !normalizeVrNr(r.vr_nr)) continue;
+      if (componentIsLengthQuantity(r) || isComposeResultRoom(r)) continue;
+      assigned.push({
+        vg: Number(r.vg_nr),
+        vr: normalizeVrNr(r.vr_nr),
+        label: (r.label || "").trim() || "\u2014"
+      });
+    }
+    assigned.sort(
+      (a, b) => a.vg - b.vg || compareVrForOverview(a.vr, b.vr) || a.label.localeCompare(b.label, "nl")
+    );
+    floors.push({
+      sectionId: s.id,
+      sectionLabel: s.label || "Plattegrond",
+      levelHint: dominantLevelHint(list, s.label || ""),
+      pageIndex: s.page_index,
+      rooms: assigned
+    });
+  }
+  floors.sort(
+    (a, b) => levelSortRank(a.levelHint) - levelSortRank(b.levelHint) || a.pageIndex - b.pageIndex || a.sectionLabel.localeCompare(b.sectionLabel, "nl")
+  );
+  return floors;
+}
+function renderVgVrOverviewBody(floors) {
+  if (!vgVrOverviewBodyEl) return;
+  vgVrOverviewBodyEl.replaceChildren();
+  const withRooms = floors.filter((f) => f.rooms.length > 0);
+  const empty = floors.filter((f) => f.rooms.length === 0);
+  if (!withRooms.length && !empty.length) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "Geen plattegronden in dit project.";
+    vgVrOverviewBodyEl.appendChild(p);
+    return;
+  }
+  if (!withRooms.length) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "Nog geen VG/VR toegekend op plattegronden.";
+    vgVrOverviewBodyEl.appendChild(p);
+  }
+  for (const floor of withRooms) {
+    const block = document.createElement("section");
+    block.className = "fm-vgvr-floor";
+    const h = document.createElement("h3");
+    h.textContent = `${levelLabel(floor.levelHint)} \u2014 ${floor.sectionLabel}`;
+    block.appendChild(h);
+    const meta = document.createElement("p");
+    meta.className = "hint";
+    meta.textContent = `${floor.rooms.length} ruimte(n) met VG/VR \xB7 pagina ${floor.pageIndex + 1}`;
+    block.appendChild(meta);
+    const table = document.createElement("table");
+    table.className = "fm-vgvr-table";
+    table.innerHTML = "<thead><tr><th>VG</th><th>VR</th><th>Ruimte</th></tr></thead>";
+    const tbody = document.createElement("tbody");
+    for (const r of floor.rooms) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${r.vg}</td><td>${r.vr}</td><td></td>`;
+      const tdLabel = tr.cells[2];
+      tdLabel.textContent = r.label;
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    block.appendChild(table);
+    vgVrOverviewBodyEl.appendChild(block);
+  }
+  if (empty.length) {
+    const block = document.createElement("section");
+    block.className = "fm-vgvr-floor";
+    const h = document.createElement("h3");
+    h.textContent = "Zonder VG/VR";
+    block.appendChild(h);
+    const ul = document.createElement("ul");
+    ul.className = "hint";
+    ul.style.margin = "0";
+    ul.style.paddingLeft = "1.1rem";
+    for (const floor of empty) {
+      const li = document.createElement("li");
+      li.textContent = `${levelLabel(floor.levelHint)} \u2014 ${floor.sectionLabel}`;
+      ul.appendChild(li);
+    }
+    block.appendChild(ul);
+    vgVrOverviewBodyEl.appendChild(block);
+  }
+}
+async function openVgVrOverview() {
+  if (!vgVrOverviewDialog || !auth()?.token) {
+    setStatus("Open eerst een project", "err");
+    return;
+  }
+  if (!sections.some((s) => isFloormapKind(s.region_kind))) {
+    setStatus("Geen plattegronden in dit project", "err");
+    return;
+  }
+  if (vgVrOverviewBtn) vgVrOverviewBtn.disabled = true;
+  setStatus("VG/VR-overzicht laden\u2026", "busy");
+  try {
+    const floors = await buildVgVrOverview();
+    lastVgVrOverviewFloors = floors;
+    const title = buildingLabel || buildingExternalRef || buildingId || "Project";
+    if (vgVrOverviewTitleEl) vgVrOverviewTitleEl.textContent = `VG/VR \u2014 ${title}`;
+    if (vgVrOverviewMetaEl) {
+      vgVrOverviewMetaEl.textContent = vgVrOverviewSummaryText(floors);
+    }
+    if (vgVrOverviewCopyBtn) {
+      vgVrOverviewCopyBtn.disabled = floors.every((f) => f.rooms.length === 0);
+    }
+    renderVgVrOverviewBody(floors);
+    if (!vgVrOverviewDialog.open) vgVrOverviewDialog.showModal();
+    setStatus("VG/VR-overzicht klaar", "ok");
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+  } finally {
+    if (vgVrOverviewBtn) vgVrOverviewBtn.disabled = false;
+  }
+}
 function renderSectionList() {
   sectionListEl.innerHTML = "";
   sectionListEl.className = "fm-section-picker";
+  if (vgVrOverviewBtn) {
+    vgVrOverviewBtn.disabled = !sections.some((s) => isFloormapKind(s.region_kind));
+  }
   if (sections.length === 0) {
     sectionListEl.innerHTML = `<p class="hint">Geen schaalbare secties (plattegrond / gevel / doorsnede) voor dit project.</p>`;
     return;
@@ -4893,6 +6523,10 @@ function existingSealFor(parentId) {
   if (!parentId) return void 0;
   return rooms.find((r) => (r.analysis?.seal_for_subsection_id || "") === parentId);
 }
+function componentHasSeal(r) {
+  if (componentSealEnabled(r.analysis)) return true;
+  return Boolean(existingSealFor(r.id));
+}
 function renderKierMaterialOptions(selectedId) {
   if (!kierSuggestMatEl) return;
   const keep = selectedId ?? kierSuggestMatEl.value;
@@ -4925,12 +6559,12 @@ function renderKierMaterialOptions(selectedId) {
   }
 }
 async function ensureKierMaterials() {
-  if (!auth?.token || kierMaterialsLoaded) {
+  if (!auth()?.token || kierMaterialsLoaded) {
     renderKierMaterialOptions();
     return;
   }
   try {
-    const data = bppPhase1Enabled() ? await bppListMaterials(invokeString, auth.token, {
+    const data = bppPhase1Enabled() ? await bppListMaterials(invokeString, auth().token, {
       master_category: KIER_RUBRIEK_NAME,
       limit: 1e3
     }) : await apiGet(
@@ -4938,7 +6572,7 @@ async function ensureKierMaterials() {
     );
     kierMaterials = data.materials || [];
     if (!kierMaterials.some((m) => (m.catalog_id || "") === DEFAULT_KIER_CATALOG_ID)) {
-      const extra = bppPhase1Enabled() ? await bppListMaterials(invokeString, auth.token, {
+      const extra = bppPhase1Enabled() ? await bppListMaterials(invokeString, auth().token, {
         q: DEFAULT_KIER_CATALOG_ID,
         limit: 20
       }) : await apiGet(
@@ -4973,16 +6607,23 @@ function sumSealLengthsForType(materialKey) {
   if (!materialKey) return 0;
   let sum = 0;
   for (const r of rooms) {
-    if (!componentIsLengthQuantity(r)) continue;
-    if (sealMaterialKey(r.analysis) !== materialKey) continue;
+    if (isLegacySealSibling(r.analysis)) {
+      if (sealMaterialKey(r.analysis) !== materialKey) continue;
+      if (r.analysis?.length_m != null && Number.isFinite(r.analysis.length_m)) {
+        sum += Number(r.analysis.length_m);
+      }
+      continue;
+    }
+    const seal = readComponentSeal(r.analysis);
+    if (!seal?.enabled) continue;
+    if (sealMaterialKeyFromSeal(seal) !== materialKey) continue;
     const live = pendingRoom?.editingId === r.id ? pendingRoom : null;
     const pts = live ? live.points : r.points;
-    const closed = live ? live.closed : !r.analysis?.open_path;
     const mpu = r.metres_per_norm_unit != null && r.metres_per_norm_unit > 0 ? r.metres_per_norm_unit : activeScaleMpu();
-    if (pts?.length >= 2 && mpu) {
-      sum += scaledPathLength(pts, mpu, activeScaleAspect(), closed);
-    } else if (r.analysis?.length_m != null && Number.isFinite(r.analysis.length_m)) {
-      sum += Number(r.analysis.length_m);
+    if (pts?.length >= 3 && mpu) {
+      sum += scaledPathLength(pts, mpu, activeScaleAspect(), true);
+    } else if (seal.length_m != null && Number.isFinite(seal.length_m)) {
+      sum += Number(seal.length_m);
     }
   }
   return Math.round(sum * 100) / 100;
@@ -4990,168 +6631,180 @@ function sumSealLengthsForType(materialKey) {
 function syncKierSuggestUi() {
   if (!kierSuggestEl) return;
   const editing = pendingRoom?.editingId ? rooms.find((r) => r.id === pendingRoom.editingId) : void 0;
-  const closedArea = Boolean(pendingRoom?.closed && pendingRoom.points.length >= 3) && !selectedIsKierdichting() && !(editing && componentIsLengthQuantity(editing));
+  const closedArea = Boolean(pendingRoom?.closed && pendingRoom.points.length >= 3) && !selectedIsKierdichting() && !(editing && componentIsLengthQuantity(editing)) && !(editing && isLegacySealSibling(editing.analysis));
   const show = !isFloormapKind() && closedArea;
   kierSuggestEl.classList.toggle("hidden", !show);
   if (!show) return;
   void ensureKierMaterials();
   const peri = pendingRoom ? perimeterMOfRing(pendingRoom.points) : null;
-  const existing = editing ? existingSealFor(editing.id) : void 0;
+  const hasSeal = editing ? componentHasSeal(editing) : false;
+  const sealAttr = editing ? readComponentSeal(editing.analysis) : null;
   const setSelected = Boolean(editing && selectedSetIds.has(editing.id));
+  const canToggle = Boolean(editing && (setSelected || pendingRoom?.editingId === editing.id));
   if (kierSuggestCb && !kierToggleInFlight) {
-    kierSuggestCb.checked = Boolean(existing);
-    kierSuggestCb.disabled = !setSelected && !existing;
-    kierSuggestCb.title = setSelected ? "Kierdichting voor dit vlak" : existing ? "Uitvinken verwijdert de kierdichting" : "Vink eerst het component aan in de lijst (selectie) om kierdichting toe te voegen";
+    kierSuggestCb.checked = hasSeal;
+    kierSuggestCb.disabled = !canToggle && !hasSeal;
+    kierSuggestCb.title = canToggle ? "Kierdichting (omtrek) voor dit component \u2014 meestal op een samengesteld \xB1-resultaat" : hasSeal ? "Uitvinken zet kierdichting uit" : "Open of selecteer het component om kierdichting aan/uit te zetten";
     delete kierSuggestCb.dataset.userTouched;
-    if (existing?.analysis?.material_id) {
-      renderKierMaterialOptions(existing.analysis.material_id);
-    }
+    const mid = sealAttr?.material_id || existingSealFor(editing?.id || "")?.analysis?.material_id;
+    if (mid) renderKierMaterialOptions(mid);
   }
   if (kierSuggestHintEl) {
     const periBit = peri != null ? ` Omtrek \u2248 ${peri.toFixed(2)} m.` : " Zet eerst de schaal voor een omtrek in meters.";
-    const mat = resolveKierSuggestMaterial(existing?.analysis?.material_id);
+    const mat = resolveKierSuggestMaterial(sealAttr?.material_id);
     const key = mat ? sealMaterialKey({
       material_id: mat.material_id,
       catalog_id: mat.catalog_id
-    }) : sealMaterialKey(existing?.analysis);
+    }) : sealMaterialKeyFromSeal(sealAttr);
     const typeSum = key ? sumSealLengthsForType(key) : 0;
     const typeBit = typeSum > 0 ? ` Totaal ${mat?.catalog_id || DEFAULT_KIER_CATALOG_ID} \u2248 ${typeSum.toFixed(2)} m.` : "";
-    if (existing) {
-      kierSuggestHintEl.textContent = `Al toegevoegd \u2014 vink uit om te verwijderen. Opslaan werkt de omtreklengte bij.${periBit}${typeBit}`;
-    } else if (!setSelected) {
-      kierSuggestHintEl.textContent = `Vink eerst het component aan in de lijst (selectie voor +/\u2212) om kierdichting te kunnen toevoegen.${periBit}`;
+    const composeHint = editing && !isComposeResultRoom(editing) ? " Meestal op een samengesteld (\xB1) component." : "";
+    if (hasSeal) {
+      kierSuggestHintEl.textContent = `Kierdichting aan \u2014 vink uit om uit te zetten. Opslaan werkt de omtreklengte bij.${periBit}${typeBit}${composeHint}`;
+    } else if (!canToggle) {
+      kierSuggestHintEl.textContent = `Open of selecteer het component om kierdichting (omtrek) aan te zetten.${periBit}${composeHint}`;
     } else {
-      kierSuggestHintEl.textContent = `Optioneel. Standaard ${DEFAULT_KIER_CATALOG_ID}. Bij aanvinken: extra component met de omtreklengte; lengtes van hetzelfde type worden opgeteld.${periBit}${typeBit}`;
+      kierSuggestHintEl.textContent = `Optioneel kenmerk. Standaard ${DEFAULT_KIER_CATALOG_ID}. Lengtes van hetzelfde type worden opgeteld.${periBit}${typeBit}${composeHint}`;
     }
   }
 }
-async function upsertPerimeterSeal(parentId, points, parentLabel, vgNr, vrNr, level, material) {
-  if (!activeSection || !auth) return null;
-  await ensureKierMaterials();
-  const mat = material || resolveKierSuggestMaterial();
-  if (!mat) {
-    throw new Error(`Kierdichtingsmateriaal ${DEFAULT_KIER_CATALOG_ID} niet gevonden in de catalogus`);
+async function saveComponentSealAttribute(room, want, material) {
+  if (!activeSection || !auth()) {
+    throw new Error("Geen actieve sectie");
   }
-  const ring = closeRing(points);
-  const mpu = activeScaleMpu();
-  const lengthM = perimeterMOfRing(ring);
-  const existing = existingSealFor(parentId);
-  const label = `Kierdichting \xB7 ${parentLabel || "vlak"}`;
-  const analysis = {
-    material_id: mat.material_id,
-    master_category: mat.master_category,
-    material_name: mat.name,
-    catalog_id: mat.catalog_id,
-    category: mat.category || void 0,
-    rubriek_nr: mat.rubriek_nr ?? 9,
-    quantity_kind: "length",
-    open_path: false,
-    seal_for_subsection_id: parentId
-  };
-  if (lengthM != null) analysis.length_m = lengthM;
+  const lengthM = perimeterMOfRing(room.points);
+  let mat = null;
+  let seal;
+  if (want) {
+    await ensureKierMaterials();
+    mat = material || resolveKierSuggestMaterial();
+    if (!mat) {
+      throw new Error(`Kierdichtingsmateriaal ${DEFAULT_KIER_CATALOG_ID} niet gevonden in de catalogus`);
+    }
+    seal = buildSealPayload(mat, lengthM, true);
+  } else {
+    seal = clearSealPayload();
+  }
+  const wasOn = componentHasSeal(room);
+  const analysis = mergeAnalysisWithSeal(room.analysis, want ? seal : null);
   const saved = await saveDrawingSubsection({
     section_id: activeSection.id,
-    subsection_id: existing?.id || void 0,
-    label: existing?.label || label,
-    level_hint: level || "OTHER",
-    vg_nr: vgNr,
-    vr_nr: vrNr,
-    points: ring,
-    holes: [],
-    metres_per_norm_unit: mpu ?? void 0,
+    subsection_id: room.id,
+    label: room.label,
+    level_hint: room.level_hint || "OTHER",
+    vg_nr: room.vg_nr,
+    vr_nr: room.vr_nr,
+    points: room.points,
+    holes: Array.isArray(room.analysis?.holes) ? room.analysis.holes : [],
+    metres_per_norm_unit: room.metres_per_norm_unit ?? activeScaleMpu() ?? void 0,
     scale_aspect_yx: activeScaleAspect(),
     analysis
   });
-  markRoomTouched(saved.subsection_id);
-  const len = saved.analysis?.length_m != null ? Number(saved.analysis.length_m) : lengthM;
+  markRoomTouched(room.id);
+  const idx = rooms.findIndex((r) => r.id === room.id);
+  if (idx >= 0) {
+    const nextAnalysis = {
+      ...rooms[idx].analysis || {},
+      ...saved.analysis || {},
+      ...analysis
+    };
+    if (!want) delete nextAnalysis.seal;
+    rooms[idx] = {
+      ...rooms[idx],
+      analysis: nextAnalysis
+    };
+    noteLocalRoomPatch(rooms[idx]);
+  }
+  const legacy = existingSealFor(room.id);
+  if (legacy) {
+    try {
+      await deleteDrawingSubsection(legacy.id);
+      noteLocalRoomDeletion(legacy.id);
+      rooms = rooms.filter((r) => r.id !== legacy.id);
+      selectedSetIds.delete(legacy.id);
+      constituentSigns.delete(legacy.id);
+    } catch (err) {
+      console.warn("legacy seal cleanup failed", err);
+    }
+  }
   return {
-    length_m: len != null && Number.isFinite(len) ? len : null,
-    created: !existing,
+    length_m: want ? lengthM : null,
+    created: want && !wasOn,
     material: mat
   };
 }
 async function removeSealForParent(parentId) {
-  const seal = existingSealFor(parentId);
-  if (!seal) return false;
-  await deleteDrawingSubsection(seal.id);
-  if (pendingRoom?.editingId === seal.id) clearPendingRoom();
-  if (touchedRoomIds.delete(seal.id)) persistTouchedRoomIds();
-  selectedSetIds.delete(seal.id);
-  constituentSigns.delete(seal.id);
+  const room = rooms.find((r) => r.id === parentId);
+  if (!room) {
+    const seal = existingSealFor(parentId);
+    if (!seal) return false;
+    await deleteDrawingSubsection(seal.id);
+    if (pendingRoom?.editingId === seal.id) clearPendingRoom();
+    if (touchedRoomIds.delete(seal.id)) persistTouchedRoomIds();
+    selectedSetIds.delete(seal.id);
+    constituentSigns.delete(seal.id);
+    noteLocalRoomDeletion(seal.id);
+    rooms = rooms.filter((r) => r.id !== seal.id);
+    return true;
+  }
+  if (!componentHasSeal(room) && !existingSealFor(parentId)) return false;
+  await saveComponentSealAttribute(room, false);
   return true;
 }
 async function toggleKierSealForRoom(room, want) {
-  if (isFloormapKind() || componentIsLengthQuantity(room)) return;
-  if (!Array.isArray(room.points) || room.points.length < 3) {
-    setStatus("Gesloten vlak nodig voor kierdichting (omtrek)", "err");
-    if (kierSuggestCb) kierSuggestCb.checked = Boolean(existingSealFor(room.id));
+  if (isFloormapKind() || componentIsLengthQuantity(room) || isLegacySealSibling(room.analysis)) {
     return;
   }
-  if (want && !selectedSetIds.has(room.id)) {
-    setStatus("Vink eerst het component aan (selectie links) om kierdichting toe te voegen", "err");
+  if (!Array.isArray(room.points) || room.points.length < 3) {
+    setStatus("Gesloten vlak nodig voor kierdichting (omtrek)", "err");
+    if (kierSuggestCb) kierSuggestCb.checked = componentHasSeal(room);
+    return;
+  }
+  const canToggle = selectedSetIds.has(room.id) || pendingRoom?.editingId === room.id;
+  if (want && !canToggle) {
+    setStatus("Open of selecteer het component om kierdichting toe te voegen", "err");
     if (kierSuggestCb && pendingRoom?.editingId === room.id) {
-      kierSuggestCb.checked = Boolean(existingSealFor(room.id));
+      kierSuggestCb.checked = componentHasSeal(room);
     }
     renderRoomList();
     return;
   }
   kierToggleInFlight = true;
   try {
-    if (!want) {
-      setStatus("Kierdichting verwijderen\u2026", "busy");
-      const removed = await removeSealForParent(room.id);
-      await loadRooms();
-      if (kierSuggestCb && pendingRoom?.editingId === room.id) {
-        kierSuggestCb.checked = false;
-        delete kierSuggestCb.dataset.userTouched;
-      }
-      setStatus(removed ? "Kierdichting verwijderd" : "Geen kierdichting gekoppeld", "ok");
-      return;
-    }
-    setStatus("Kierdichting toevoegen\u2026", "busy");
-    await ensureKierMaterials();
-    const mat = resolveKierSuggestMaterial();
-    if (!mat) {
-      setStatus(
-        `Kierdichtingsmateriaal ${DEFAULT_KIER_CATALOG_ID} niet gevonden in de catalogus`,
-        "err"
-      );
-      if (kierSuggestCb) kierSuggestCb.checked = Boolean(existingSealFor(room.id));
-      return;
-    }
-    const seal = await upsertPerimeterSeal(
-      room.id,
-      room.points,
-      room.label || "vlak",
-      room.vg_nr,
-      room.vr_nr,
-      room.level_hint || "OTHER",
-      mat
-    );
-    await loadRooms();
+    setStatus(want ? "Kierdichting zetten\u2026" : "Kierdichting uitzetten\u2026", "busy");
+    const result = await saveComponentSealAttribute(room, want);
+    renderRoomList();
+    drawOverlay();
+    requestAnimationFrame(() => drawOverlay());
     if (kierSuggestCb && pendingRoom?.editingId === room.id) {
-      kierSuggestCb.checked = true;
+      kierSuggestCb.checked = want;
       delete kierSuggestCb.dataset.userTouched;
     }
-    const key = sealMaterialKey({
+    if (!want) {
+      setStatus("Kierdichting uit", "ok");
+      return;
+    }
+    const mat = result.material;
+    const code = mat?.catalog_id || DEFAULT_KIER_CATALOG_ID;
+    const key = mat ? sealMaterialKey({
       material_id: mat.material_id,
       catalog_id: mat.catalog_id
-    });
-    const typeSum = sumSealLengthsForType(key);
-    const code = mat.catalog_id || DEFAULT_KIER_CATALOG_ID;
-    const lenTxt = seal?.length_m != null ? ` \xB7 ${seal.length_m.toFixed(2)} m` : "";
+    }) : "";
+    const typeSum = key ? sumSealLengthsForType(key) : 0;
+    const lenTxt = result.length_m != null ? ` \xB7 ${result.length_m.toFixed(2)} m` : "";
     const sumTxt = typeSum > 0 ? ` \xB7 totaal ${code} ${typeSum.toFixed(2)} m` : "";
     setStatus(
-      seal?.created ? `Kierdichting (${code}) toegevoegd aan \xAB${room.label || "vlak"}\xBB${lenTxt}${sumTxt}` : `Kierdichting (${code}) bijgewerkt${lenTxt}${sumTxt}`,
+      result.created ? `Kierdichting (${code}) aan op \xAB${room.label || "vlak"}\xBB${lenTxt}${sumTxt}` : `Kierdichting (${code}) bijgewerkt${lenTxt}${sumTxt}`,
       "ok"
     );
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
     if (kierSuggestCb && pendingRoom?.editingId === room.id) {
-      kierSuggestCb.checked = Boolean(existingSealFor(room.id));
+      kierSuggestCb.checked = componentHasSeal(room);
       delete kierSuggestCb.dataset.userTouched;
     }
     renderRoomList();
+    drawOverlay();
   } finally {
     kierToggleInFlight = false;
     if (pendingRoom?.editingId === room.id) syncKierSuggestUi();
@@ -5162,6 +6815,60 @@ function componentIsLengthQuantity(r) {
   if (a?.quantity_kind === "length") return true;
   if (a?.length_m != null && Number.isFinite(a.length_m)) return true;
   return isLengthQuantityRubriek(a?.rubriek_nr ?? a?.master_category);
+}
+var REPEAT_COUNT_MAX = 99;
+function readRepeatCount(analysis) {
+  const n = Number(analysis?.repeat_count);
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(1, Math.min(REPEAT_COUNT_MAX, Math.round(n)));
+}
+function repeatCountBit(analysis) {
+  const n = readRepeatCount(analysis);
+  return n > 1 ? `\xD7${n}` : "";
+}
+async function saveRepeatCountForRoom(room, next) {
+  if (!activeSection || !auth()?.token) return;
+  const n = Math.max(1, Math.min(REPEAT_COUNT_MAX, Math.round(next)));
+  const prev = room.analysis || {};
+  const analysis = { ...prev, repeat_count: n };
+  if (n <= 1) delete analysis.repeat_count;
+  setStatus(n > 1 ? `Herhaling \xD7${n}\u2026` : "Herhaling 1\xD7\u2026", "busy");
+  try {
+    const saved = await saveDrawingSubsection({
+      section_id: activeSection.id,
+      subsection_id: room.id,
+      label: room.label,
+      level_hint: room.level_hint || "OTHER",
+      vg_nr: room.vg_nr,
+      vr_nr: room.vr_nr,
+      points: room.points,
+      holes: Array.isArray(room.analysis?.holes) ? room.analysis.holes : [],
+      metres_per_norm_unit: room.metres_per_norm_unit ?? activeScaleMpu() ?? void 0,
+      scale_aspect_yx: activeScaleAspect(),
+      analysis
+    });
+    const idx = rooms.findIndex((r) => r.id === room.id);
+    if (idx >= 0) {
+      const nextA = {
+        ...rooms[idx].analysis || {},
+        ...saved.analysis || {},
+        ...analysis
+      };
+      if (n <= 1) delete nextA.repeat_count;
+      rooms[idx] = { ...rooms[idx], analysis: nextA };
+      noteLocalRoomPatch(rooms[idx]);
+    }
+    markRoomTouched(room.id);
+    renderRoomList();
+    drawOverlay();
+    setStatus(
+      n > 1 ? `\xAB${room.label || "component"}\xBB telt \xD7${n} mee in GA` : `\xAB${room.label || "component"}\xBB telt 1\xD7 mee in GA`,
+      "ok"
+    );
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+    renderRoomList();
+  }
 }
 function roomMetricsLabel(r) {
   const mpu = r.metres_per_norm_unit != null && r.metres_per_norm_unit > 0 ? r.metres_per_norm_unit : activeScaleMpu();
@@ -5184,7 +6891,9 @@ function roomMetricsLabel(r) {
       const typeSum = key ? sumSealLengthsForType(key) : 0;
       const code = (r.analysis?.catalog_id || "").trim() || DEFAULT_KIER_CATALOG_ID;
       const sumBit = typeSum > 0 && (!len || Math.abs(typeSum - Number.parseFloat(len)) > 5e-3) ? ` \xB7 \u03A3 ${code} ${typeSum.toFixed(2)} m` : "";
-      return len ? `lengte ${len}${sumBit}` : "lengte \u2014";
+      const nLen = readRepeatCount(r.analysis);
+      const repLen = nLen > 1 ? ` \xB7 \xD7${nLen}` : "";
+      return len ? `lengte ${len}${repLen}${sumBit}` : "lengte \u2014";
     }
     let area = "\u2014";
     let circ = "\u2014";
@@ -5204,7 +6913,9 @@ function roomMetricsLabel(r) {
     } else if (r.area_norm != null) {
       area = `${r.area_norm.toFixed(4)} (geen schaal)`;
     }
-    return `${area} \xB7 circ ${circ}`;
+    const n = readRepeatCount(r.analysis);
+    const rep = n > 1 ? ` \xB7 \xD7${n}` : "";
+    return `${area}${rep} \xB7 omtrek ${circ}`;
   } catch {
     return "\u2014";
   }
@@ -5218,6 +6929,7 @@ function scheduleRoomListRefresh() {
     roomListRefreshTimer = null;
     roomListRefreshQuiet = true;
     try {
+      syncPendingGeometryToRooms();
       renderRoomList();
     } finally {
       roomListRefreshQuiet = false;
@@ -5241,15 +6953,19 @@ function syncPendingRoomButtons() {
   }
   roomClearBtn.disabled = !has && !pendingRoom?.drawing;
   if (roomDeleteBtn) {
-    roomDeleteBtn.disabled = !editingId;
-    if (editingId && pendingDeleteId === editingId) {
+    const deleteIds = deleteTargetIds();
+    const confirming = pendingDeleteId != null && pendingDeleteId === deleteConfirmKey(deleteIds);
+    roomDeleteBtn.disabled = deleteIds.length === 0;
+    if (confirming) {
       roomDeleteBtn.textContent = "Bevestig wissen";
-      roomDeleteBtn.title = "Nogmaals klikken wist dit component permanent";
+      roomDeleteBtn.title = deleteIds.length > 1 ? `Nogmaals klikken wist ${deleteIds.length} aangevinkte componenten permanent` : "Nogmaals klikken wist dit component permanent";
       roomDeleteBtn.classList.remove("secondary");
     } else {
       roomDeleteBtn.textContent = "Verwijderen";
-      const editingRoom = editingId ? rooms.find((r) => r.id === editingId) : null;
-      roomDeleteBtn.title = editingRoom && isComposeResultRoom(editingRoom) ? "Verwijdert alleen dit samengestelde resultaat; broncomponenten blijven bestaan" : `Opgeslagen ${n.singular} permanent verwijderen`;
+      roomDeleteBtn.title = deleteIds.length > 1 ? `Verwijder ${deleteIds.length} aangevinkte componenten (twee keer klikken)` : (() => {
+        const editingRoom = editingId ? rooms.find((r) => r.id === editingId) : null;
+        return editingRoom && isComposeResultRoom(editingRoom) ? "Verwijdert alleen dit samengestelde resultaat; broncomponenten blijven bestaan" : `Opgeslagen ${n.singular} permanent verwijderen`;
+      })();
       roomDeleteBtn.classList.add("secondary");
     }
   }
@@ -5257,7 +6973,7 @@ function syncPendingRoomButtons() {
     roomSimplifyBtn.disabled = !(closed && pendingRoom && ringVertexCount(pendingRoom.points) > 3);
   }
   if (!pendingRoom) {
-    roomPendingHintEl.textContent = kier ? `Kierdichting: teken een pad (\u22652 punten) of gesloten omtrek; lengte in meters wordt opgeslagen.` : `Gebruik Teken ${n.singular} (Gereedschap of hier), klik hoekpunten. Dubbelklik een anker om te verwijderen; Vereenvoudig dunt de omtrek.`;
+    roomPendingHintEl.textContent = kier ? `Kierdichting: teken een pad (\u22652 punten) of gesloten omtrek; lengte in meters wordt opgeslagen.` : `Gebruik Teken ${n.singular} (Gereedschap of hier), klik hoekpunten. Dubbelklik een rand om een anker toe te voegen; dubbelklik een anker om te verwijderen; Vereenvoudig dunt de omtrek.`;
     roomDrawBtn.textContent = `Teken ${n.singular}`;
     roomSaveBtn.textContent = "Opslaan";
     return;
@@ -5266,7 +6982,7 @@ function syncPendingRoomButtons() {
     roomPendingHintEl.textContent = kier ? `${pendingRoom.points.length} punt(en). Opslaan mag vanaf 2 punten (lengte), of sluit polygoon voor omtrek.` : `${pendingRoom.points.length} hoekpunt(en). Omtrek/oppervlakte hierboven; sluit polygoon als klaar (\u22653).`;
     roomDrawBtn.textContent = "Annuleren";
   } else if (pendingRoom.closed) {
-    roomPendingHintEl.textContent = pendingRoom.editingId ? "Bewerken: sleep het vlak of witte ankers; pijltjes om te schuiven; daarna Opslaan. Verwijderen wist het opgeslagen component." : kier ? "Polygoon klaar \u2014 omtrek (m) wordt als lengte opgeslagen voor kierdichting." : "Polygoon klaar \u2014 sleep vlak/ankers, of Dupliceer\u2026, daarna Opslaan.";
+    roomPendingHintEl.textContent = pendingRoom.editingId ? "Bewerken: sleep vlak/ankers; dubbelklik op een rand voor extra anker; dubbelklik anker om te wissen; daarna Opslaan." : kier ? "Polygoon klaar \u2014 omtrek (m) wordt als lengte opgeslagen voor kierdichting." : "Polygoon klaar \u2014 sleep vlak/ankers; dubbelklik op een rand voor extra anker; daarna Opslaan.";
     roomDrawBtn.textContent = `Teken ${n.singular}`;
   }
   roomSaveBtn.textContent = editingId ? "Wijzigingen opslaan" : "Opslaan";
@@ -5300,6 +7016,7 @@ function beginDrawRoom() {
   endDiscovery();
   endCalibrate();
   if (measure.tool !== "off") clearMeasure(false);
+  const defaultLabel = `${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} ${rooms.length + 1}`;
   pendingRoom = {
     points: [],
     holes: [],
@@ -5307,16 +7024,20 @@ function beginDrawRoom() {
     editingId: null,
     dragVertex: null,
     dragBodyLast: null,
-    drawing: true
+    drawing: true,
+    drawCursor: null,
+    label: defaultLabel
   };
-  roomLabelInput.value = `${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} ${rooms.length + 1}`;
+  roomLabelInput.value = defaultLabel;
   fillVgVrSuggestions();
   clearExpectedOrientaties();
+  if (!isFloormapKind()) setComponentOrientatie(lastComponentOrientatie);
   syncPendingRoomButtons();
   syncToolButtons();
   updateMeasureReadouts();
   updateToolHint();
   setStatus("Klik hoeken van de ruimte op de tekening", "busy");
+  overlayCanvas.style.cursor = "crosshair";
   drawOverlay();
 }
 function startDrawRoom() {
@@ -5332,6 +7053,7 @@ function closePendingPolygon() {
   pendingRoom.points = closeRing(pendingRoom.points);
   pendingRoom.closed = true;
   pendingRoom.drawing = false;
+  pendingRoom.drawCursor = null;
   syncPendingRoomButtons();
   syncEditDock();
   syncToolButtons();
@@ -5599,7 +7321,7 @@ function applyBooleanListColors(li, role) {
   li.dataset.boolGroup = String(role.group);
 }
 async function recalculateBooleanDependents(rootId) {
-  if (!activeSection || !auth?.token || !rootId) return 0;
+  if (!activeSection || !auth()?.token || !rootId) return 0;
   let changed = /* @__PURE__ */ new Set([rootId]);
   let updated = 0;
   for (let wave = 0; wave < 24 && changed.size > 0; wave++) {
@@ -5697,7 +7419,7 @@ async function recalculateBooleanDependents(rootId) {
   return updated;
 }
 async function savePendingRoom() {
-  if (!pendingRoom || !activeSection || !auth) {
+  if (!pendingRoom || !activeSection || !auth()) {
     setStatus("Niets om op te slaan \u2014 open eerst een component om te bewerken", "err");
     return;
   }
@@ -5722,7 +7444,9 @@ async function savePendingRoom() {
     setStatus("Ruimte te klein", "err");
     return;
   }
-  const label = roomLabelInput.value.trim() || `${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} ${rooms.length + 1}`;
+  const label = (pendingRoom.label || roomLabelInput.value).trim() || `${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} ${rooms.length + 1}`;
+  roomLabelInput.value = label;
+  pendingRoom.label = label;
   const level = roomLevelSelect.value || "OTHER";
   const vgVr = parseVgVrInputs();
   if (vgVr.error) {
@@ -5743,13 +7467,17 @@ async function savePendingRoom() {
       expectedOriBlockEl?.scrollIntoView({ block: "nearest", behavior: "smooth" });
       return;
     }
+  } else if (!readComponentOrientatie()) {
+    setStatus("Kies een gevelori\xEBntatie (N\u2026NW) voor dit component", "err");
+    componentOriBlockEl?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    return;
   }
   const mat = !isFloormapKind() ? selectedCatalogMaterial() : null;
   if (kier && !mat) {
     setStatus("Kies een kierdichtingsmateriaal (rubriek 9)", "err");
     return;
   }
-  const wantSeal = !isFloormapKind() && !kier && Boolean(pendingRoom.closed) && Boolean(kierSuggestCb?.checked) && Boolean(pendingRoom.editingId && selectedSetIds.has(pendingRoom.editingId));
+  const wantSeal = !isFloormapKind() && !kier && Boolean(pendingRoom.closed) && Boolean(kierSuggestCb?.checked) && Boolean(pendingRoom.editingId);
   if (wantSeal) {
     await ensureKierMaterials();
     if (!resolveKierSuggestMaterial()) {
@@ -5776,6 +7504,7 @@ async function savePendingRoom() {
       open_path: openPath || void 0,
       scale_aspect_yx: activeScaleAspect()
     };
+    const prevAnalysis = editingId ? rooms.find((r) => r.id === editingId)?.analysis : null;
     if (mat) {
       const analysis = {
         material_id: mat.material_id,
@@ -5794,8 +7523,8 @@ async function savePendingRoom() {
         if (lengthM != null) analysis.length_m = lengthM;
         analysis.open_path = openPath;
       }
-      body.analysis = analysis;
-      if (!editingId && !roomLabelInput.value.trim()) {
+      body.analysis = isFloormapKind() ? analysis : gevelAnalysisForSave(prevAnalysis, analysis);
+      if (!editingId && !(pendingRoom.label || roomLabelInput.value).trim()) {
         body.label = `${mat.master_category}: ${mat.name}`;
       }
     } else if (isFloormapKind()) {
@@ -5803,14 +7532,17 @@ async function savePendingRoom() {
         expected_orientaties: readExpectedOrientaties(),
         orientatie_correcties: readOrientatieCorrecties()
       };
+    } else {
+      body.analysis = gevelAnalysisForSave(prevAnalysis);
     }
     const saved = await saveDrawingSubsection(body);
     const wasEdit = Boolean(editingId);
     const savedId = saved.subsection_id;
     markRoomTouched(savedId);
+    noteLocalLabel(savedId, String(body.label || label));
     const savedVg = saved.vg_nr != null && Number.isFinite(Number(saved.vg_nr)) ? Number(saved.vg_nr) : vgVr.vg_nr;
     const savedVr = saved.vr_nr != null && String(saved.vr_nr).trim() ? String(saved.vr_nr).trim() : vgVr.vr_nr;
-    const idx = rooms.findIndex((r) => r.id === savedId);
+    const idx = rooms.findIndex((r) => normRoomId(r.id) === normRoomId(savedId));
     let patched;
     if (idx >= 0) {
       const prev = rooms[idx];
@@ -5862,23 +7594,29 @@ async function savePendingRoom() {
     drawOverlay();
     let sealBit = "";
     let sealMatForSum = null;
-    if (wantSeal) {
-      const seal = await upsertPerimeterSeal(
-        savedId,
-        points,
-        String(body.label || label),
-        savedVg,
-        savedVr,
-        level
+    const savedRoomForSeal = rooms.find((r) => r.id === savedId);
+    if (wantSeal && savedRoomForSeal) {
+      const seal = await saveComponentSealAttribute(
+        {
+          ...savedRoomForSeal,
+          points: points.map((p) => ({ ...p })),
+          label: String(body.label || label),
+          vg_nr: savedVg,
+          vr_nr: savedVr,
+          level_hint: level
+        },
+        true
       );
-      if (seal) {
-        sealMatForSum = seal.material;
-        const lenTxt = seal.length_m != null ? ` ${seal.length_m.toFixed(2)} m` : "";
-        sealBit = seal.created ? ` \xB7 kierdichting toegevoegd${lenTxt}` : ` \xB7 kierdichting bijgewerkt${lenTxt}`;
-      }
-    } else if (editingId && existingSealFor(editingId)) {
+      sealMatForSum = seal.material;
+      const lenTxt = seal.length_m != null ? ` ${seal.length_m.toFixed(2)} m` : "";
+      sealBit = seal.created ? ` \xB7 kierdichting aan${lenTxt}` : ` \xB7 kierdichting bijgewerkt${lenTxt}`;
+      const afterSeal = rooms.find((r) => r.id === savedId);
+      if (afterSeal) patched = { ...patched, analysis: afterSeal.analysis };
+    } else if (editingId && (componentSealEnabled(savedRoomForSeal?.analysis) || existingSealFor(editingId))) {
       const removed = await removeSealForParent(editingId);
-      if (removed) sealBit = " \xB7 kierdichting verwijderd";
+      if (removed) sealBit = " \xB7 kierdichting uit";
+      const afterSeal = rooms.find((r) => r.id === savedId);
+      if (afterSeal) patched = { ...patched, analysis: afterSeal.analysis };
     }
     clearPendingRoom();
     if (isFloormapKind()) {
@@ -5888,19 +7626,21 @@ async function savePendingRoom() {
     } else {
       if (savedVg != null) roomVgInput.value = String(savedVg);
       if (savedVr) roomVrInput.value = savedVr;
+      rememberComponentOrientatie(readComponentOrientatie());
+      setComponentOrientatie(lastComponentOrientatie);
     }
     noteLocalRoomPatch(patched);
     renderRoomList();
     drawOverlay();
     try {
-      await loadRooms();
+      await loadRooms({ preserveOrder: true });
     } catch (reloadErr) {
       renderRoomList();
       drawOverlay();
       console.warn("loadRooms after save failed", reloadErr);
     }
     {
-      const i = rooms.findIndex((r) => r.id === savedId);
+      const i = rooms.findIndex((r) => normRoomId(r.id) === normRoomId(savedId));
       if (i >= 0) {
         rooms[i] = {
           ...rooms[i],
@@ -5915,6 +7655,7 @@ async function savePendingRoom() {
           analysis: patched.analysis ? { ...rooms[i].analysis || {}, ...patched.analysis } : rooms[i].analysis
         };
         noteLocalRoomPatch(rooms[i]);
+        noteLocalLabel(rooms[i].id, patched.label);
       }
       renderRoomList();
       drawOverlay();
@@ -5937,6 +7678,21 @@ async function savePendingRoom() {
         depCount = await recalculateBooleanDependents(editingId);
         if (depCount > 0) {
           await loadRooms();
+          const i = rooms.findIndex((r) => normRoomId(r.id) === normRoomId(savedId));
+          if (i >= 0 && patched.analysis) {
+            rooms[i] = {
+              ...rooms[i],
+              points: patched.points.map((p) => ({ ...p })),
+              label: patched.label,
+              level_hint: patched.level_hint,
+              vg_nr: patched.vg_nr,
+              vr_nr: patched.vr_nr,
+              analysis: { ...rooms[i].analysis || {}, ...patched.analysis }
+            };
+            noteLocalRoomPatch(rooms[i]);
+            noteLocalLabel(rooms[i].id, patched.label);
+          }
+          renderRoomList();
           drawOverlay();
         }
       } catch (err) {
@@ -6026,7 +7782,9 @@ function analysisForDuplicate(src) {
   const oris = Array.isArray(src?.expected_orientaties) ? src.expected_orientaties.map((c) => normalizeOrientatieCode(c)).filter(
     (c) => ORIENTATIE_CODES.includes(c)
   ) : [];
-  if (!src?.material_id && !src?.catalog_id && !src?.master_category && !oris.length) {
+  const compOri = normalizeOrientatieCode(src?.orientatie || "");
+  const hasCompOri = ORIENTATIE_CODES.includes(compOri);
+  if (!src?.material_id && !src?.catalog_id && !src?.master_category && !oris.length && !hasCompOri) {
     return void 0;
   }
   const analysis = {};
@@ -6042,6 +7800,7 @@ function analysisForDuplicate(src) {
     if (src.length_norm != null) analysis.length_norm = src.length_norm;
     if (src.open_path) analysis.open_path = true;
   }
+  if (hasCompOri) analysis.orientatie = compOri;
   if (oris.length) analysis.expected_orientaties = oris;
   if (src?.orientatie_correcties && typeof src.orientatie_correcties === "object") {
     analysis.orientatie_correcties = src.orientatie_correcties;
@@ -6053,7 +7812,7 @@ async function postNewSubsection(body) {
   return { subsection_id: saved.subsection_id };
 }
 async function duplicateClosedComponent(opts) {
-  if (!activeSection || !auth) throw new Error("Geen actieve sectie");
+  if (!activeSection || !auth()) throw new Error("Geen actieve sectie");
   const asLength = opts.analysis?.quantity_kind === "length" || isLengthQuantityRubriek(opts.analysis?.rubriek_nr ?? opts.analysis?.master_category);
   const openPath = Boolean(asLength && opts.analysis?.open_path);
   const points = openPath ? opts.points.map((p) => ({ ...p })) : closeRing(opts.points);
@@ -6108,7 +7867,23 @@ async function duplicateClosedComponent(opts) {
     }
     const saved = await postNewSubsection(body);
     lastId = saved.subsection_id;
-    markRoomTouched(saved.subsection_id);
+    upsertOptimisticRoom({
+      id: saved.subsection_id,
+      section_id: activeSection.id,
+      label,
+      level_hint: opts.level_hint || "OTHER",
+      vg_nr: vg,
+      vr_nr: vr,
+      points: copyPoints.map((p) => ({ ...p })),
+      area_m2: saved.area_m2 != null ? Number(saved.area_m2) : null,
+      area_norm: saved.area_norm != null ? Number(saved.area_norm) : null,
+      perimeter_m: saved.perimeter_m != null ? Number(saved.perimeter_m) : null,
+      perimeter_norm: null,
+      metres_per_norm_unit: mpu,
+      analysis_status: "ok",
+      sort_order: rooms.length,
+      analysis: body.analysis ?? null
+    });
   }
   return lastId;
 }
@@ -6242,7 +8017,34 @@ async function duplicateFromPending(count) {
     syncPendingRoomButtons();
   }
 }
+function syncPendingGeometryToRooms() {
+  if (!pendingRoom?.editingId || !pendingRoom.points.length) return;
+  const id = pendingRoom.editingId;
+  const i = rooms.findIndex((r) => r.id === id);
+  if (i < 0) return;
+  const prev = rooms[i];
+  const holes = (pendingRoom.holes || []).map((h) => h.map((p) => ({ ...p })));
+  const next = {
+    ...prev,
+    points: pendingRoom.points.map((p) => ({ ...p })),
+    label: (pendingRoom.label || roomLabelInput.value).trim() || prev.label,
+    level_hint: roomLevelSelect.value || prev.level_hint,
+    analysis: {
+      ...prev.analysis || {},
+      holes: holes.length ? holes : void 0,
+      open_path: pendingRoom.closed ? void 0 : true
+    }
+  };
+  if (pendingRoom.closed) {
+    if (next.analysis) delete next.analysis.open_path;
+  }
+  rooms[i] = next;
+  noteLocalRoomPatch(next);
+}
 function editRoom(room) {
+  if (pendingRoom?.editingId && pendingRoom.editingId !== room.id) {
+    syncPendingGeometryToRooms();
+  }
   endDiscovery();
   endCalibrate();
   if (measure.tool !== "off") clearMeasure(false);
@@ -6265,9 +8067,11 @@ function editRoom(room) {
     editingId: room.id,
     dragVertex: null,
     dragBodyLast: null,
-    drawing: false
+    drawing: false,
+    drawCursor: null,
+    label: (room.label || "").trim()
   };
-  roomLabelInput.value = room.label;
+  roomLabelInput.value = pendingRoom.label || room.label;
   roomLevelSelect.value = room.level_hint || "OTHER";
   if (room.vg_nr != null) {
     roomVgInput.value = String(room.vg_nr);
@@ -6288,8 +8092,10 @@ function editRoom(room) {
       room.analysis?.expected_orientaties,
       room.analysis?.orientatie_correcties
     );
+    clearComponentOrientatie();
   } else {
     clearExpectedOrientaties();
+    applyComponentOrientatieForEdit(room.analysis?.orientatie);
   }
   void applyMaterialSelectionFromAnalysis(room.analysis);
   syncPendingRoomButtons();
@@ -6311,7 +8117,7 @@ function editRoom(room) {
   });
   const oriN = isFloormapKind() ? readExpectedOrientaties().length : 0;
   setStatus(
-    isFloormapKind() ? `Bewerken: ${room.label} \u2014 gevelori\xEBntaties${oriN ? ` (${oriN})` : ""} bovenaan in de zijbalk aanpassen, daarna Opslaan` : `Bewerken: ${room.label} \u2014 sleep het vlak of witte ankers; pijltjes om te schuiven; daarna \xAB${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} opslaan\xBB`,
+    isFloormapKind() ? `Bewerken: ${room.label} \u2014 gevelori\xEBntaties${oriN ? ` (${oriN})` : ""} bovenaan in de zijbalk aanpassen, daarna Opslaan` : `Bewerken: ${room.label} \u2014 sleep ankers; dubbelklik op een rand voor extra hoekpunt; daarna opslaan`,
     "ok"
   );
 }
@@ -6502,9 +8308,10 @@ function renderMaterialNameOptions(materials, selectedId) {
     const code = (m.catalog_id || "").trim();
     const ra = m.ra_dba != null ? ` \xB7 RA ${m.ra_dba}` : "";
     const sub = m.category ? ` \xB7 ${m.category}` : "";
+    const opbouw = materialKindInline(m.material_kind);
     const appBit = (m.source || "").trim().toLowerCase() === "app" || (m.source || "").trim().toLowerCase() === "eigen" ? " \xB7 app" : "";
-    opt.textContent = code ? `${code} \xB7 ${m.name}${sub}${ra}${appBit}` : `${m.name}${sub}${ra}${appBit}`;
-    opt.title = code ? `${code} \xB7 ${m.name}` : m.name;
+    opt.textContent = code ? `${code} \xB7 ${m.name}${sub} \xB7 ${opbouw}${ra}${appBit}` : `${m.name}${sub} \xB7 ${opbouw}${ra}${appBit}`;
+    opt.title = code ? `${code} \xB7 ${m.name} (${opbouw})` : `${m.name} (${opbouw})`;
     materialIdEl.appendChild(opt);
   }
   materialIdEl.disabled = materials.length === 0;
@@ -6545,13 +8352,13 @@ function syncFavoriteButtons() {
   if (presetApplyBtn) presetApplyBtn.disabled = !hasBuilding;
 }
 async function loadFavoriteMaterials() {
-  if (!auth?.token || !buildingId) {
+  if (!auth()?.token || !buildingId) {
     favoriteMaterials = [];
     renderFavoriteOptions();
     return;
   }
   try {
-    const data = bppPhase1Enabled() ? await bppListMaterialFavorites(invokeString, auth.token, buildingId) : await apiGet(
+    const data = bppPhase1Enabled() ? await bppListMaterialFavorites(invokeString, auth().token, buildingId) : await apiGet(
       `/api/floormap/material-favorites?building_id=${encodeURIComponent(buildingId)}`
     );
     favoriteMaterials = data.materials || [];
@@ -6563,9 +8370,9 @@ async function loadFavoriteMaterials() {
   }
 }
 async function addMaterialFavorite(materialId) {
-  if (!auth?.token || !buildingId || !materialId) return;
+  if (!auth()?.token || !buildingId || !materialId) return;
   if (bppPhase1Enabled()) {
-    await bppAddMaterialFavorite(invokeString, auth.token, buildingId, materialId);
+    await bppAddMaterialFavorite(invokeString, auth().token, buildingId, materialId);
   } else {
     await apiPost("/api/floormap/material-favorites", {
       building_id: buildingId,
@@ -6576,9 +8383,9 @@ async function addMaterialFavorite(materialId) {
   setStatus("Toegevoegd aan meest gebruikt", "ok");
 }
 async function removeMaterialFavorite(materialId) {
-  if (!auth?.token || !buildingId || !materialId) return;
+  if (!auth()?.token || !buildingId || !materialId) return;
   if (bppPhase1Enabled()) {
-    await bppRemoveMaterialFavorite(invokeString, auth.token, buildingId, materialId);
+    await bppRemoveMaterialFavorite(invokeString, auth().token, buildingId, materialId);
   } else {
     await apiDelete(
       `/api/floormap/material-favorites?building_id=${encodeURIComponent(buildingId)}&material_id=${encodeURIComponent(materialId)}`
@@ -6637,13 +8444,13 @@ async function selectMaterialById(materialId, fromFavorite = false) {
 }
 async function applyMaterialToEditingComponent(mat) {
   const editingId = pendingRoom?.editingId || "";
-  if (!editingId || isFloormapKind() || !auth?.token) {
+  if (!editingId || isFloormapKind() || !auth()?.token) {
     setStatus(`Materiaal \xAB${mat.name}\xBB geselecteerd`, "ok");
     return;
   }
   try {
     if (bppPhase1Enabled()) {
-      await bppSaveSubsectionMaterial(invokeString, auth.token, editingId, mat.material_id);
+      await bppSaveSubsectionMaterial(invokeString, auth().token, editingId, mat.material_id);
     } else {
       await apiPost("/api/floormap/subsection-material", {
         subsection_id: editingId,
@@ -6680,10 +8487,10 @@ async function applyMaterialToEditingComponent(mat) {
   }
 }
 async function ensureMaterialCategories() {
-  if (!auth?.token || !materialCategoryEl) return;
+  if (!auth()?.token || !materialCategoryEl) return;
   if (materialCategoriesLoaded && materialCategoryEl.options.length > 1) return;
   try {
-    const data = bppPhase1Enabled() ? await bppListMaterialCategories(invokeString, auth.token) : await apiGet("/api/floormap/material-categories");
+    const data = bppPhase1Enabled() ? await bppListMaterialCategories(invokeString, auth().token) : await apiGet("/api/floormap/material-categories");
     renderMaterialCategoryOptions(data.categories || []);
     materialCategoriesLoaded = true;
   } catch (err) {
@@ -6691,7 +8498,7 @@ async function ensureMaterialCategories() {
   }
 }
 async function loadMaterialsForCategory(category, q = "") {
-  if (!auth?.token || !materialIdEl) return;
+  if (!auth()?.token || !materialIdEl) return;
   const keep = materialIdEl.value;
   if (!category) {
     catalogMaterials = [];
@@ -6703,7 +8510,7 @@ async function loadMaterialsForCategory(category, q = "") {
   materialIdEl.disabled = true;
   try {
     const sub = (materialSubcategoryEl?.value || "").trim();
-    const data = bppPhase1Enabled() ? await bppListMaterials(invokeString, auth.token, {
+    const data = bppPhase1Enabled() ? await bppListMaterials(invokeString, auth().token, {
       master_category: category,
       category: sub || void 0,
       q: q.trim() || void 0,
@@ -6751,7 +8558,7 @@ function setComposeFeedback(text, kind = "clear") {
   composeFeedbackEl.classList.add(kind === "ok" ? "is-ok" : kind === "err" ? "is-err" : "is-busy");
 }
 async function applyBooleanSet() {
-  if (!activeSection || !auth || isFloormapKind()) return;
+  if (!activeSection || !auth() || isFloormapKind()) return;
   if (selectedSetIds.size < 2) {
     const msg = "Selecteer minstens 2 componenten";
     setComposeFeedback(msg, "err");
@@ -6804,6 +8611,13 @@ async function applyBooleanSet() {
       setStatus(msg, "err");
       return;
     }
+    const composeOri = readComponentOrientatie() || normalizeOrientatieCode(outer.analysis?.orientatie || "") || "";
+    if (!composeOri || !ORIENTATIE_CODES.includes(composeOri)) {
+      const msg = "Kies een gevelori\xEBntatie voor het samengestelde component (formulier bovenaan) of zet ori op de buitencontour";
+      setComposeFeedback(msg, "err");
+      setStatus(msg, "err");
+      return;
+    }
     const saved = await saveDrawingSubsection({
       section_id: activeSection.id,
       label,
@@ -6820,6 +8634,7 @@ async function applyBooleanSet() {
         material_name: mat.name,
         catalog_id: mat.catalog_id,
         category: mat.category || void 0,
+        orientatie: composeOri,
         boolean_op: "compose",
         outer_subsection_id: outer.id,
         constituent_signs: signs,
@@ -6830,14 +8645,72 @@ async function applyBooleanSet() {
         area_m2: areaM2
       }
     });
+    const savedId = saved.subsection_id;
+    const savedVg = saved.vg_nr != null && Number.isFinite(Number(saved.vg_nr)) ? Number(saved.vg_nr) : vgVr.vg_nr;
+    const savedVr = saved.vr_nr != null && String(saved.vr_nr).trim() ? String(saved.vr_nr).trim() : vgVr.vr_nr;
+    const patched = {
+      id: savedId,
+      section_id: activeSection.id,
+      label,
+      level_hint: "OTHER",
+      vg_nr: savedVg,
+      vr_nr: savedVr,
+      points: result.outer.map((p) => ({ ...p })),
+      area_m2: saved.area_m2 != null ? Number(saved.area_m2) : areaM2,
+      area_norm: saved.area_norm != null ? Number(saved.area_norm) : result.areaNorm,
+      perimeter_m: saved.perimeter_m != null ? Number(saved.perimeter_m) : null,
+      perimeter_norm: null,
+      metres_per_norm_unit: mpu,
+      analysis_status: "ok",
+      sort_order: rooms.length,
+      analysis: {
+        material_id: mat.material_id,
+        master_category: mat.master_category,
+        material_name: mat.name,
+        catalog_id: mat.catalog_id,
+        category: mat.category || void 0,
+        orientatie: composeOri,
+        boolean_op: "compose",
+        outer_subsection_id: outer.id,
+        constituent_signs: signs,
+        source_subsection_ids: selected.map((r) => r.id),
+        source_labels: nameParts,
+        holes: result.holes.map((h) => h.map((p) => ({ ...p }))),
+        area_norm: result.areaNorm,
+        area_m2: areaM2,
+        ...saved.analysis || {}
+      }
+    };
+    rooms = [...rooms.filter((r) => r.id !== savedId), patched];
+    noteLocalRoomPatch(patched);
+    roomsLoadEpoch += 1;
     booleanPreview = null;
     selectedSetIds.clear();
     constituentSigns.clear();
-    const inheritVr = normalizeVrNr(vgVr.vr_nr);
+    const inheritVr = normalizeVrNr(savedVr);
     roomListVrFilter = inheritVr;
-    roomVgInput.value = String(vgVr.vg_nr);
+    roomVgInput.value = savedVg != null ? String(savedVg) : "";
     roomVrInput.value = inheritVr;
-    await loadRooms();
+    renderRoomList();
+    drawOverlay();
+    try {
+      await loadRooms({ preserveOrder: true });
+    } catch (reloadErr) {
+      console.warn("loadRooms after compose failed", reloadErr);
+    }
+    {
+      const i = rooms.findIndex((r) => r.id === savedId);
+      if (i < 0) {
+        rooms = [...rooms, patched];
+      } else {
+        rooms[i] = {
+          ...rooms[i],
+          ...patched,
+          analysis: { ...rooms[i].analysis || {}, ...patched.analysis || {} }
+        };
+      }
+      noteLocalRoomPatch(rooms.find((r) => r.id === savedId));
+    }
     roomListVrFilter = inheritVr;
     if (roomVrFilterEl) {
       if (![...roomVrFilterEl.options].some((o) => o.value === inheritVr)) {
@@ -6851,9 +8724,9 @@ async function applyBooleanSet() {
     renderRoomList();
     drawOverlay();
     updateBooleanPreview();
-    markRoomTouched(saved.subsection_id);
+    markRoomTouched(savedId);
     const listEl = resolveRoomListEl();
-    if (listEl) scrollActiveRoomListItemIntoView(listEl, saved.subsection_id);
+    if (listEl) scrollActiveRoomListItemIntoView(listEl, savedId);
     const savedM2 = saved.area_m2 != null ? Number(saved.area_m2) : areaM2;
     const orangeParts = selected.filter((r) => !(r.analysis?.material_id || "").trim());
     const orangeBit = orangeParts.length ? ` Led blijft oranje tot bronnen materiaal hebben: ${orangeParts.map((r) => r.label || "?").join(", ")}.` : "";
@@ -6905,7 +8778,9 @@ function renderRoomList() {
   if (!listEl) return;
   const listScroller = resolveRoomListScrollParent(listEl);
   const scrollTop = listScroller.scrollTop;
-  const items = rooms.filter((r) => Boolean(r?.id));
+  const items = rooms.filter(
+    (r) => Boolean(r?.id) && !isLocallyDeleted(r.id) && !isLegacySealSibling(r.analysis)
+  );
   if (items.length !== rooms.length) {
     rooms = items;
   }
@@ -6915,7 +8790,7 @@ function renderRoomList() {
   const topLevelTotal = items.length;
   const visibleTopLevel = visibleTopLevelRooms(items);
   if (countEl) {
-    countEl.textContent = roomListCountLabel(visibleTopLevel.length, topLevelTotal);
+    countEl.textContent = roomListCountLabel2(visibleTopLevel.length, topLevelTotal);
     countEl.title = roomListVrFilter && visibleTopLevel.length !== topLevelTotal ? `${visibleTopLevel.length} van ${topLevelTotal} zichtbaar (filter VR ${roomListVrFilter})` : "";
   }
   if (items.length === 0) {
@@ -7004,7 +8879,7 @@ function renderRoomListItem(listEl, r, index, total, meta) {
   li.dataset.roomId = r.id;
   if (allowSetSelect) li.classList.add("drawing-list-item--set");
   if (pendingRoom?.editingId === r.id) li.classList.add("selected");
-  if (touchedRoomIds.has(r.id)) li.classList.add("drawing-list-item--touched");
+  if (touchedRoomIds.has(normRoomId(r.id))) li.classList.add("drawing-list-item--touched");
   if (allowSetSelect && selectedSetIds.has(r.id)) li.classList.add("set-selected");
   if (allowSetSelect && booleanSourceIds.has(r.id)) li.classList.add("drawing-list-item--ga-source");
   const boolRole = boolGroups.get(r.id);
@@ -7031,6 +8906,7 @@ function renderRoomListItem(listEl, r, index, total, meta) {
       updateBooleanPreview();
       void defaultMaterialFromDifferenceSubject();
       renderRoomList();
+      syncPendingRoomButtons();
       if (pendingRoom?.editingId === r.id) syncKierSuggestUi();
     });
     li.appendChild(cb);
@@ -7041,15 +8917,16 @@ function renderRoomListItem(listEl, r, index, total, meta) {
   const linked = linkedRooms.get(r.id);
   const hasMaterial = Boolean((r.analysis?.material_id || "").trim());
   const missingSources = isComposeResultRoom(r) ? composeConstituentsMissingMaterial(r, allItems) : [];
-  const ledGreen = hasMaterial && missingSources.length === 0;
   const hasVg = r.vg_nr != null && Number.isFinite(Number(r.vg_nr)) && Number(r.vg_nr) > 0;
   const hasVr = Boolean(normalizeVrNr(r.vr_nr));
   const hasVgVr = hasVg && hasVr;
   const oriCodes = Array.isArray(r.analysis?.expected_orientaties) ? r.analysis.expected_orientaties.map((c) => normalizeOrientatieCode(c)).filter((c) => ORIENTATIE_CODES.includes(c)) : [];
+  const compOri = normalizeOrientatieCode(r.analysis?.orientatie || "");
+  const compOriOk = ORIENTATIE_CODES.includes(compOri);
+  const ledGreen = hasMaterial && missingSources.length === 0 && (!allowSetSelect || compOriOk);
   const oriBit = isFloormapKind() ? oriCodes.length ? `ori ${oriCodes.join(",")}` : "ori ontbreekt" : "";
   const isComposed = boolOp === "compose" || boolOp === "difference";
   const matBit = materialAnalysisLabel(r.analysis, { skipOp: isComposed });
-  const composedBit = isComposed ? "\xB1 samengesteld" : "";
   let gaBit = "";
   if (allowSetSelect) {
     if (supersededIds.has(r.id)) {
@@ -7058,6 +8935,8 @@ function renderRoomListItem(listEl, r, index, total, meta) {
       gaBit = " \xB7 bron van \xB1";
     } else if (missingSources.length) {
       gaBit = ` \xB7 bronnen zonder materiaal: ${missingSources.map((s) => s.label || "?").join(", ")}`;
+    } else if (hasVr && hasMaterial && !compOriOk) {
+      gaBit = " \xB7 berekening: nog ori\xEBntatie kiezen";
     } else if (hasVr && hasMaterial) {
       gaBit = " \xB7 in berekening";
     } else if (hasVr) {
@@ -7066,8 +8945,8 @@ function renderRoomListItem(listEl, r, index, total, meta) {
   }
   const linkBit = activeSection?.region_kind === "FLOORMAP" && linked ? ` \xB7 berekening: ${linked}` : activeSection?.region_kind === "FLOORMAP" ? " \xB7 niet in berekening" : "";
   const parts = [
-    r.label || "(zonder label)",
-    composedBit,
+    roomListDisplayLabel(r),
+    repeatCountBit(r.analysis),
     matBit,
     // Oriëntatie staat apart als badge (floormap); niet ook in de tekstregel.
     isFloormapKind() ? "" : oriBit,
@@ -7078,6 +8957,13 @@ function renderRoomListItem(listEl, r, index, total, meta) {
   inner.className = "drawing-list-select-inner";
   const metaRow = document.createElement("span");
   metaRow.className = "drawing-list-meta";
+  if (isComposed) {
+    const composedBadge = document.createElement("span");
+    composedBadge.className = "drawing-list-composed-badge";
+    composedBadge.textContent = "\xB1 samengesteld";
+    composedBadge.title = "Netto-resultaat van +/\u2212 compositie";
+    metaRow.appendChild(composedBadge);
+  }
   const vgVrBadge = document.createElement("span");
   vgVrBadge.className = hasVgVr ? "drawing-list-vgvr" : "drawing-list-vgvr drawing-list-vgvr--missing";
   if (hasVgVr) {
@@ -7098,21 +8984,27 @@ function renderRoomListItem(listEl, r, index, total, meta) {
     oriBadge.textContent = oriCodes.length ? `ori ${oriCodes.join(",")}` : "ori ontbreekt";
     oriBadge.title = "Klik de regel om gevelori\xEBntaties te bewerken (bovenaan in de zijbalk)";
     metaRow.appendChild(oriBadge);
+  } else if (allowSetSelect) {
+    const oriBadge = document.createElement("span");
+    oriBadge.className = compOriOk ? "drawing-list-ori" : "drawing-list-ori drawing-list-ori--missing";
+    oriBadge.textContent = compOriOk ? `ori ${compOri}` : "ori ontbreekt";
+    oriBadge.title = compOriOk ? "Gevelori\xEBntatie van dit component" : "Kies gevelori\xEBntatie bovenaan in de zijbalk";
+    metaRow.appendChild(oriBadge);
   }
   if (allowSetSelect) {
     const led = document.createElement("span");
-    led.className = "scale-calibrated-led";
+    led.className = "ga-ready-led";
     led.setAttribute("role", "status");
     if (ledGreen) {
       led.classList.add("is-on");
-      led.title = "Materiaal gekoppeld";
-      led.setAttribute("aria-label", "Materiaal gekoppeld");
+      led.title = "Materiaal + ori\xEBntatie \u2014 kiesbaar in GA";
+      led.setAttribute("aria-label", "Compleet voor GA");
     } else {
       led.classList.add("is-warn");
-      led.title = missingSources.length ? `Samengesteld component blijft oranje tot bronnen materiaal hebben: ${missingSources.map((s) => s.label || "?").join(", ")}` : "Nog geen materiaal \u2014 koppel later voor vlakdelen";
+      led.title = missingSources.length ? `Samengesteld component blijft oranje tot bronnen materiaal hebben: ${missingSources.map((s) => s.label || "?").join(", ")}` : !hasMaterial ? "Nog geen materiaal \u2014 koppel later voor vlakdelen" : allowSetSelect && !compOriOk ? "Nog geen gevelori\xEBntatie \u2014 kies N\u2026NW bovenaan; zonder ori niet kiesbaar in GA" : "Nog onvolledig voor GA";
       led.setAttribute(
         "aria-label",
-        missingSources.length ? "Nog oranje bronnen zonder materiaal" : "Nog geen materiaal"
+        missingSources.length ? "Nog oranje bronnen zonder materiaal" : !hasMaterial ? "Nog geen materiaal" : allowSetSelect && !compOriOk ? "Nog geen ori\xEBntatie" : "Nog onvolledig"
       );
     }
     metaRow.appendChild(led);
@@ -7141,7 +9033,7 @@ function renderRoomListItem(listEl, r, index, total, meta) {
   upBtn.disabled = index === 0;
   upBtn.addEventListener("click", (ev) => {
     ev.stopPropagation();
-    void moveRoom(index, -1);
+    void moveRoom(r.id, -1);
   });
   actions.appendChild(upBtn);
   const downBtn = document.createElement("button");
@@ -7153,9 +9045,43 @@ function renderRoomListItem(listEl, r, index, total, meta) {
   downBtn.disabled = index >= total - 1;
   downBtn.addEventListener("click", (ev) => {
     ev.stopPropagation();
-    void moveRoom(index, 1);
+    void moveRoom(r.id, 1);
   });
   actions.appendChild(downBtn);
+  if (allowSetSelect && !isLegacySealSibling(r.analysis)) {
+    const n = readRepeatCount(r.analysis);
+    const wrap = document.createElement("span");
+    wrap.className = "drawing-list-repeat";
+    wrap.title = "Hoe vaak dit component meetelt in de GA-berekening (oppervlak/lengte/kier). Lijst blijft \xE9\xE9n regel.";
+    const dec = document.createElement("button");
+    dec.type = "button";
+    dec.className = "secondary drawing-list-repeat-btn";
+    dec.textContent = "\u2212";
+    dec.setAttribute("aria-label", "Minder herhalingen");
+    dec.disabled = n <= 1;
+    dec.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      void saveRepeatCountForRoom(r, n - 1);
+    });
+    const mid = document.createElement("span");
+    mid.className = "drawing-list-repeat-val";
+    mid.textContent = `${n}\xD7`;
+    mid.setAttribute("aria-label", `Herhaling ${n} keer`);
+    const inc = document.createElement("button");
+    inc.type = "button";
+    inc.className = "secondary drawing-list-repeat-btn";
+    inc.textContent = "+";
+    inc.setAttribute("aria-label", "Meer herhalingen");
+    inc.disabled = n >= REPEAT_COUNT_MAX;
+    inc.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      void saveRepeatCountForRoom(r, n + 1);
+    });
+    wrap.appendChild(dec);
+    wrap.appendChild(mid);
+    wrap.appendChild(inc);
+    actions.appendChild(wrap);
+  }
   if (activeSection?.region_kind === "FLOORMAP" && buildingId) {
     const ga = document.createElement("a");
     ga.className = "secondary-link";
@@ -7181,26 +9107,27 @@ function renderRoomListItem(listEl, r, index, total, meta) {
     });
     actions.appendChild(dup);
   }
-  const seal = existingSealFor(r.id);
+  const hasSeal = componentHasSeal(r);
   const setSelected = selectedSetIds.has(r.id);
-  const canOfferKier = allowSetSelect && !componentIsLengthQuantity(r) && !r.analysis?.seal_for_subsection_id && isClosedArea && !isOpenComponent(r) && // Toevoegen: groene led + set-selectie; verwijderen altijd mogelijk.
-  (Boolean(seal) || ledGreen && setSelected);
+  const editingThisRow = pendingRoom?.editingId === r.id;
+  const canOfferKier = allowSetSelect && !componentIsLengthQuantity(r) && !isLegacySealSibling(r.analysis) && isClosedArea && !isOpenComponent(r) && (hasSeal || ledGreen && (setSelected || editingThisRow));
   if (canOfferKier) {
     const wrap = document.createElement("label");
     wrap.className = "drawing-list-kier";
-    const canCheck = setSelected || Boolean(seal);
-    wrap.title = seal ? `Kierdichting gekoppeld (${seal.analysis?.catalog_id || DEFAULT_KIER_CATALOG_ID}). Uitvinken verwijdert dit lengtecomponent.` : setSelected ? `Voeg kierdichting toe (standaard ${DEFAULT_KIER_CATALOG_ID}) met de omtreklengte van dit vlak. Lengtes van hetzelfde type worden opgeteld.` : "Vink eerst het component aan (selectie) om kierdichting toe te voegen";
+    const canCheck = setSelected || editingThisRow || hasSeal;
+    const code = sealCatalogLabel(r.analysis, DEFAULT_KIER_CATALOG_ID);
+    wrap.title = hasSeal ? `Kierdichting aan (${code}). Uitvinken zet het kenmerk uit.` : setSelected || editingThisRow ? `Kierdichting (omtrek) \u2014 standaard ${DEFAULT_KIER_CATALOG_ID}. Meestal op een samengesteld \xB1-component.` : "Open of selecteer het component om kierdichting aan te zetten";
     const cb = document.createElement("input");
     cb.type = "checkbox";
     cb.className = "drawing-list-kier-cb";
-    cb.checked = Boolean(seal);
+    cb.checked = hasSeal;
     cb.disabled = !canCheck;
     cb.addEventListener("click", (ev) => ev.stopPropagation());
     cb.addEventListener("change", (ev) => {
       ev.stopPropagation();
-      if (cb.checked && !selectedSetIds.has(r.id)) {
-        cb.checked = Boolean(existingSealFor(r.id));
-        setStatus("Vink eerst het component aan (selectie links) om kierdichting toe te voegen", "err");
+      if (cb.checked && !selectedSetIds.has(r.id) && pendingRoom?.editingId !== r.id) {
+        cb.checked = componentHasSeal(r);
+        setStatus("Open of selecteer het component om kierdichting toe te voegen", "err");
         return;
       }
       if (pendingRoom?.editingId === r.id && kierSuggestCb) {
@@ -7213,7 +9140,7 @@ function renderRoomListItem(listEl, r, index, total, meta) {
     });
     wrap.appendChild(cb);
     const txt = document.createElement("span");
-    txt.textContent = `Kier ${seal?.analysis?.catalog_id || DEFAULT_KIER_CATALOG_ID}`;
+    txt.textContent = `Kier ${code}`;
     wrap.appendChild(txt);
     actions.appendChild(wrap);
     void ensureKierMaterials();
@@ -7314,9 +9241,9 @@ function renderRoomListItem(listEl, r, index, total, meta) {
 }
 async function refreshLinkedRooms() {
   linkedRooms = /* @__PURE__ */ new Map();
-  if (!auth?.token || !buildingId) return;
+  if (!auth()?.token || !buildingId) return;
   try {
-    const ret = await invokeString("API_ListLinkedSubsections", [auth.token, buildingId]);
+    const ret = await invokeString("API_ListLinkedSubsections", [auth().token, buildingId]);
     if (ret.startsWith("ERROR")) return;
     const data = JSON.parse(ret);
     for (const l of data.links || []) {
@@ -7326,6 +9253,7 @@ async function refreshLinkedRooms() {
   }
 }
 function normalizeSection(s) {
+  const viewRot = Number(s.view_rotate);
   return {
     ...s,
     id: String(s.id),
@@ -7341,13 +9269,14 @@ function normalizeSection(s) {
     metres_per_norm_unit: s.metres_per_norm_unit != null ? Number(s.metres_per_norm_unit) : null,
     scale_aspect_yx: s.scale_aspect_yx != null && Number(s.scale_aspect_yx) > 0 ? Number(s.scale_aspect_yx) : null,
     scale_source: String(s.scale_source || "NONE"),
+    view_rotate: viewRot === 90 || viewRot === 180 || viewRot === 270 ? viewRot : 0,
     room_count: Number(s.room_count) || 0
   };
 }
 async function ensureSectionInList(sectionId) {
   if (sections.some((s) => s.id === sectionId)) return true;
   try {
-    const data = bppPhase1Enabled() ? await bppGetFloormapSection(invokeString, auth.token, sectionId) : await apiGet(
+    const data = bppPhase1Enabled() ? await bppGetFloormapSection(invokeString, auth().token, sectionId) : await apiGet(
       `/api/floormap/section?section_id=${encodeURIComponent(sectionId)}`
     );
     if (!data.section?.id) return false;
@@ -7359,9 +9288,9 @@ async function ensureSectionInList(sectionId) {
   }
 }
 async function saveDrawingSubsection(body) {
-  if (!auth?.token) throw new Error("Niet ingelogd");
+  if (!auth()?.token) throw new Error("Niet ingelogd");
   if (bppPhase1Enabled()) {
-    const saved = await bppSaveDrawingSubsection(invokeString, auth.token, body);
+    const saved = await bppSaveDrawingSubsection(invokeString, auth().token, body);
     return {
       subsection_id: saved.subsection_id,
       area_m2: saved.area_m2,
@@ -7375,23 +9304,36 @@ async function saveDrawingSubsection(body) {
   return apiPost("/api/floormap/subsections", body);
 }
 async function deleteDrawingSubsection(subsectionId) {
-  if (!auth?.token) throw new Error("Niet ingelogd");
+  if (!auth()?.token) throw new Error("Niet ingelogd");
   if (bppPhase1Enabled()) {
-    await bppDeleteDrawingSubsection(invokeString, auth.token, subsectionId);
+    await bppDeleteDrawingSubsection(invokeString, auth().token, subsectionId);
     return;
   }
   await apiDelete(`/api/floormap/subsections?subsection_id=${encodeURIComponent(subsectionId)}`);
 }
 async function reorderDrawingSubsections(sectionId, orderedIds) {
-  if (!auth?.token) throw new Error("Niet ingelogd");
+  if (!auth()?.token) throw new Error("Niet ingelogd");
   if (bppPhase1Enabled()) {
-    await bppReorderDrawingSubsections(invokeString, auth.token, sectionId, orderedIds);
+    await bppReorderDrawingSubsections(invokeString, auth().token, sectionId, orderedIds);
     return;
   }
   await apiPost("/api/floormap/subsections/reorder", {
     section_id: sectionId,
     ordered_ids: orderedIds
   });
+}
+async function allSubsectionIdsForSection(sectionId) {
+  if (!auth()?.token) return [];
+  const raw = bppPhase1Enabled() ? (await bppListDrawingSubsections(invokeString, auth().token, sectionId)).subsections : (await apiGet(
+    `/api/floormap/subsections?section_id=${encodeURIComponent(sectionId)}`
+  )).subsections;
+  return mapSubsectionRows(raw).sort((a, b) => a.sort_order - b.sort_order || a.label.localeCompare(b.label)).map((r) => r.id).filter(Boolean);
+}
+function mergeReorderIds(visibleOrder, allIds) {
+  const vis = visibleOrder.filter(Boolean);
+  const visSet = new Set(vis);
+  const tail = allIds.filter((id) => !visSet.has(id));
+  return [...vis, ...tail];
 }
 function mapSubsectionRows(raw) {
   return (raw || []).map((r) => ({
@@ -7413,13 +9355,21 @@ function mapSubsectionRows(raw) {
     })()
   }));
 }
+function formatScaleRecomputeMsg(stats, mmLabel) {
+  const n = Number(stats?.subsections) || 0;
+  const ga = Number(stats?.ga_cleared) || 0;
+  const bits = [`${n} component${n === 1 ? "" : "en"} herberekend`];
+  if (ga > 0) bits.push(`GA gewist voor ${ga} VR${ga === 1 ? "" : "\u2019s"}`);
+  else bits.push("GA opnieuw berekenen indien van toepassing");
+  const head = mmLabel ? `Schaal opgeslagen (${mmLabel}). ` : "Schaal opgeslagen. ";
+  return `${head}${bits.join(" \xB7 ")}.`;
+}
 async function persistSectionScale(opts) {
-  if (!auth?.token) throw new Error("Niet ingelogd");
+  if (!auth()?.token) throw new Error("Niet ingelogd");
   if (bppPhase1Enabled()) {
-    await bppSaveFloormapScale(invokeString, auth.token, opts);
-    return;
+    return bppSaveFloormapScale(invokeString, auth().token, opts);
   }
-  await apiPost("/api/floormap/scale", {
+  return apiPost("/api/floormap/scale", {
     section_id: opts.section_id,
     metres_per_norm_unit: opts.metres_per_norm_unit,
     scale_ratio: opts.scale_ratio ?? null,
@@ -7429,7 +9379,7 @@ async function persistSectionScale(opts) {
 }
 async function fetchFloormapSections(buildingId2) {
   if (bppPhase1Enabled()) {
-    const data2 = await bppListFloormapSections(invokeString, auth.token, buildingId2);
+    const data2 = await bppListFloormapSections(invokeString, auth().token, buildingId2);
     return (data2.sections || []).map((s) => normalizeSection(s));
   }
   const data = await apiGet(
@@ -7438,8 +9388,9 @@ async function fetchFloormapSections(buildingId2) {
   return (data.sections || []).map((s) => normalizeSection(s));
 }
 async function loadFloormapSections(bid) {
-  if (!auth?.token) return;
+  if (!auth()?.token) return;
   buildingId = bid.trim();
+  refreshLastComponentOrientatieFromStorage();
   clearSectionThumbnailCachesForBuilding(buildingId);
   if (!buildingId) {
     setStatus("Voer een project-id in", "err");
@@ -7455,42 +9406,104 @@ async function loadFloormapSections(bid) {
     await refreshLinkedRooms();
     const data = await fetchFloormapSections(buildingId);
     sections = data;
-    if (URL_SECTION) {
-      await ensureSectionInList(URL_SECTION);
+    const sectionToOpen = resolveSectionToOpen(buildingId);
+    if (sectionToOpen) {
+      await ensureSectionInList(sectionToOpen);
     }
     syncWorkspaceLabels(sections[0]?.region_kind || "FLOORMAP");
     renderSectionList();
+    sectionRoomsSnapshot.clear();
+    resetSectionWorkspace();
+    activeSection = null;
+    updateScaleUi();
     pickerPanelEl.classList.remove("hidden");
     workspacePanelEl.classList.add("hidden");
-    const url = new URL(location.href);
-    url.searchParams.set("building_id", buildingId);
-    history.replaceState(null, "", url.toString());
+    syncFloormapLocation(sectionToOpen || null);
     projectMenu?.rememberCurrent();
     projectMenu?.refreshTitle();
     void loadFavoriteMaterials();
     setStatus(`${sections.length} sectie(s)`, "ok");
-    if (URL_SECTION && sections.some((s) => s.id === URL_SECTION)) {
-      await openSection(URL_SECTION);
-    } else if (URL_SECTION) {
+    if (sectionToOpen && sections.some((s) => s.id === sectionToOpen)) {
+      await openSection(sectionToOpen);
+    } else if (sectionToOpen) {
       setStatus("Sectie niet gevonden of niet schaalbaar \u2014 controleer de engineer-beoordelingslink", "err");
     }
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
   }
 }
-async function loadRooms() {
-  if (!auth?.token || !activeSection) return;
+function applyPreferredRoomOrder(incoming, preferredIds) {
+  if (!preferredIds.length) {
+    return [...incoming].sort(
+      (a, b) => a.sort_order - b.sort_order || a.label.localeCompare(b.label, "nl")
+    );
+  }
+  const byId = new Map(incoming.map((r) => [r.id, r]));
+  const out = [];
+  for (const id of preferredIds) {
+    const r = byId.get(id);
+    if (!r) continue;
+    out.push(r);
+    byId.delete(id);
+  }
+  const rest = [...byId.values()].sort(
+    (a, b) => a.sort_order - b.sort_order || a.label.localeCompare(b.label, "nl")
+  );
+  out.push(...rest);
+  out.forEach((r, i) => {
+    r.sort_order = i;
+  });
+  return out;
+}
+async function loadRooms(opts) {
+  if (!auth()?.token || !activeSection) return;
+  const preferredIds = opts?.preserveOrder ? rooms.map((r) => r.id) : [];
+  const prevRooms = rooms.map((r) => ({
+    ...r,
+    points: r.points.map((p) => ({ ...p }))
+  }));
   const epoch = ++roomsLoadEpoch;
   const sectionId = activeSection.id;
   try {
-    const raw = bppPhase1Enabled() ? (await bppListDrawingSubsections(invokeString, auth.token, sectionId)).subsections : (await apiGet(
+    const raw = bppPhase1Enabled() ? (await bppListDrawingSubsections(invokeString, auth().token, sectionId)).subsections : (await apiGet(
       `/api/floormap/subsections?section_id=${encodeURIComponent(sectionId)}`
     )).subsections;
     if (epoch !== roomsLoadEpoch || activeSection?.id !== sectionId) return;
     let mapped = mapSubsectionRows(raw);
-    mapped = mergeRoomsWithLocalPatches(mapped);
-    mapped.sort((a, b) => a.sort_order - b.sort_order || a.label.localeCompare(b.label));
+    mapped = dropLocallyDeletedRooms(mergeRoomsWithLocalPatches(mapped));
+    const mappedIds = new Set(mapped.map((r) => normRoomId(r.id)));
+    for (const r of prevRooms) {
+      const id = normRoomId(r.id);
+      if (mappedIds.has(id) || isLocallyDeleted(r.id)) continue;
+      if (r.section_id && r.section_id !== sectionId) continue;
+      const hasPatch = localRoomPatches.has(r.id) || localRoomPatches.has(id) || touchedRoomIds.has(id) || localLabelOverrides.has(id);
+      if (!hasPatch) continue;
+      mapped.push(r);
+      mappedIds.add(id);
+    }
+    if (prevRooms.length) {
+      const prevById = new Map(prevRooms.map((r) => [normRoomId(r.id), r]));
+      mapped = mapped.map((r) => {
+        const prev = prevById.get(normRoomId(r.id));
+        if (!prev) return r;
+        const prevLabel = (prev.label || "").trim();
+        const curLabel = (r.label || "").trim();
+        if (!prevLabel || prevLabel === curLabel) return r;
+        if (!touchedRoomIds.has(normRoomId(r.id)) && !localLabelOverrides.has(normRoomId(r.id)) && !localRoomPatches.has(normRoomId(r.id))) {
+          return r;
+        }
+        noteLocalLabel(r.id, prevLabel);
+        return { ...r, label: prevLabel };
+      });
+    }
+    mapped = applyLocalLabelOverrides(mapped);
+    if (preferredIds.length) {
+      mapped = applyPreferredRoomOrder(mapped, preferredIds);
+    } else {
+      mapped.sort((a, b) => a.sort_order - b.sort_order || a.label.localeCompare(b.label));
+    }
     rooms = mapped;
+    sectionRoomsSnapshot.delete(sectionId);
     selectedSetIds = new Set([...selectedSetIds].filter((id) => rooms.some((r) => r.id === id)));
     for (const id of [...constituentSigns.keys()]) {
       if (!selectedSetIds.has(id)) constituentSigns.delete(id);
@@ -7523,13 +9536,14 @@ async function loadRooms() {
   } catch {
   }
   if (epoch === roomsLoadEpoch) {
+    syncCopyLayoutUi();
     requestAnimationFrame(() => {
       if (epoch === roomsLoadEpoch) drawOverlay();
     });
   }
 }
 async function restoreScaleFromRooms() {
-  if (!activeSection || !auth?.token) return;
+  if (!activeSection || !auth()?.token) return;
   if (activeSection.metres_per_norm_unit != null && activeSection.metres_per_norm_unit > 0) {
     updateScaleUi();
     return;
@@ -7560,7 +9574,7 @@ async function restoreScaleFromRooms() {
   }
 }
 async function ensureScaleAspectSynced() {
-  if (!activeSection || !auth?.token) return;
+  if (!activeSection || !auth()?.token) return;
   const mpu = activeSection.metres_per_norm_unit;
   if (mpu == null || !(mpu > 0) || canvasWidth < 1 || canvasHeight < 1) return;
   const aspect = canvasHeight / canvasWidth;
@@ -7582,14 +9596,52 @@ async function ensureScaleAspectSynced() {
     activeSection.scale_aspect_yx = aspect;
   }
 }
-async function openSection(sectionId) {
-  const sec = sections.find((s) => s.id === sectionId);
-  if (!sec || !auth?.token) return;
+function resetSectionWorkspace(opts) {
   endDiscovery();
   endCalibrate();
-  localRoomPatches.clear();
+  void endDetail();
+  if (measure.tool !== "off") clearMeasure(false);
+  clearPendingDeleteConfirm();
+  pendingRoom = null;
+  if (kierSuggestCb) {
+    kierSuggestCb.checked = false;
+    delete kierSuggestCb.dataset.userTouched;
+  }
+  rooms = [];
+  selectedSetIds.clear();
+  constituentSigns.clear();
+  booleanPreview = null;
+  linkedRooms.clear();
+  if (!opts?.preserveLocalRoomState) {
+    localRoomPatches.clear();
+    localRoomDeletions.clear();
+  }
   roomsLoadEpoch += 1;
+  cropBitmap = null;
+  canvasWidth = 0;
+  canvasHeight = 0;
+  for (const c of [pdfCanvas, overlayCanvas]) {
+    c.width = 1;
+    c.height = 1;
+    c.style.width = "1px";
+    c.style.height = "1px";
+    const ctx = c.getContext("2d");
+    ctx?.clearRect(0, 0, 1, 1);
+  }
+  syncPendingRoomButtons();
+  syncEditDock();
+  syncToolButtons();
+  updateMeasureReadouts();
+  updateToolHint();
+  renderRoomList();
+}
+async function openSection(sectionId) {
+  const sec = sections.find((s) => s.id === sectionId);
+  if (!sec || !auth()?.token) return;
+  resetSectionWorkspace();
   activeSection = sec;
+  persistLastSectionId(buildingId, sec.id);
+  syncFloormapLocation(sec.id);
   const n = partNoun(sec.region_kind);
   syncWorkspaceLabels(sec.region_kind);
   sectionTitleEl.textContent = sec.label || n.title;
@@ -7613,6 +9665,7 @@ async function openSection(sectionId) {
   } catch (err) {
     roomsErr = err;
   }
+  if (activeSection?.id !== sec.id) return;
   drawOverlay();
   if (roomsErr && pdfErr) {
     setStatus(
@@ -7634,7 +9687,7 @@ async function openSection(sectionId) {
 async function loadCroppedPdf(sec) {
   const res = await fetch(`/api/drawings/download?document_id=${encodeURIComponent(sec.document_id)}`, {
     credentials: "include",
-    headers: apiAuthHeaders(auth.token)
+    headers: apiAuthHeaders(auth().token)
   });
   if (!res.ok) throw new Error(`PDF laden mislukt (HTTP ${res.status})`);
   const buf = await res.arrayBuffer();
@@ -7644,8 +9697,10 @@ async function loadCroppedPdf(sec) {
   pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
   const pageNum = Math.min(pdfDoc.numPages, Math.max(1, sec.page_index + 1));
   const page = await pdfDoc.getPage(pageNum);
-  const renderScale = 2.5;
-  const rotation = typeof page.rotate === "number" ? page.rotate : 0;
+  const renderScale = CROP_VIEW_RENDER_SCALE;
+  const pageRotate = typeof page.rotate === "number" ? page.rotate : 0;
+  const viewRotate = Number(sec.view_rotate) || 0;
+  const rotation = (pageRotate + viewRotate) % 360;
   const viewport = page.getViewport({ scale: renderScale, rotation });
   const off = document.createElement("canvas");
   off.width = Math.floor(viewport.width);
@@ -7751,27 +9806,17 @@ async function zoomToFit() {
   const avail = Math.max(200, pdfScrollEl.clientWidth - 16);
   await setViewZoom(avail / cropBitmap.width, ZOOM_MAX);
 }
-function canvasToNorm(cx, cy) {
-  return {
-    x: Math.min(1, Math.max(0, cx / Math.max(1, canvasWidth))),
-    y: Math.min(1, Math.max(0, cy / Math.max(1, canvasHeight)))
-  };
+function canvasToNorm2(cx, cy) {
+  return canvasToNorm(cx, cy, canvasWidth, canvasHeight);
 }
-function canvasToNormUnclamped(cx, cy) {
-  return {
-    x: cx / Math.max(1, canvasWidth),
-    y: cy / Math.max(1, canvasHeight)
-  };
+function canvasToNormUnclamped2(cx, cy) {
+  return canvasToNormUnclamped(cx, cy, canvasWidth, canvasHeight);
 }
-function normToCanvas(p) {
-  return { x: p.x * canvasWidth, y: p.y * canvasHeight };
+function normToCanvas2(p) {
+  return normToCanvas(p, canvasWidth, canvasHeight);
 }
-function eventToCanvas(ev) {
-  const rect = overlayCanvas.getBoundingClientRect();
-  return {
-    x: (ev.clientX - rect.left) / Math.max(1, rect.width) * canvasWidth,
-    y: (ev.clientY - rect.top) / Math.max(1, rect.height) * canvasHeight
-  };
+function eventToCanvas2(ev) {
+  return eventToCanvas(ev, overlayCanvas.getBoundingClientRect(), canvasWidth, canvasHeight);
 }
 function drawPolyline(ctx, points, stroke, fill, lineWidth, opts) {
   if (points.length < 2) return;
@@ -7779,18 +9824,18 @@ function drawPolyline(ctx, points, stroke, fill, lineWidth, opts) {
   const open = Boolean(opts?.open);
   const strokeOnly = Boolean(opts?.strokeOnly) || !fill;
   ctx.beginPath();
-  const first = normToCanvas(points[0]);
+  const first = normToCanvas2(points[0]);
   ctx.moveTo(first.x, first.y);
   for (let i = 1; i < points.length; i++) {
-    const p = normToCanvas(points[i]);
+    const p = normToCanvas2(points[i]);
     ctx.lineTo(p.x, p.y);
   }
   if (!open) ctx.closePath();
   for (const hole of holes) {
-    const h0 = normToCanvas(hole[0]);
+    const h0 = normToCanvas2(hole[0]);
     ctx.moveTo(h0.x, h0.y);
     for (let i = 1; i < hole.length; i++) {
-      const p = normToCanvas(hole[i]);
+      const p = normToCanvas2(hole[i]);
       ctx.lineTo(p.x, p.y);
     }
     ctx.closePath();
@@ -7807,9 +9852,9 @@ function drawPolyline(ctx, points, stroke, fill, lineWidth, opts) {
   ctx.setLineDash([]);
   if (opts?.vertexHandles) {
     const verts = points.length > 1 && Math.hypot(points[0].x - points[points.length - 1].x, points[0].y - points[points.length - 1].y) < 1e-6 ? points.slice(0, -1) : points;
-    const hr = vertexHandleRadiusPx();
+    const hr = vertexHandleRadiusPx2();
     for (const pt of verts) {
-      const c = normToCanvas(pt);
+      const c = normToCanvas2(pt);
       ctx.fillStyle = "rgba(255,255,255,0.35)";
       ctx.strokeStyle = "#00bcd4";
       ctx.lineWidth = detail ? 1.5 : 1;
@@ -7820,8 +9865,8 @@ function drawPolyline(ctx, points, stroke, fill, lineWidth, opts) {
     }
   }
   if (opts?.label) {
-    const xs = points.map((p) => normToCanvas(p).x);
-    const ys = points.map((p) => normToCanvas(p).y);
+    const xs = points.map((p) => normToCanvas2(p).x);
+    const ys = points.map((p) => normToCanvas2(p).y);
     const lx = (Math.min(...xs) + Math.max(...xs)) / 2;
     const ly = Math.min(...ys) - 8;
     ctx.fillStyle = stroke;
@@ -7857,22 +9902,44 @@ function drawOverlay() {
   if (!ctx) return;
   ctx.clearRect(0, 0, canvasWidth, canvasHeight);
   const hideSourceIds = sourceIdsHiddenForComposeNetPreview();
-  for (const r of rooms) {
-    if (!r.points?.length) continue;
-    if (pendingRoom?.editingId === r.id) continue;
-    if (!roomMatchesVrFilter(r, roomListVrFilter)) continue;
-    if (hideSourceIds.has(r.id)) continue;
+  const drawSavedRoom = (r) => {
+    if (!r.points?.length) return;
+    if (isLocallyDeleted(r.id)) return;
+    if (pendingRoom?.editingId === r.id) return;
+    if (!roomMatchesVrFilter(r, roomListVrFilter)) return;
+    if (hideSourceIds.has(r.id)) return;
     const selected = selectedSetIds.has(r.id);
-    const touched = touchedRoomIds.has(r.id);
+    const touched = touchedRoomIds.has(normRoomId(r.id));
     const holes = Array.isArray(r.analysis?.holes) ? r.analysis.holes.map((h) => coerceRingPoints(h)).filter((h) => h.length >= 3) : [];
-    const stroke = selected ? "#1565c0" : touched ? "#00838f" : "#6a1b9a";
     const lengthComp = componentIsLengthQuantity(r);
+    const stroke = selected ? "#1565c0" : touched ? "#00838f" : "#6a1b9a";
     const fill = lengthComp ? "" : selected ? "rgba(21,101,192,0.22)" : touched ? "rgba(0,131,143,0.16)" : "rgba(106,27,154,0.12)";
-    drawPolyline(ctx, r.points, stroke, fill, selected ? 2.6 : touched ? 2.2 : 2, {
+    const width = selected ? 2.6 : touched ? 2.2 : 2;
+    drawPolyline(ctx, r.points, stroke, fill, width, {
       holes: lengthComp ? void 0 : holes.length ? holes : void 0,
       open: Boolean(r.analysis?.open_path) || lengthComp && r.points.length < 3,
       strokeOnly: lengthComp
     });
+  };
+  const drawSealStroke = (r, points) => {
+    if (!points?.length) return;
+    if (!roomMatchesVrFilter(r, roomListVrFilter)) return;
+    if (hideSourceIds.has(r.id)) return;
+    const selected = selectedSetIds.has(r.id);
+    const touched = touchedRoomIds.has(normRoomId(r.id));
+    const stroke = selected ? KIER_SEAL_STROKE_SELECTED : touched ? KIER_SEAL_STROKE_TOUCHED : KIER_SEAL_STROKE;
+    const holes = Array.isArray(r.analysis?.holes) ? r.analysis.holes.map((h) => coerceRingPoints(h)).filter((h) => h.length >= 3) : [];
+    const live = pendingRoom?.editingId === r.id ? pendingRoom : null;
+    const liveHoles = live?.holes;
+    drawPolyline(ctx, points, stroke, "", 3.4, {
+      holes: liveHoles && liveHoles.length ? liveHoles : holes.length ? holes : void 0,
+      open: Boolean(r.analysis?.open_path) || (live ? !live.closed : false),
+      strokeOnly: true
+    });
+  };
+  for (const r of rooms) {
+    if (isLegacySealSibling(r.analysis)) continue;
+    drawSavedRoom(r);
   }
   if (booleanPreview && booleanPreview.outer.length >= 3) {
     const mpu = activeScaleMpu();
@@ -7899,6 +9966,7 @@ function drawOverlay() {
   }
   if (pendingRoom?.points.length) {
     const lengthEdit = pendingIsLengthComponent();
+    const drawingOpen = Boolean(pendingRoom.drawing && !pendingRoom.closed);
     drawPolyline(
       ctx,
       pendingRoom.points,
@@ -7906,37 +9974,35 @@ function drawOverlay() {
       lengthEdit || !pendingRoom.closed ? "" : "rgba(46,125,50,0.18)",
       lengthEdit ? 2.8 : 2,
       {
-        vertexHandles: pendingRoom.closed || pendingRoom.points.length >= 2,
+        vertexHandles: !drawingOpen && (pendingRoom.closed || pendingRoom.points.length >= 2),
         holes: lengthEdit ? void 0 : pendingRoom.holes,
         open: !pendingRoom.closed,
         strokeOnly: lengthEdit || !pendingRoom.closed
       }
     );
-    if (!pendingRoom.closed && pendingRoom.points.length >= 1) {
-      ctx.strokeStyle = "#2e7d32";
-      ctx.setLineDash([6, 4]);
-      ctx.beginPath();
-      const a = normToCanvas(pendingRoom.points[0]);
-      ctx.moveTo(a.x, a.y);
-      for (let i = 1; i < pendingRoom.points.length; i++) {
-        const p = normToCanvas(pendingRoom.points[i]);
-        ctx.lineTo(p.x, p.y);
-      }
-      ctx.stroke();
-      ctx.setLineDash([]);
+    if (drawingOpen) drawOpenPolygonDraft(ctx, pendingRoom);
+  }
+  for (const r of rooms) {
+    if (isLocallyDeleted(r.id)) continue;
+    if (isLegacySealSibling(r.analysis)) {
+      if (r.points?.length) drawSealStroke(r, r.points);
+      continue;
     }
+    if (!componentSealEnabled(r.analysis)) continue;
+    const pts = pendingRoom?.editingId === r.id && pendingRoom.points.length ? pendingRoom.points : r.points;
+    if (pts?.length) drawSealStroke(r, pts);
   }
   if (calibrate?.points.length) {
     ctx.strokeStyle = "#1565c0";
     ctx.fillStyle = "#1565c0";
     ctx.lineWidth = 2;
     for (let i = 0; i < calibrate.points.length; i++) {
-      const c = normToCanvas(calibrate.points[i]);
+      const c = normToCanvas2(calibrate.points[i]);
       ctx.beginPath();
       ctx.arc(c.x, c.y, 5, 0, Math.PI * 2);
       ctx.fill();
       if (i === 1) {
-        const a = normToCanvas(calibrate.points[0]);
+        const a = normToCanvas2(calibrate.points[0]);
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(c.x, c.y);
@@ -7952,16 +10018,16 @@ function drawOverlay() {
       ctx.lineWidth = 2;
       ctx.setLineDash([6, 4]);
       ctx.beginPath();
-      const first = normToCanvas(pts[0]);
+      const first = normToCanvas2(pts[0]);
       ctx.moveTo(first.x, first.y);
       for (let i = 1; i < pts.length; i++) {
-        const p = normToCanvas(pts[i]);
+        const p = normToCanvas2(pts[i]);
         ctx.lineTo(p.x, p.y);
       }
       ctx.stroke();
       ctx.setLineDash([]);
       for (const pt of measure.points) {
-        const c = normToCanvas(pt);
+        const c = normToCanvas2(pt);
         ctx.beginPath();
         ctx.arc(c.x, c.y, 4, 0, Math.PI * 2);
         ctx.fillStyle = "#0277bd";
@@ -8007,25 +10073,6 @@ function scrollToRing(points) {
   if (left !== viewL || top !== viewT) {
     pdfScrollEl.scrollTo({ top, left, behavior: "auto" });
   }
-}
-function normalizeNormRect(a, b) {
-  return {
-    x0: Math.min(a.x, b.x),
-    y0: Math.min(a.y, b.y),
-    x1: Math.max(a.x, b.x),
-    y1: Math.max(a.y, b.y)
-  };
-}
-function normRectRing(r) {
-  return [
-    { x: r.x0, y: r.y0 },
-    { x: r.x1, y: r.y0 },
-    { x: r.x1, y: r.y1 },
-    { x: r.x0, y: r.y1 }
-  ];
-}
-function normRectSizeOk(r) {
-  return r.x1 - r.x0 >= 8e-3 && r.y1 - r.y0 >= 8e-3;
 }
 function syncDetailFactorButtons() {
   const factor = detail?.factor ?? DETAIL_FACTOR_DEFAULT;
@@ -8198,8 +10245,8 @@ function showDiscoveryCandidate() {
   discovery.candidates[i] = discovery.current;
   discovery.dragVertex = null;
   discoveryProgressEl.textContent = `(${i + 1} van ${total})`;
-  discoveryHintEl.textContent = "Sleep ankers langs de muren. Dubbelklik een anker om te verwijderen, of Vereenvoudigen om de polylijn te dunnen.";
-  discoveryLabelInput.value = `${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} ${rooms.length + 1}`;
+  discoveryHintEl.textContent = "Sleep ankers langs de muren. Dubbelklik op een rand om een anker toe te voegen; dubbelklik een anker om te verwijderen; of Vereenvoudigen.";
+  discoveryLabelInput.value = buildDiscoveryLabel(activePartNoun().singular, rooms.length);
   discoveryDockEl.classList.remove("hidden");
   document.body.classList.add("discovery-active");
   if (editDockEl) editDockEl.classList.add("hidden");
@@ -8210,76 +10257,50 @@ function showDiscoveryCandidate() {
 }
 function discoverMinAreaFraction() {
   if (!discoverMinSizeEl) return 0;
-  const v = Number(discoverMinSizeEl.value);
-  if (!Number.isFinite(v)) return 0;
-  return Math.max(0, Math.min(1, v / 100));
+  const pos = Number(discoverMinSizeEl.value);
+  const inverted = Number.isFinite(pos) ? 100 - pos : 100;
+  return discoverMinAreaFractionFromPercent(inverted);
 }
-function updateDiscoverMinLabel() {
-  if (!discoverMinValEl || !discoverMinSizeEl) return;
-  discoverMinValEl.textContent = `${discoverMinSizeEl.value}%`;
+function updateDiscoverFilterAria() {
+  if (!discoverMinSizeEl) return;
+  const pos = Number(discoverMinSizeEl.value);
+  if (!Number.isFinite(pos)) return;
+  const coarse = pos <= 33;
+  const fine = pos >= 67;
+  discoverMinSizeEl.setAttribute(
+    "aria-valuetext",
+    coarse ? "Grof" : fine ? "Fijn" : "Middel"
+  );
 }
-function resolveDiscoveryOuter() {
-  if (isFloormapKind()) return null;
-  if (pendingRoom?.editingId && pendingRoom.closed && pendingRoom.points.length >= 3) {
-    const editing = rooms.find((r) => r.id === pendingRoom.editingId);
-    if (editing) {
-      return {
-        ...editing,
-        points: closeRing(pendingRoom.points.map((p) => ({ ...p })))
-      };
-    }
-  }
-  const selected = rooms.filter((r) => selectedSetIds.has(r.id) && !componentIsLengthQuantity(r));
-  if (selected.length >= 1) return differenceSubject(selected);
-  return null;
+function resolveDiscoveryOuter2() {
+  return resolveDiscoveryOuter({
+    isFloormapKind: isFloormapKind(),
+    pendingRoom,
+    rooms,
+    selectedSetIds,
+    closeRing,
+    isLengthComponent: componentIsLengthQuantity,
+    differenceSubject
+  });
 }
-function openingOverlapsExisting(normRing, outerId) {
-  const area = shoelaceArea(normRing);
-  if (area < 1e-10) return true;
-  const ca = ringCentroidNorm(normRing);
-  const ra = Math.sqrt(area / Math.PI);
-  for (const r of rooms) {
-    if (r.id === outerId || componentIsLengthQuantity(r)) continue;
-    const ar = shoelaceArea(r.points);
-    if (ar < 1e-10) continue;
-    const cb = ringCentroidNorm(r.points);
-    const rb = Math.sqrt(ar / Math.PI);
-    const dist = Math.hypot(ca.x - cb.x, ca.y - cb.y);
-    const ratio = Math.min(area, ar) / Math.max(area, ar);
-    if (dist < (ra + rb) * 0.4 && ratio > 0.5) return true;
-    if (ratio > 0.55 && (ringFullyContained(normRing, r.points) || ringFullyContained(r.points, normRing))) {
-      return true;
-    }
-  }
-  return false;
-}
-function ringCentroidNorm(ring) {
-  let x = 0;
-  let y = 0;
-  const n = Math.max(1, ring.length);
-  for (const p of ring) {
-    x += p.x;
-    y += p.y;
-  }
-  return { x: x / n, y: y / n };
+function openingOverlapsExisting2(normRing, outerId) {
+  return openingOverlapsExisting(normRing, outerId, rooms, shoelaceArea, componentIsLengthQuantity);
 }
 async function autoSaveDiscoveredOpenings(openings, outer) {
-  if (!activeSection || !auth || !cropBitmap) return 0;
+  if (!activeSection || !auth() || !cropBitmap) return 0;
   const mpu = activeScaleMpu();
   const aspect = activeScaleAspect();
   const level = outer.level_hint || roomLevelSelect.value || "OTHER";
   const vg = outer.vg_nr != null ? Number(outer.vg_nr) : parseVgVrInputs().vg_nr;
   const vr = outer.vr_nr != null && String(outer.vr_nr).trim() ? String(outer.vr_nr).trim() : parseVgVrInputs().vr_nr;
-  const oris = Array.isArray(outer.analysis?.expected_orientaties) ? outer.analysis.expected_orientaties : [];
-  const corrections = outer.analysis?.orientatie_correcties;
   let savedN = 0;
   for (const o of openings) {
-    const points = ensureEditablePolyline(
+    const points = discoveredOpeningToSectionPoints(
       pixelsToSectionNorm(o.points, cropBitmap.width, cropBitmap.height),
-      16
+      o.shape
     );
     if (!ringFullyContained(points, outer.points)) continue;
-    if (openingOverlapsExisting(points, outer.id)) continue;
+    if (openingOverlapsExisting2(points, outer.id)) continue;
     const body = {
       section_id: activeSection.id,
       label: o.suggestedLabel,
@@ -8291,125 +10312,276 @@ async function autoSaveDiscoveredOpenings(openings, outer) {
       scale_aspect_yx: aspect,
       analysis: {
         discovered_from_outer_id: outer.id,
-        discovery_kind: o.kind,
-        ...oris.length ? { expected_orientaties: oris } : {},
-        ...corrections ? { orientatie_correcties: corrections } : {}
+        discovery_kind: o.kind
       }
     };
     const saved = await saveDrawingSubsection(body);
-    markRoomTouched(saved.subsection_id);
+    const savedId = (saved.subsection_id || "").trim();
+    if (!savedId) continue;
+    markRoomTouched(savedId);
+    const analysis = {
+      discovered_from_outer_id: outer.id,
+      discovery_kind: o.kind,
+      ...saved.analysis || {}
+    };
+    const patched = {
+      id: savedId,
+      section_id: activeSection.id,
+      label: o.suggestedLabel,
+      level_hint: level,
+      vg_nr: vg,
+      vr_nr: vr,
+      points: points.map((p) => ({ ...p })),
+      area_m2: saved.area_m2 != null ? Number(saved.area_m2) : null,
+      area_norm: saved.area_norm != null ? Number(saved.area_norm) : null,
+      perimeter_m: saved.perimeter_m != null ? Number(saved.perimeter_m) : null,
+      perimeter_norm: null,
+      metres_per_norm_unit: mpu,
+      analysis_status: "ok",
+      sort_order: rooms.length,
+      analysis
+    };
+    rooms = [...rooms.filter((r) => r.id !== savedId), patched];
+    noteLocalRoomPatch(patched);
     savedN++;
+  }
+  if (savedN > 0) {
+    roomsLoadEpoch += 1;
+    renderRoomList();
+    drawOverlay();
   }
   return savedN;
 }
+var DISCOVER_PRESS_MS = 180;
+var CROP_VIEW_RENDER_SCALE = 2.5;
+var DISCOVER_HIRES_RENDER_SCALE = 6;
+var DISCOVER_SERVER_MAX_WORK_DIM = 2048;
+var discoverPressUntil = 0;
+function setDiscoverBusy(on) {
+  for (const btn of [discoverBtn, discoverBtnSide]) {
+    if (!btn) continue;
+    btn.classList.toggle("is-busy", on);
+    btn.disabled = on;
+    btn.setAttribute("aria-busy", on ? "true" : "false");
+  }
+}
+function beginDiscoverPress() {
+  setDiscoverBusy(true);
+  discoverPressUntil = Date.now() + DISCOVER_PRESS_MS;
+}
+function endDiscoverPress() {
+  const left = discoverPressUntil - Date.now();
+  if (left > 0) {
+    window.setTimeout(() => setDiscoverBusy(false), left);
+  } else {
+    setDiscoverBusy(false);
+  }
+}
+function formatDiscoverKindCounts(meta) {
+  if (!meta?.kindCounts) return "";
+  const parts = [];
+  const { kindCounts } = meta;
+  if (kindCounts.line_rect) parts.push(`${kindCounts.line_rect}\xD7 lijn-kader`);
+  if (kindCounts.dark_fill) parts.push(`${kindCounts.dark_fill}\xD7 vulling`);
+  if (kindCounts.paper_pocket) parts.push(`${kindCounts.paper_pocket}\xD7 pocket`);
+  return parts.join(", ");
+}
+function formatDiscoverDiag(usedServer, meta, serverError) {
+  if (serverError) return `server mislukt (${serverError}) \xB7 lokaal`;
+  if (!meta) return usedServer ? "hi-res server" : "lokaal";
+  const kinds = formatDiscoverKindCounts(meta);
+  const axes = `lijn-assen ${meta.lineWorkW}\xD7${meta.lineWorkH}px`;
+  const input = `invoer ${meta.inputW}\xD7${meta.inputH}px`;
+  const src = usedServer ? "server" : "lokaal";
+  return [src, input, axes, kinds].filter(Boolean).join(" \xB7 ");
+}
+async function discoverFacadeOpeningsViaServer(outer) {
+  if (!activeSection || !auth()?.token) {
+    return { openings: null, error: "niet ingelogd" };
+  }
+  try {
+    const body = await apiPost(
+      "/api/floormap/discover-openings",
+      {
+        section_id: activeSection.id,
+        outer_points: outer.points,
+        min_area_fraction: discoverMinAreaFraction(),
+        max_work_dim: DISCOVER_SERVER_MAX_WORK_DIM,
+        max_line_work_dim: DISCOVER_SERVER_MAX_WORK_DIM,
+        render_scale: DISCOVER_HIRES_RENDER_SCALE
+      },
+      { timeoutMs: 18e4 }
+    );
+    return {
+      openings: (body.openings || []).map((o) => ({
+        points: o.points.map((p) => ({ x: p.x, y: p.y })),
+        areaPx: o.areaPx,
+        kind: o.kind,
+        shape: o.shape,
+        circularity: o.circularity,
+        suggestedLabel: o.suggestedLabel
+      })),
+      meta: body.meta,
+      serverWidth: body.width,
+      serverHeight: body.height
+    };
+  } catch (err) {
+    return {
+      openings: null,
+      error: err instanceof Error ? err.message : String(err)
+    };
+  }
+}
+function mapHiResOpeningsToCrop(openings, hiResW, hiResH, cropW, cropH) {
+  const scaleX = cropW / Math.max(1, hiResW);
+  const scaleY = cropH / Math.max(1, hiResH);
+  const areaScale = scaleX * scaleY;
+  return openings.map((o) => ({
+    ...o,
+    points: o.points.map((p) => ({ x: p.x * scaleX, y: p.y * scaleY })),
+    areaPx: o.areaPx * areaScale
+  }));
+}
 async function startDiscovery() {
-  if (!cropBitmap || !activeSection) {
-    setStatus(`Open eerst een ${activePartNoun().title.toLowerCase()}`, "err");
-    return;
-  }
-  endCalibrate();
-  void endDetail();
-  if (measure.tool !== "off") clearMeasure(false);
-  discoverBtn.disabled = true;
-  if (discoverBtnSide) discoverBtnSide.disabled = true;
-  const sample = document.createElement("canvas");
-  sample.width = cropBitmap.width;
-  sample.height = cropBitmap.height;
-  const sampleCtx = sample.getContext("2d", { willReadFrequently: true });
-  if (!sampleCtx) {
-    setStatus("Tekeningbeeld kan niet worden gelezen", "err");
-    discoverBtn.disabled = false;
-    if (discoverBtnSide) discoverBtnSide.disabled = false;
-    return;
-  }
-  sampleCtx.drawImage(cropBitmap, 0, 0);
-  const img = sampleCtx.getImageData(0, 0, sample.width, sample.height);
-  if (!isFloormapKind()) {
-    const outer = resolveDiscoveryOuter();
-    if (!outer || outer.points.length < 3) {
-      setStatus(
-        "Selecteer eerst de buitencontour in de lijst (checkbox), of open die ter bewerking \u2014 daarna Ontdek openingen",
-        "err"
-      );
-      discoverBtn.disabled = false;
-      if (discoverBtnSide) discoverBtnSide.disabled = false;
+  beginDiscoverPress();
+  try {
+    await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+    if (!cropBitmap || !activeSection) {
+      setStatus(`Open eerst een ${activePartNoun().title.toLowerCase()}`, "err");
       return;
     }
-    setStatus(`Openingen zoeken in \xAB${outer.label || "buitencontour"}\xBB\u2026`, "busy");
-    let found2 = [];
+    endCalibrate();
+    void endDetail();
+    if (measure.tool !== "off") clearMeasure(false);
+    const sample = document.createElement("canvas");
+    sample.width = cropBitmap.width;
+    sample.height = cropBitmap.height;
+    const sampleCtx = sample.getContext("2d", { willReadFrequently: true });
+    if (!sampleCtx) {
+      setStatus("Tekeningbeeld kan niet worden gelezen", "err");
+      return;
+    }
+    sampleCtx.drawImage(cropBitmap, 0, 0);
+    const img = sampleCtx.getImageData(0, 0, sample.width, sample.height);
+    if (!isFloormapKind()) {
+      const outer = resolveDiscoveryOuter2();
+      if (!outer || outer.points.length < 3) {
+        setStatus(
+          "Selecteer eerst de buitencontour in de lijst (checkbox), of open die ter bewerking \u2014 daarna Ontdek openingen",
+          "err"
+        );
+        return;
+      }
+      setStatus(`Openingen zoeken (hi-res) in \xAB${outer.label || "buitencontour"}\xBB\u2026`, "busy");
+      let found2 = [];
+      let usedServer = false;
+      let discoverMeta;
+      let serverError;
+      try {
+        const serverResult = await discoverFacadeOpeningsViaServer(outer);
+        serverError = serverResult.error;
+        if (serverResult.openings !== null && serverResult.serverWidth && serverResult.serverHeight) {
+          found2 = mapHiResOpeningsToCrop(
+            serverResult.openings,
+            serverResult.serverWidth,
+            serverResult.serverHeight,
+            cropBitmap.width,
+            cropBitmap.height
+          );
+          discoverMeta = serverResult.meta;
+          usedServer = true;
+        }
+      } catch (err) {
+        serverError = err instanceof Error ? err.message : String(err);
+      }
+      if (!usedServer) {
+        if (serverError) {
+          setStatus(`Server ontdekken mislukt (${serverError}) \u2014 lokaal\u2026`, "busy");
+        } else {
+          setStatus(`Openingen zoeken (lokaal) in \xAB${outer.label || "buitencontour"}\xBB\u2026`, "busy");
+        }
+        const localMeta = {
+          inputW: 0,
+          inputH: 0,
+          workW: 0,
+          workH: 0,
+          lineWorkW: 0,
+          lineWorkH: 0,
+          kindCounts: { dark_fill: 0, paper_pocket: 0, line_rect: 0 }
+        };
+        try {
+          found2 = discoverInteriorOpenings(img, outer.points, {
+            minAreaFraction: discoverMinAreaFraction(),
+            meta: localMeta
+          });
+          discoverMeta = localMeta;
+        } catch (err) {
+          setStatus(err instanceof Error ? err.message : "Ontdekken mislukt", "err");
+          return;
+        }
+      }
+      await paintCropView();
+      if (!found2.length) {
+        setStatus(
+          "Geen openingen in de bitmap gevonden binnen deze buitencontour \u2014 teken handmatig of controleer contrast",
+          "err"
+        );
+        return;
+      }
+      try {
+        const n = await autoSaveDiscoveredOpenings(found2, outer);
+        selectedSetIds.clear();
+        constituentSigns.clear();
+        booleanPreview = null;
+        await loadRooms();
+        fillVgVrSuggestions();
+        drawOverlay();
+        syncPendingRoomButtons();
+        const diag = formatDiscoverDiag(usedServer, discoverMeta, usedServer ? void 0 : serverError);
+        setStatus(
+          n > 0 ? `${n} opening(en) toegevoegd onder VG ${outer.vg_nr ?? "?"} \xB7 VR ${outer.vr_nr ?? "?"} (${diag})` : `Kandidaten overlapten bestaande componenten \u2014 niets nieuws (${diag})`,
+          n > 0 ? "ok" : "busy"
+        );
+      } catch (err) {
+        setStatus(err instanceof Error ? err.message : String(err), "err");
+      }
+      return;
+    }
+    clearPendingRoom();
+    setStatus(`${activePartNoun().plural.charAt(0).toUpperCase() + activePartNoun().plural.slice(1)} ontdekken\u2026`, "busy");
+    let found = [];
     try {
-      found2 = discoverInteriorOpenings(img, outer.points, {
-        minAreaFraction: discoverMinAreaFraction()
-      });
+      found = discoverRoomPolylines(img);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "Ontdekken mislukt", "err");
-      discoverBtn.disabled = false;
-      if (discoverBtnSide) discoverBtnSide.disabled = false;
       return;
     }
     await paintCropView();
-    if (!found2.length) {
-      setStatus(
-        "Geen openingen in de bitmap gevonden binnen deze buitencontour \u2014 teken handmatig of controleer contrast",
-        "err"
-      );
-      discoverBtn.disabled = false;
-      if (discoverBtnSide) discoverBtnSide.disabled = false;
-      return;
+    let norms = found.map(
+      (r) => ensureEditablePolyline(
+        pixelsToSectionNorm(r.points, cropBitmap.width, cropBitmap.height),
+        16
+      )
+    );
+    let seeded = false;
+    if (norms.length === 0) {
+      norms = [seedStarterRoom()];
+      seeded = true;
     }
-    try {
-      const n = await autoSaveDiscoveredOpenings(found2, outer);
-      await loadRooms();
-      fillVgVrSuggestions();
-      drawOverlay();
-      setStatus(
-        n > 0 ? `${n} opening(en) toegevoegd onder VG ${outer.vg_nr ?? "?"} \xB7 VR ${outer.vr_nr ?? "?"} (Rond kozijn / Kozijn, groot\u2192klein)` : "Kandidaten overlapten bestaande componenten \u2014 niets nieuws toegevoegd",
-        n > 0 ? "ok" : "busy"
-      );
-    } catch (err) {
-      setStatus(err instanceof Error ? err.message : String(err), "err");
-    } finally {
-      discoverBtn.disabled = false;
-      if (discoverBtnSide) discoverBtnSide.disabled = false;
-    }
-    return;
+    discovery = { candidates: norms, index: 0, current: [], dragVertex: null };
+    showDiscoveryCandidate();
+    setStatus(
+      seeded ? "Geen ruimten automatisch gevonden \u2014 pas de rode startomtrek aan op een ruimte, daarna Accepteren" : `${norms.length} ruimte-kandidaat(en) \u2014 sleep de rode stippellijn passend, daarna Accepteren / Overslaan`,
+      seeded ? "busy" : "ok"
+    );
+  } finally {
+    endDiscoverPress();
   }
-  clearPendingRoom();
-  setStatus(`${activePartNoun().plural.charAt(0).toUpperCase() + activePartNoun().plural.slice(1)} ontdekken\u2026`, "busy");
-  let found = [];
-  try {
-    found = discoverRoomPolylines(img);
-  } catch (err) {
-    setStatus(err instanceof Error ? err.message : "Ontdekken mislukt", "err");
-    discoverBtn.disabled = false;
-    if (discoverBtnSide) discoverBtnSide.disabled = false;
-    return;
-  }
-  await paintCropView();
-  let norms = found.map(
-    (r) => ensureEditablePolyline(
-      pixelsToSectionNorm(r.points, cropBitmap.width, cropBitmap.height),
-      16
-    )
-  );
-  let seeded = false;
-  if (norms.length === 0) {
-    norms = [seedStarterRoom()];
-    seeded = true;
-  }
-  discovery = { candidates: norms, index: 0, current: [], dragVertex: null };
-  showDiscoveryCandidate();
-  setStatus(
-    seeded ? "Geen ruimten automatisch gevonden \u2014 pas de rode startomtrek aan op een ruimte, daarna Accepteren" : `${norms.length} ruimte-kandidaat(en) \u2014 sleep de rode stippellijn passend, daarna Accepteren / Overslaan`,
-    seeded ? "busy" : "ok"
-  );
-  discoverBtn.disabled = false;
-  if (discoverBtnSide) discoverBtnSide.disabled = false;
 }
 async function acceptDiscovery() {
-  if (!discovery || !activeSection || !auth) return;
+  if (!discovery || !activeSection || !auth()) return;
   const points = closeRing(discovery.current);
-  const label = discoveryLabelInput.value.trim() || `${activePartNoun().singular.charAt(0).toUpperCase() + activePartNoun().singular.slice(1)} ${rooms.length + 1}`;
+  const label = discoveryLabelInput.value.trim() || buildDiscoveryLabel(activePartNoun().singular, rooms.length);
   const level = discoveryLevelSelect.value || "OTHER";
   if (isFloormapKind()) {
     let nums = parseVgVrInputs();
@@ -8436,7 +10608,26 @@ async function acceptDiscovery() {
         scale_aspect_yx: activeScaleAspect()
       });
       markRoomTouched(saved.subsection_id);
-      await loadRooms();
+      noteLocalLabel(saved.subsection_id, label);
+      upsertOptimisticRoom({
+        id: saved.subsection_id,
+        section_id: activeSection.id,
+        label,
+        level_hint: level,
+        vg_nr: nums.vg_nr,
+        vr_nr: nums.vr_nr,
+        points: points.map((p) => ({ ...p })),
+        area_m2: saved.area_m2 != null ? Number(saved.area_m2) : null,
+        area_norm: saved.area_norm != null ? Number(saved.area_norm) : null,
+        perimeter_m: saved.perimeter_m != null ? Number(saved.perimeter_m) : null,
+        perimeter_norm: null,
+        metres_per_norm_unit: mpu,
+        analysis_status: "ok",
+        sort_order: rooms.length,
+        analysis: saved.analysis || null
+      });
+      roomsLoadEpoch += 1;
+      await loadRooms({ preserveOrder: true });
       fillVgVrSuggestions();
       discovery.index += 1;
       showDiscoveryCandidate();
@@ -8473,7 +10664,26 @@ async function acceptDiscovery() {
       scale_aspect_yx: activeScaleAspect()
     });
     markRoomTouched(saved.subsection_id);
-    await loadRooms();
+    noteLocalLabel(saved.subsection_id, label);
+    upsertOptimisticRoom({
+      id: saved.subsection_id,
+      section_id: activeSection.id,
+      label,
+      level_hint: level,
+      vg_nr: vgVr.vg_nr,
+      vr_nr: vgVr.vr_nr,
+      points: points.map((p) => ({ ...p })),
+      area_m2: saved.area_m2 != null ? Number(saved.area_m2) : null,
+      area_norm: saved.area_norm != null ? Number(saved.area_norm) : null,
+      perimeter_m: saved.perimeter_m != null ? Number(saved.perimeter_m) : null,
+      perimeter_norm: null,
+      metres_per_norm_unit: mpu,
+      analysis_status: "ok",
+      sort_order: rooms.length,
+      analysis: saved.analysis || null
+    });
+    roomsLoadEpoch += 1;
+    await loadRooms({ preserveOrder: true });
     discovery.index += 1;
     showDiscoveryCandidate();
     if (discovery && discovery.index < discovery.candidates.length) {
@@ -8522,6 +10732,38 @@ function removeVertexFromActiveOutline(index) {
     scheduleRoomListRefresh();
     drawOverlay();
     setStatus(`Anker verwijderd (${ringVertexCount(next)} over)`, "ok");
+    return true;
+  }
+  return false;
+}
+function insertVertexOnActiveOutline(norm) {
+  const maxPx = polylineHitRadiusPx2();
+  if (discovery?.current) {
+    const edge = hitPolylineEdge(norm, discovery.current, maxPx, canvasWidth, canvasHeight);
+    if (!edge) return false;
+    const next = insertRingVertex(discovery.current, edge.segmentIndex, edge.point);
+    if (!next) return false;
+    discovery.current = next;
+    discovery.candidates[discovery.index] = next;
+    discovery.dragVertex = edge.segmentIndex + 1;
+    updateMeasureReadouts();
+    drawOverlay();
+    setStatus(`Anker toegevoegd (${ringVertexCount(next)} totaal) \u2014 sleep naar de juiste plek`, "ok");
+    return true;
+  }
+  if (pendingRoom?.closed) {
+    const edge = hitPolylineEdge(norm, pendingRoom.points, maxPx, canvasWidth, canvasHeight);
+    if (!edge) return false;
+    const next = insertRingVertex(pendingRoom.points, edge.segmentIndex, edge.point);
+    if (!next) return false;
+    pendingRoom.points = next;
+    pendingRoom.dragVertex = edge.segmentIndex + 1;
+    pendingRoom.dragBodyLast = null;
+    syncPendingRoomButtons();
+    updateMeasureReadouts();
+    scheduleRoomListRefresh();
+    drawOverlay();
+    setStatus(`Anker toegevoegd (${ringVertexCount(next)} totaal) \u2014 sleep naar de juiste plek`, "ok");
     return true;
   }
   return false;
@@ -8604,8 +10846,24 @@ function repickCalibrate() {
   setStatus("Klik eerste schaalpunt", "busy");
   drawOverlay();
 }
+function formatScaleSaveError(err) {
+  let raw = err instanceof Error ? err.message : String(err);
+  raw = raw.replace(/^ERROR:\s*/i, "").trim();
+  const first = raw.split(/\r?\n/)[0] || raw;
+  if (/record .* is not assigned/i.test(first) || /metrics recompute failed/i.test(first)) {
+    return "Schaal opslaan mislukt: databasefunctie voor herberekening faalde. Vernieuw de pagina of herstart de server.";
+  }
+  return first.length > 220 ? `${first.slice(0, 217)}\u2026` : first;
+}
 async function finishCalibrate() {
-  if (!calibrate || calibrate.points.length < 2 || !activeSection) return;
+  if (!activeSection) {
+    setStatus("Geen plattegrond actief \u2014 open eerst een sectie", "err");
+    return;
+  }
+  if (!calibrate || calibrate.points.length < 2) {
+    setStatus("Markeer eerst twee schaalpunten op de tekening", "err");
+    return;
+  }
   const mm = Number(calibrateMetresInput.value);
   if (!(mm > 0)) {
     setStatus("Voer een positieve lengte in millimeters in", "err");
@@ -8619,8 +10877,26 @@ async function finishCalibrate() {
     setStatus("Kalibratiepunten te dicht bij elkaar", "err");
     return;
   }
+  const hadScale = activeSection.metres_per_norm_unit != null && Number(activeSection.metres_per_norm_unit) > 0;
+  const nComp = rooms.length;
+  if (hadScale || nComp > 0) {
+    const ok = window.confirm(
+      `Nieuwe schaal toepassen en alle maten op deze tekening herberekenen?
+
+\u2022 ${nComp} component(en) / ruimte(n) krijgen nieuwe m\xB2 of m
+\u2022 Kierlengtes worden bijgewerkt
+\u2022 Opgeslagen GA-resultaten voor geraakte VR\u2019s worden gewist (daarna opnieuw Herberekenen)
+
+Contouren en materialen blijven behouden.`
+    );
+    if (!ok) {
+      setStatus("Schaalwijziging geannuleerd", "err");
+      return;
+    }
+  }
   try {
-    await persistSectionScale({
+    setStatus("Schaal opslaan en maten herberekenen\u2026", "busy");
+    const stats = await persistSectionScale({
       section_id: activeSection.id,
       metres_per_norm_unit: mpu,
       scale_ratio: null,
@@ -8632,13 +10908,64 @@ async function finishCalibrate() {
     activeSection.scale_source = "CALIBRATED";
     const idx = sections.findIndex((s) => s.id === activeSection.id);
     if (idx >= 0) sections[idx] = activeSection;
-    endCalibrate(`Schaal opgeslagen: gemarkeerde lijn = ${mm} mm`);
+    localRoomPatches.clear();
+    applyScaleToInMemoryRooms(mpu);
+    const msg = formatScaleRecomputeMsg(stats, `lijn = ${mm} mm`);
+    endCalibrate(msg);
     updateMeasureReadouts();
     updateToolHint();
+    renderRoomList();
     await loadRooms();
+    renderRoomList();
+    setStatus(msg, "ok");
   } catch (err) {
-    setStatus(err instanceof Error ? err.message : String(err), "err");
+    const msg = formatScaleSaveError(err);
+    setStatus(msg, "err");
+    scaleStatusEl.textContent = "Opslaan mislukt \u2014 schaal niet gezet";
+    setCalibrateLed(false);
   }
+}
+function applyScaleToInMemoryRooms(mpu) {
+  const aspect = activeScaleAspect();
+  for (const r of rooms) {
+    r.metres_per_norm_unit = mpu;
+    if (!r.points?.length) continue;
+    try {
+      if (componentIsLengthQuantity(r)) {
+        const len = scaledPathLength(r.points, mpu, aspect, true);
+        r.perimeter_m = Math.round(len * 100) / 100;
+        r.area_m2 = null;
+        if (r.analysis) {
+          r.analysis = { ...r.analysis, length_m: r.perimeter_m };
+        }
+        continue;
+      }
+      const holes = Array.isArray(r.analysis?.holes) ? r.analysis.holes : [];
+      const holesSum = holes.filter((h) => Array.isArray(h) && h.length >= 3).reduce((s, h) => s + shoelaceArea(h), 0);
+      const areaNorm = Math.max(0, shoelaceArea(r.points) - holesSum);
+      r.area_norm = areaNorm;
+      r.area_m2 = Math.round(scaledAreaM2(areaNorm, mpu, aspect) * 100) / 100;
+      r.perimeter_m = Math.round(scaledPathLength(r.points, mpu, aspect, true) * 100) / 100;
+    } catch {
+    }
+  }
+}
+function deleteTargetIds() {
+  if (!isFloormapKind() && selectedSetIds.size > 0) {
+    return rooms.filter((r) => selectedSetIds.has(r.id)).map((r) => r.id);
+  }
+  if (pendingRoom?.editingId) return [pendingRoom.editingId];
+  return [];
+}
+function deleteConfirmKey(ids) {
+  return ids.slice().sort().join("\n");
+}
+function deleteConfirmLabel(ids) {
+  const names = ids.map((id) => rooms.find((r) => r.id === id)?.label || "component");
+  if (names.length === 1) return `\xAB${names[0]}\xBB`;
+  const shown = names.slice(0, 4).join(", ");
+  const extra = names.length > 4 ? ` +${names.length - 4}` : "";
+  return `${names.length} componenten (${shown}${extra})`;
 }
 function clearPendingDeleteConfirm() {
   pendingDeleteId = null;
@@ -8647,55 +10974,104 @@ function clearPendingDeleteConfirm() {
     pendingDeleteTimer = null;
   }
 }
-async function deleteRoom(id) {
-  const room = rooms.find((r) => r.id === id);
-  const label = room?.label || "dit component";
-  const isComposed = room ? isComposeResultRoom(room) : false;
-  if (pendingDeleteId !== id) {
+async function deleteRooms(ids) {
+  if (!ids.length) {
+    setStatus("Vink componenten aan of open er \xE9\xE9n om te verwijderen", "err");
+    return;
+  }
+  const key = deleteConfirmKey(ids);
+  const uniqueComposed = ids.length === 1 && rooms.some((r) => r.id === ids[0] && isComposeResultRoom(r));
+  if (pendingDeleteId !== key) {
     clearPendingDeleteConfirm();
-    pendingDeleteId = id;
+    pendingDeleteId = key;
     pendingDeleteTimer = window.setTimeout(() => {
       pendingDeleteId = null;
       pendingDeleteTimer = null;
       renderRoomList();
+      syncPendingRoomButtons();
     }, 8e3);
     renderRoomList();
+    syncPendingRoomButtons();
     setStatus(
-      isComposed ? `Bevestig wissen van \xAB${label}\xBB (bronnen blijven behouden) \u2014 klik nogmaals op Bevestig wissen` : `Bevestig wissen van \xAB${label}\xBB \u2014 klik nogmaals op Bevestig wissen`,
+      uniqueComposed ? `Bevestig wissen van ${deleteConfirmLabel(ids)} (bronnen blijven behouden) \u2014 klik nogmaals op Bevestig wissen` : `Bevestig wissen van ${deleteConfirmLabel(ids)} \u2014 klik nogmaals op Bevestig wissen`,
       "busy"
     );
     return;
   }
   clearPendingDeleteConfirm();
+  syncPendingRoomButtons();
+  const failed = [];
   try {
-    setStatus(`Verwijderen: \xAB${label}\xBB\u2026`, "busy");
-    await deleteDrawingSubsection(id);
-    if (pendingRoom?.editingId === id) clearPendingRoom();
-    if (touchedRoomIds.delete(id)) persistTouchedRoomIds();
-    selectedSetIds.delete(id);
-    constituentSigns.delete(id);
-    await loadRooms();
     setStatus(
-      isComposed ? `Samengesteld component verwijderd (bronnen blijven behouden)` : "Component verwijderd",
+      ids.length === 1 ? `Verwijderen: ${deleteConfirmLabel(ids)}\u2026` : `Verwijderen: ${ids.length} componenten\u2026`,
+      "busy"
+    );
+    const snapshots = ids.map((id) => rooms.find((r) => r.id === id)).filter((r) => Boolean(r));
+    for (const id of ids) {
+      rooms = rooms.filter((r) => r.id !== id);
+      noteLocalRoomDeletion(id);
+      if (pendingRoom?.editingId === id) clearPendingRoom();
+      if (touchedRoomIds.delete(id)) persistTouchedRoomIds();
+      selectedSetIds.delete(id);
+      constituentSigns.delete(id);
+    }
+    roomsLoadEpoch += 1;
+    renderRoomList();
+    drawOverlay();
+    for (const id of ids) {
+      const label = snapshots.find((r) => r.id === id)?.label || id;
+      try {
+        await deleteDrawingSubsection(id);
+      } catch (err) {
+        const raw = err instanceof Error ? err.message : String(err);
+        const msg = /restrict|foreign key|verblijfsruimte/i.test(raw) ? `\xAB${label}\xBB is nog gekoppeld aan een verblijfsruimte of andere data` : `\xAB${label}\xBB: ${raw}`;
+        failed.push(msg);
+        const snap = snapshots.find((r) => r.id === id);
+        if (snap) {
+          localRoomDeletions.delete(normRoomId(id));
+          if (!rooms.some((r) => r.id === snap.id)) rooms = [...rooms, snap];
+        }
+      }
+    }
+    rooms = dropLocallyDeletedRooms(rooms);
+    renderRoomList();
+    drawOverlay();
+    if (!failed.length) {
+      localRoomPatches.clear();
+    }
+    await loadRooms();
+    if (failed.length) {
+      setStatus(
+        failed.length === ids.length ? `Verwijderen mislukt. ${failed[0]}` : `${ids.length - failed.length} verwijderd, ${failed.length} mislukt. ${failed[0]}`,
+        "err"
+      );
+      return;
+    }
+    setStatus(
+      uniqueComposed ? `Samengesteld component verwijderd (bronnen blijven behouden)` : ids.length > 1 ? `${ids.length} componenten verwijderd` : "Component verwijderd",
       "ok"
     );
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
-    const msg = /restrict|foreign key|verblijfsruimte/i.test(raw) ? `Kan \xAB${label}\xBB niet verwijderen: nog gekoppeld aan een verblijfsruimte of andere data. ${raw}` : raw;
-    setStatus(msg, "err");
+    setStatus(raw, "err");
     renderRoomList();
   }
 }
+async function deleteRoom(id) {
+  await deleteRooms([id]);
+}
 async function deletePendingRoom() {
-  const id = pendingRoom?.editingId;
-  if (!id) {
-    setStatus("Open eerst een opgeslagen component om te verwijderen", "err");
+  const ids = deleteTargetIds();
+  if (!ids.length) {
+    setStatus("Vink componenten aan (checkbox) of open er \xE9\xE9n om te verwijderen", "err");
     return;
   }
-  await deleteRoom(id);
+  await deleteRooms(ids);
 }
-async function moveRoom(index, delta) {
-  if (!auth?.token || !activeSection) return;
+async function moveRoom(roomId, delta) {
+  if (!auth()?.token || !activeSection) return;
+  syncPendingLabelToRooms();
+  const index = rooms.findIndex((r) => r.id === roomId);
   const j = index + delta;
   if (index < 0 || j < 0 || index >= rooms.length || j >= rooms.length) return;
   const prevOrder = rooms.map((r) => ({ room: r, sort_order: r.sort_order }));
@@ -8715,10 +11091,17 @@ async function moveRoom(index, delta) {
     console.warn("moveRoom: local render failed", err);
   }
   try {
-    await reorderDrawingSubsections(
-      activeSection.id,
-      rooms.map((r) => r.id).filter(Boolean)
+    const allIds = await allSubsectionIdsForSection(activeSection.id);
+    const orderedIds = mergeReorderIds(
+      rooms.map((r) => r.id),
+      allIds
     );
+    if (orderedIds.length !== allIds.length) {
+      throw new Error(
+        `Volgorde opslaan mislukt: lijst out of sync (${orderedIds.length}/${allIds.length} componenten) \u2014 herlaad de sectie`
+      );
+    }
+    await reorderDrawingSubsections(activeSection.id, orderedIds);
     setStatus("Volgorde opgeslagen", "ok");
   } catch (err) {
     rooms = prevOrder.map((p) => {
@@ -8737,71 +11120,111 @@ async function moveRoom(index, delta) {
     }
   }
 }
-function hitVertex(norm, points, pxRadius = 8) {
-  const n = points.length > 1 && Math.hypot(points[0].x - points[points.length - 1].x, points[0].y - points[points.length - 1].y) < 1e-6 ? points.length - 1 : points.length;
-  let best = -1;
-  let bestDist = Infinity;
-  const w = Math.max(1, canvasWidth);
-  const h = Math.max(1, canvasHeight);
-  for (let i = 0; i < n; i++) {
-    const dx = (points[i].x - norm.x) * w;
-    const dy = (points[i].y - norm.y) * h;
-    const d = Math.hypot(dx, dy);
-    if (d <= pxRadius && d < bestDist) {
-      bestDist = d;
-      best = i;
+function hitVertex2(norm, points, pxRadius = 8) {
+  return hitVertex(norm, points, canvasWidth, canvasHeight, pxRadius);
+}
+function vertexHitRadiusPx2() {
+  return vertexHitRadiusPx(Boolean(detail));
+}
+function vertexHandleRadiusPx2() {
+  return vertexHandleRadiusPx(Boolean(detail));
+}
+function canClosePolygonAtCursor2(norm, points) {
+  return canClosePolygonAtCursor(norm, points, canvasWidth, canvasHeight, Boolean(detail));
+}
+function pendingDrawCanClose() {
+  return Boolean(
+    pendingRoom?.drawing && !pendingRoom.closed && pendingRoom.points.length >= 3 && pendingRoom.drawCursor && canClosePolygonAtCursor2(pendingRoom.drawCursor, pendingRoom.points)
+  );
+}
+function effectivePendingDrawCursor(norm) {
+  if (!pendingRoom?.drawing || pendingRoom.closed) return norm;
+  if (canClosePolygonAtCursor2(norm, pendingRoom.points)) {
+    return { ...pendingRoom.points[0] };
+  }
+  return norm;
+}
+function drawCanvasCrosshair(ctx, x, y, size, color, lineWidth = 1.5) {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.beginPath();
+  ctx.moveTo(x - size, y);
+  ctx.lineTo(x + size, y);
+  ctx.moveTo(x, y - size);
+  ctx.lineTo(x, y + size);
+  ctx.stroke();
+  ctx.restore();
+}
+function drawOpenPolygonDraft(ctx, room) {
+  const pts = room.points;
+  if (!pts.length) return;
+  const canClose = pts.length >= 3;
+  const snap = canClose && room.drawCursor != null && canClosePolygonAtCursor2(room.drawCursor, pts);
+  const cursorNorm = room.drawCursor ? snap ? pts[0] : room.drawCursor : null;
+  const firstC = normToCanvas2(pts[0]);
+  const lastC = normToCanvas2(pts[pts.length - 1]);
+  const cursorC = cursorNorm ? normToCanvas2(cursorNorm) : null;
+  const hr = vertexHandleRadiusPx2();
+  if (cursorC) {
+    ctx.strokeStyle = snap ? "#1b5e20" : "#43a047";
+    ctx.lineWidth = snap ? 2.5 : 1.5;
+    ctx.setLineDash(snap ? [5, 3] : [6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(lastC.x, lastC.y);
+    ctx.lineTo(cursorC.x, cursorC.y);
+    if (snap) ctx.lineTo(firstC.x, firstC.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  for (let i = 0; i < pts.length; i++) {
+    const c = normToCanvas2(pts[i]);
+    const isFirst = i === 0;
+    const r = isFirst ? snap ? hr * 2.4 : canClose ? hr * 1.75 : hr * 1.25 : hr;
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+    if (isFirst) {
+      ctx.fillStyle = snap ? "rgba(27,94,32,0.42)" : canClose ? "rgba(46,125,50,0.22)" : "rgba(255,255,255,0.35)";
+      ctx.strokeStyle = snap ? "#1b5e20" : canClose ? "#2e7d32" : "#00bcd4";
+      ctx.lineWidth = snap ? 2.5 : 2;
+    } else {
+      ctx.fillStyle = "rgba(255,255,255,0.35)";
+      ctx.strokeStyle = "#00bcd4";
+      ctx.lineWidth = detail ? 1.5 : 1;
+    }
+    ctx.fill();
+    ctx.stroke();
+    if (isFirst) {
+      drawCanvasCrosshair(ctx, c.x, c.y, snap ? 11 : canClose ? 8 : 5, isFirst && snap ? "#1b5e20" : "#2e7d32", snap ? 2 : 1.25);
+      if (snap) {
+        ctx.fillStyle = "#1b5e20";
+        ctx.font = "600 11px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("Sluiten", c.x, c.y - r - 7);
+      } else if (canClose) {
+        ctx.fillStyle = "#2e7d32";
+        ctx.font = "500 10px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("start", c.x, c.y - r - 6);
+      }
     }
   }
-  return best;
-}
-function vertexHitRadiusPx() {
-  return detail ? 16 : 10;
-}
-function vertexHandleRadiusPx() {
-  return detail ? 5 : 2;
-}
-function polylineHitRadiusPx() {
-  return detail ? 18 : 12;
-}
-function dist2PointToSegment(px, py, ax, ay, bx, by) {
-  const abx = bx - ax;
-  const aby = by - ay;
-  const apx = px - ax;
-  const apy = py - ay;
-  const ab2 = abx * abx + aby * aby;
-  const t = ab2 > 1e-12 ? Math.min(1, Math.max(0, (apx * abx + apy * aby) / ab2)) : 0;
-  const dx = apx - abx * t;
-  const dy = apy - aby * t;
-  return dx * dx + dy * dy;
-}
-function hitNearPolyline(norm, points, maxPx) {
-  if (points.length < 2) return false;
-  const p = normToCanvas(norm);
-  const max2 = maxPx * maxPx;
-  for (let i = 0; i < points.length - 1; i++) {
-    const a = normToCanvas(points[i]);
-    const b = normToCanvas(points[i + 1]);
-    if (dist2PointToSegment(p.x, p.y, a.x, a.y, b.x, b.y) <= max2) return true;
+  if (cursorC && !snap) {
+    drawCanvasCrosshair(ctx, cursorC.x, cursorC.y, 7, "#43a047", 1.25);
   }
-  return false;
 }
-function pointInRing2(pt, points) {
-  const n = points.length > 1 && Math.hypot(points[0].x - points[points.length - 1].x, points[0].y - points[points.length - 1].y) < 1e-6 ? points.length - 1 : points.length;
-  if (n < 3) return false;
-  let inside = false;
-  for (let i = 0, j = n - 1; i < n; j = i++) {
-    const xi = points[i].x;
-    const yi = points[i].y;
-    const xj = points[j].x;
-    const yj = points[j].y;
-    const intersect = yi > pt.y !== yj > pt.y && pt.x < (xj - xi) * (pt.y - yi) / (yj - yi + 1e-15) + xi;
-    if (intersect) inside = !inside;
-  }
-  return inside;
+function polylineHitRadiusPx2() {
+  return polylineHitRadiusPx(Boolean(detail));
+}
+function hitNearPolyline2(norm, points, maxPx) {
+  return hitNearPolyline(norm, points, maxPx, canvasWidth, canvasHeight);
+}
+function pointInRing3(pt, points) {
+  return pointInRing2(pt, points);
 }
 overlayCanvas.addEventListener("mousedown", (ev) => {
-  const c = eventToCanvas(ev);
-  const norm = canvasToNorm(c.x, c.y);
+  const c = eventToCanvas2(ev);
+  const norm = canvasToNorm2(c.x, c.y);
   if (detailPick) {
     detailPick.armed = false;
     detailPick.start = { ...norm };
@@ -8828,13 +11251,11 @@ overlayCanvas.addEventListener("mousedown", (ev) => {
     return;
   }
   if (pendingRoom?.drawing && !pendingRoom.closed) {
-    if (pendingRoom.points.length >= 3) {
-      const first = pendingRoom.points[0];
-      if (Math.hypot(norm.x - first.x, norm.y - first.y) <= 10 / Math.max(Math.min(canvasWidth, canvasHeight), 1) || ev.detail === 2) {
-        closePendingPolygon();
-        return;
-      }
+    if (pendingRoom.points.length >= 3 && (canClosePolygonAtCursor2(norm, pendingRoom.points) || ev.detail === 2)) {
+      closePendingPolygon();
+      return;
     }
+    pendingRoom.drawCursor = null;
     pendingRoom.points.push(norm);
     syncPendingRoomButtons();
     updateMeasureReadouts();
@@ -8843,8 +11264,8 @@ overlayCanvas.addEventListener("mousedown", (ev) => {
     return;
   }
   if (pendingRoom && !pendingRoom.drawing) {
-    const vertexHitPx = vertexHitRadiusPx();
-    const vi = hitVertex(norm, pendingRoom.points, vertexHitPx);
+    const vertexHitPx = vertexHitRadiusPx2();
+    const vi = hitVertex2(norm, pendingRoom.points, vertexHitPx);
     if (vi >= 0) {
       ev.preventDefault();
       if (ev.detail === 2 && pendingRoom.closed) {
@@ -8856,11 +11277,15 @@ overlayCanvas.addEventListener("mousedown", (ev) => {
       overlayCanvas.style.cursor = "grabbing";
       return;
     }
-    const nearLine = hitNearPolyline(norm, pendingRoom.points, polylineHitRadiusPx());
-    const inside = pendingRoom.closed && pointInRing2(norm, pendingRoom.points);
+    if (ev.detail === 2 && pendingRoom.closed && insertVertexOnActiveOutline(norm)) {
+      ev.preventDefault();
+      return;
+    }
+    const nearLine = hitNearPolyline2(norm, pendingRoom.points, polylineHitRadiusPx2());
+    const inside = pendingRoom.closed && pointInRing3(norm, pendingRoom.points);
     if (nearLine || inside) {
       ev.preventDefault();
-      pendingRoom.dragBodyLast = canvasToNormUnclamped(c.x, c.y);
+      pendingRoom.dragBodyLast = canvasToNormUnclamped2(c.x, c.y);
       pendingRoom.dragVertex = null;
       overlayCanvas.style.cursor = "grabbing";
       return;
@@ -8882,7 +11307,7 @@ overlayCanvas.addEventListener("mousedown", (ev) => {
     return;
   }
   if (discovery) {
-    const vi = hitVertex(norm, discovery.current, 12);
+    const vi = hitVertex2(norm, discovery.current, 12);
     if (vi >= 0) {
       if (ev.detail === 2) {
         removeVertexFromActiveOutline(vi);
@@ -8891,23 +11316,33 @@ overlayCanvas.addEventListener("mousedown", (ev) => {
       discovery.dragVertex = vi;
       return;
     }
+    if (ev.detail === 2 && insertVertexOnActiveOutline(norm)) {
+      ev.preventDefault();
+      return;
+    }
   }
 });
 overlayCanvas.addEventListener("dblclick", (ev) => {
   ev.preventDefault();
 });
 overlayCanvas.addEventListener("mousemove", (ev) => {
-  const c = eventToCanvas(ev);
-  const norm = canvasToNorm(c.x, c.y);
+  const c = eventToCanvas2(ev);
+  const norm = canvasToNorm2(c.x, c.y);
   if (detailPick && !detailPick.armed) {
     detailPick.current = { ...norm };
     drawOverlay();
     return;
   }
   if (pendingRoom?.dragVertex != null || pendingRoom?.dragBodyLast) return;
+  if (pendingRoom?.drawing && !pendingRoom.closed) {
+    pendingRoom.drawCursor = effectivePendingDrawCursor(norm);
+    overlayCanvas.style.cursor = pendingDrawCanClose() ? "pointer" : "crosshair";
+    drawOverlay();
+    return;
+  }
   if (pendingRoom?.closed) {
-    const onVertex = hitVertex(norm, pendingRoom.points, vertexHitRadiusPx()) >= 0;
-    const inside = pointInRing2(norm, pendingRoom.points);
+    const onVertex = hitVertex2(norm, pendingRoom.points, vertexHitRadiusPx2()) >= 0;
+    const inside = pointInRing3(norm, pendingRoom.points);
     overlayCanvas.style.cursor = onVertex || inside ? "grab" : "";
   }
   if (measure.tool === "length" && measure.points.length < 2) {
@@ -8951,6 +11386,10 @@ overlayCanvas.addEventListener("mouseleave", () => {
     return;
   }
   if (pendingRoom?.dragVertex == null && !pendingRoom?.dragBodyLast && discovery?.dragVertex == null) {
+    if (pendingRoom?.drawing && !pendingRoom.closed) {
+      pendingRoom.drawCursor = null;
+      drawOverlay();
+    }
     overlayCanvas.style.cursor = "";
   }
 });
@@ -8975,8 +11414,8 @@ window.addEventListener("mousemove", (ev) => {
     return;
   }
   if (!overlayCanvas.isConnected) return;
-  const c = eventToCanvas(ev);
-  const norm = canvasToNormUnclamped(c.x, c.y);
+  const c = eventToCanvas2(ev);
+  const norm = canvasToNormUnclamped2(c.x, c.y);
   if (pendingRoom?.dragVertex != null) {
     const i = pendingRoom.dragVertex;
     pendingRoom.points[i] = { x: norm.x, y: norm.y };
@@ -9024,7 +11463,7 @@ loginForm.addEventListener("submit", (ev) => {
   void (async () => {
     try {
       setStatus("Inloggen\u2026", "busy");
-      await bootstrapAndLogin(username, password);
+      await session.bootstrapAndLogin(username, password);
       setStatus("Ingelogd", "ok");
       if (buildingId) await loadFloormapSections(buildingId);
     } catch (err) {
@@ -9034,7 +11473,7 @@ loginForm.addEventListener("submit", (ev) => {
   })();
 });
 logoutBtn.addEventListener("click", () => {
-  showLogin();
+  session.logout();
   setStatus("Uitgelogd", "ok");
 });
 loadBuildingBtn.addEventListener("click", () => {
@@ -9097,10 +11536,10 @@ favoriteRemoveBtn?.addEventListener("click", () => {
   );
 });
 presetSaveBtn?.addEventListener("click", () => {
-  if (!buildingId || !auth?.token) return;
+  if (!buildingId || !auth()?.token) return;
   const name = window.prompt("Naam voor deze favorieten-preset:");
   if (!name?.trim()) return;
-  const run = bppPhase1Enabled() ? bppMaterialFavoritePresetAction(invokeString, auth.token, {
+  const run = bppPhase1Enabled() ? bppMaterialFavoritePresetAction(invokeString, auth().token, {
     action: "save",
     name: name.trim(),
     building_id: buildingId
@@ -9114,9 +11553,9 @@ presetSaveBtn?.addEventListener("click", () => {
   }).catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
 });
 presetApplyBtn?.addEventListener("click", () => {
-  if (!buildingId || !auth?.token) return;
+  if (!buildingId || !auth()?.token) return;
   void (async () => {
-    const data = bppPhase1Enabled() ? await bppListMaterialFavoritePresets(invokeString, auth.token) : await apiGet("/api/floormap/material-favorite-presets");
+    const data = bppPhase1Enabled() ? await bppListMaterialFavoritePresets(invokeString, auth().token) : await apiGet("/api/floormap/material-favorite-presets");
     const presets = data.presets || [];
     if (!presets.length) {
       setStatus("Geen presets beschikbaar", "err");
@@ -9134,7 +11573,7 @@ ${lines}`);
       return;
     }
     if (bppPhase1Enabled()) {
-      await bppMaterialFavoritePresetAction(invokeString, auth.token, {
+      await bppMaterialFavoritePresetAction(invokeString, auth().token, {
         action: "apply",
         preset_id: preset.preset_id,
         building_id: buildingId
@@ -9270,7 +11709,9 @@ async function restoreAfterCatalogReturn() {
         editingId: draft.pending.editingId || null,
         dragVertex: null,
         dragBodyLast: null,
-        drawing: !closed && Boolean(draft.pending.drawing)
+        drawing: !closed && Boolean(draft.pending.drawing),
+        drawCursor: null,
+        label: (draft.label || "").trim()
       };
       if (roomLabelInput) roomLabelInput.value = draft.label || "";
       if (roomVgInput) roomVgInput.value = draft.vg || "";
@@ -9397,12 +11838,6 @@ kierSuggestCb?.addEventListener("change", () => {
   if (editingId) {
     const room = rooms.find((r) => r.id === editingId);
     if (room && !componentIsLengthQuantity(room)) {
-      if (kierSuggestCb.checked && !selectedSetIds.has(editingId)) {
-        kierSuggestCb.checked = Boolean(existingSealFor(editingId));
-        setStatus("Vink eerst het component aan (selectie links) om kierdichting toe te voegen", "err");
-        syncKierSuggestUi();
-        return;
-      }
       void toggleKierSealForRoom(room, kierSuggestCb.checked).then(() => {
         syncKierSuggestUi();
       });
@@ -9425,16 +11860,14 @@ function updateMaterialQuantityHint() {
   }
 }
 backPickerBtn.addEventListener("click", () => {
-  endDiscovery();
-  endCalibrate();
-  void endDetail();
-  clearMeasure(false);
-  selectedSetIds.clear();
-  constituentSigns.clear();
-  booleanPreview = null;
+  if (activeSection?.id) captureSectionRoomsSnapshot(activeSection.id);
+  resetSectionWorkspace({ preserveLocalRoomState: true });
+  activeSection = null;
+  clearLastSectionId(buildingId);
+  syncFloormapLocation(null);
+  updateScaleUi();
   workspacePanelEl.classList.add("hidden");
   pickerPanelEl.classList.remove("hidden");
-  activeSection = null;
   renderSectionList();
 });
 zoomOutBtn.addEventListener("click", () => {
@@ -9455,9 +11888,31 @@ zoomFitBtn.addEventListener("click", () => {
 });
 discoverBtn.addEventListener("click", () => void startDiscovery());
 discoverBtnSide?.addEventListener("click", () => void startDiscovery());
-discoverMinSizeEl?.addEventListener("input", updateDiscoverMinLabel);
-updateDiscoverMinLabel();
+discoverMinSizeEl?.addEventListener("input", updateDiscoverFilterAria);
+updateDiscoverFilterAria();
 calibrateBtn.addEventListener("click", () => startCalibrate());
+vgVrOverviewBtn?.addEventListener("click", () => {
+  void openVgVrOverview();
+});
+vgVrOverviewCopyBtn?.addEventListener("click", () => {
+  void copyVgVrOverviewToClipboard();
+});
+copyLayoutCb?.addEventListener("change", () => {
+  syncCopyLayoutUi();
+});
+copyLayoutSourceEl?.addEventListener("change", () => {
+  if (copyLayoutBtn) {
+    copyLayoutBtn.disabled = !(copyLayoutCb?.checked && copyLayoutSourceEl.value);
+  }
+});
+copyLayoutBtn?.addEventListener("click", () => {
+  const src = copyLayoutSourceEl?.value || "";
+  if (!src) {
+    setStatus("Kies eerst een bronplattegrond", "err");
+    return;
+  }
+  void copyLayoutFromSection(src);
+});
 detailBtn?.addEventListener("click", () => startDetailTool());
 detailCloseBtn?.addEventListener("click", () => {
   void endDetail("Detailgebied gesloten");
@@ -9484,11 +11939,18 @@ roomDrawBtn.addEventListener("click", () => startDrawRoom());
 roomCloseBtn.addEventListener("click", () => closePendingPolygon());
 roomSimplifyBtn?.addEventListener("click", () => simplifyActiveOutline());
 roomSaveBtn.addEventListener("click", () => void savePendingRoom());
+roomLabelInput.addEventListener("input", () => {
+  syncPendingLabelToRooms();
+  scheduleRoomListRefresh();
+});
 expectedOriRowEl?.addEventListener("change", (ev) => {
   const t = ev.target;
   if (t instanceof HTMLInputElement && t.type === "checkbox") {
     syncOriCorrRows();
   }
+});
+componentOriEl?.addEventListener("change", () => {
+  rememberComponentOrientatie(readComponentOrientatie());
 });
 roomDuplicateBtn?.addEventListener("click", () => {
   void duplicateFromPending();
@@ -9518,6 +11980,15 @@ toolClearBtn?.addEventListener("click", () => {
   const panel = document.getElementById("fm-tools-bar");
   if (!panel) return;
   const key = "app-gevelwering-tools-collapsed";
+  panel.open = localStorage.getItem(key) !== "1";
+  panel.addEventListener("toggle", () => {
+    localStorage.setItem(key, panel.open ? "0" : "1");
+  });
+})();
+(() => {
+  const panel = document.getElementById("fm-set-ops-fieldset");
+  if (!panel) return;
+  const key = "app-gevelwering-compose-collapsed";
   panel.open = localStorage.getItem(key) !== "1";
   panel.addEventListener("toggle", () => {
     localStorage.setItem(key, panel.open ? "0" : "1");
@@ -9584,55 +12055,16 @@ editNudgeUpBtn?.addEventListener("click", () => nudgeCurrent(0, -0.01));
 editNudgeDownBtn?.addEventListener("click", () => nudgeCurrent(0, 0.01));
 syncPendingRoomButtons();
 syncFavoriteButtons();
-function connect() {
-  setStatus("Verbinden\u2026", "busy");
-  setConnLed(false);
-  ws = new WebSocket(BPP_WS);
-  ws.addEventListener("open", () => {
-    setConnLed(true);
-    void (async () => {
-      try {
-        await send("session.open", { client: "app-gevelwering-floormap" }, "session.opened");
-        const stored = loadStoredAuth();
-        if (stored?.token) {
-          await loadSharedApi();
-          const ret = await invokeString("API_ValidateSession", [stored.token]);
-          if (ret.startsWith("ERROR")) {
-            showLogin();
-            setStatus("Sessie verlopen \u2014 log in", "err");
-            return;
-          }
-          showPanel(stored);
-          setStatus("Gereed", "ok");
-          buildingInput.value = buildingId;
-          if (buildingId) await loadFloormapSections(buildingId);
-        } else {
-          showLogin();
-          setStatus("Verbonden \u2014 log in", "ok");
-        }
-      } catch (err) {
-        setStatus(err instanceof Error ? err.message : String(err), "err");
-        showLogin();
-      }
-    })();
-  });
-  ws.addEventListener("message", (ev) => onMessage(String(ev.data)));
-  ws.addEventListener("close", () => {
-    setConnLed(false);
-    setStatus("Verbinding verbroken", "err");
-  });
-  ws.addEventListener("error", () => setStatus("WebSocket-fout", "err"));
-}
 buildingInput.value = buildingId;
 initPasswordToggles();
 initEngineerLayoutSplit();
 if (fileMenuRoot) {
   projectMenu = mountProjectMenu(fileMenuRoot, {
-    getToken: () => auth?.token ?? null,
+    getToken: () => auth()?.token ?? null,
     getBuildingId: () => buildingId,
     getProjectMeta: () => ({ label: buildingLabel, external_ref: buildingExternalRef }),
     invokeString: (name, args) => invokeString(name, args),
-    apiAuthHeaders: () => auth ? apiAuthHeaders(auth.token, true) : {},
+    apiAuthHeaders: () => auth ? apiAuthHeaders(auth().token, true) : {},
     openBuilding: (id) => loadFloormapSections(id),
     saveProject: async () => {
       if (!buildingId) throw new Error("Geen project geselecteerd");
@@ -9643,6 +12075,8 @@ if (fileMenuRoot) {
       buildingExternalRef = meta.external_ref;
     },
     onProjectDeleted: async () => {
+      const deletedBid = buildingId;
+      clearLastSectionId(deletedBid);
       buildingId = "";
       buildingLabel = "";
       buildingExternalRef = "";
@@ -9659,12 +12093,12 @@ if (fileMenuRoot) {
     },
     onStatus: (state, text) => setStatus(text, state),
     setTitle: (title) => {
-      document.title = title === "Geen project" ? "Geluidwering Gevels \u2014 Tekeninganalyse" : `${title} \u2014 Plattegrond`;
+      document.title = title === "Geen project" ? "Stilte advies en meten \u2014 Tekeninganalyse" : `${title} \u2014 Plattegrond`;
     }
   });
   fileMenuRoot.hidden = true;
 }
-connect();
+session.connect();
 /*! Bundled license information:
 
 polygon-clipping/dist/polygon-clipping.umd.js:

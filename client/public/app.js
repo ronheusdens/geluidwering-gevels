@@ -109,7 +109,37 @@ function bppPhase1Enabled() {
 
 // src/app.ts
 var AUTH_KEY = "app_gevelwering_auth";
+var LAST_USERNAME_KEY = "app_gevelwering_last_username";
 var BPP_WS = resolveBppWsUrl();
+var STILTE_PORTAL_PROFILE_URL = window.STILTE_PORTAL_PROFILE_URL || "http://127.0.0.1:4174/opdrachtgever.html#profiel";
+function loadRememberedUsername() {
+  try {
+    return (localStorage.getItem(LAST_USERNAME_KEY) || "").trim();
+  } catch {
+    return "";
+  }
+}
+function rememberUsername(username) {
+  const u = username.trim();
+  if (!u) return;
+  try {
+    localStorage.setItem(LAST_USERNAME_KEY, u);
+  } catch {
+  }
+}
+function applyRememberedLoginFields() {
+  const uEl = loginForm.elements.namedItem("username");
+  const pEl = loginForm.elements.namedItem("password");
+  if (!(uEl instanceof HTMLInputElement) || !(pEl instanceof HTMLInputElement)) return;
+  const remembered = loadRememberedUsername();
+  if (remembered) {
+    uEl.value = remembered;
+    pEl.value = remembered === "demo" ? "demo" : "";
+  } else {
+    uEl.value = "demo";
+    pEl.value = "demo";
+  }
+}
 var connBarEl = document.getElementById("conn-bar");
 var connLedEl = document.getElementById("conn-led");
 var statusEl = document.getElementById("conn-status");
@@ -117,7 +147,6 @@ var loginPanel = document.getElementById("login-panel");
 var appPanel = document.getElementById("app-panel");
 var loginForm = document.getElementById("login-form");
 var registerForm = document.getElementById("register-form");
-var customerProfileForm = document.getElementById("customer-profile-form");
 var projectForm = document.getElementById("project-form");
 var loginBtn = document.getElementById("login-btn");
 var registerBtn = document.getElementById("register-btn");
@@ -141,18 +170,13 @@ var projectIdInput = document.getElementById("project-id-input");
 var projectStatusViewEl = document.getElementById("project-status-view");
 var projectDetailPanel = document.getElementById("project-detail-panel");
 var projectDetailTitle = document.getElementById("project-detail-title");
-var profileBtn = document.getElementById("profile-btn");
-var profilePanelEl = document.getElementById("profile-panel");
+var profilePortalLink = document.getElementById("profile-portal-link");
+var profilePortalBanner = document.getElementById("profile-portal-banner");
 var methodBtn = document.getElementById("method-btn");
 var methodPanelEl = document.getElementById("method-panel");
 var methodCloseBtn = document.getElementById("method-close-btn");
-var profileServiceEmailEl = document.getElementById("profile-service-email");
-var profilePwWarningEl = document.getElementById("profile-pw-warning");
-var saveProfileBtn = document.getElementById("save-profile-btn");
-var passwordForm = document.getElementById("password-form");
-var changePwBtn = document.getElementById("change-pw-btn");
-var profileCloseBtn = document.getElementById("profile-close-btn");
 var drawingFileInput = document.getElementById("drawing-file-input");
+var drawingPickedEl = document.getElementById("drawing-picked");
 var drawingListEl = document.getElementById("drawing-list");
 var drawingUploadHintEl = document.getElementById("drawing-upload-hint");
 var submitDrawingsBtn = document.getElementById("submit-drawings-btn");
@@ -180,6 +204,7 @@ var auth = null;
 var issuedAccessPassword = null;
 var issuedAccessUsername = null;
 var cachedProjects = [];
+var cachedCustomerProfile = null;
 var pending = /* @__PURE__ */ new Map();
 function setStatus(text, kind = "busy") {
   statusEl.textContent = text;
@@ -600,16 +625,17 @@ function setFormValue(form, name, value) {
 function showLogin() {
   auth = null;
   storeAuth2(null);
+  cachedCustomerProfile = null;
   loginPanel.classList.remove("hidden");
   appPanel.classList.add("hidden");
-  profilePanelEl.classList.add("hidden");
   methodPanelEl.classList.add("hidden");
   projectDetailPanel.classList.add("hidden");
-  profilePwWarningEl.classList.add("hidden");
+  profilePortalBanner.classList.add("hidden");
   setAuthTab("signin");
+  applyRememberedLoginFields();
   pageTitle.textContent = "Opdrachtgever";
   pageLede.textContent = "Log in om uw akoestische projecten te beheren.";
-  document.title = "Geluidwering Gevels \u2014 Opdrachtgever";
+  document.title = "Stilte advies en meten \u2014 Opdrachtgever";
 }
 function loggedInLabel(info) {
   const name = info.display_name?.trim();
@@ -618,18 +644,18 @@ function loggedInLabel(info) {
 async function showApp(info) {
   auth = info;
   storeAuth2(info);
+  rememberUsername(info.username);
   loginPanel.classList.add("hidden");
   appPanel.classList.remove("hidden");
   projectDetailPanel.classList.add("hidden");
   setStatus(loggedInLabel(info), "ok");
-  profileServiceEmailEl.textContent = info.email ? `Account-e-mail: ${info.email}` : "Geen account-e-mail ingesteld.";
   const mustChange = !!info.must_change_password;
-  profilePwWarningEl.classList.toggle("hidden", !mustChange);
-  profilePanelEl.classList.toggle("hidden", !mustChange);
+  profilePortalBanner.classList.toggle("hidden", !mustChange);
+  profilePortalLink.href = STILTE_PORTAL_PROFILE_URL;
   methodPanelEl.classList.add("hidden");
   pageTitle.textContent = "Projecten";
-  pageLede.textContent = "Uw lopende akoestische projecten. Klantgegevens beheert u onder Profiel.";
-  document.title = "Geluidwering Gevels \u2014 Projecten";
+  pageLede.textContent = "Uw lopende akoestische projecten. Klantgegevens en wachtwoord beheert u in het Stilte-portaal.";
+  document.title = "Stilte advies en meten \u2014 Projecten";
   await loadCustomerProfile();
   await refreshProjectList();
   await refreshGlobalInbox();
@@ -737,18 +763,17 @@ async function bootstrapSession() {
   }
 }
 function readCustomerProfile() {
-  const fd = new FormData(customerProfileForm);
-  const g = (k) => String(fd.get(k) ?? "").trim();
+  if (cachedCustomerProfile?.name) return cachedCustomerProfile;
   return {
-    name: g("name"),
-    email: g("email"),
-    phone: g("phone"),
-    notes: g("notes"),
-    cust_street: g("cust_street"),
-    cust_postal: g("cust_postal"),
-    cust_city: g("cust_city"),
-    cust_municipality: g("cust_municipality"),
-    cust_country: g("cust_country") || "NL"
+    name: (auth?.display_name || auth?.username || "").trim(),
+    email: (auth?.email || "").trim(),
+    phone: "",
+    notes: "",
+    cust_street: "",
+    cust_postal: "",
+    cust_city: "",
+    cust_municipality: "",
+    cust_country: "NL"
   };
 }
 function readProjectForm() {
@@ -772,22 +797,36 @@ async function loadCustomerProfile() {
     return;
   }
   const parsed = JSON.parse(ret);
-  if (!parsed.customer) return;
-  setFormValue(customerProfileForm, "name", parsed.customer.name);
-  setFormValue(customerProfileForm, "email", parsed.customer.email);
-  setFormValue(customerProfileForm, "phone", parsed.customer.phone);
-  setFormValue(customerProfileForm, "notes", parsed.customer.notes);
+  if (!parsed.customer) {
+    cachedCustomerProfile = null;
+    return;
+  }
   const ca = parsed.customer_address;
-  setFormValue(customerProfileForm, "cust_street", ca?.street_line ?? "");
-  setFormValue(customerProfileForm, "cust_postal", ca?.postal_code ?? "");
-  setFormValue(customerProfileForm, "cust_city", ca?.city ?? "");
-  setFormValue(customerProfileForm, "cust_municipality", ca?.municipality ?? "");
-  setFormValue(customerProfileForm, "cust_country", ca?.country_code || "NL");
+  cachedCustomerProfile = {
+    name: parsed.customer.name,
+    email: parsed.customer.email,
+    phone: parsed.customer.phone,
+    notes: parsed.customer.notes,
+    cust_street: ca?.street_line ?? "",
+    cust_postal: ca?.postal_code ?? "",
+    cust_city: ca?.city ?? "",
+    cust_municipality: ca?.municipality ?? "",
+    cust_country: ca?.country_code || "NL"
+  };
 }
 function formatBytes(size) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+function showPickedDrawings(names) {
+  if (!names.length) {
+    drawingPickedEl.hidden = true;
+    drawingPickedEl.textContent = "";
+    return;
+  }
+  drawingPickedEl.hidden = false;
+  drawingPickedEl.textContent = names.length === 1 ? `Gekozen: ${names[0]}` : `Gekozen: ${names.join(", ")}`;
 }
 function fileExtension(name) {
   const parts = name.toLowerCase().split(".");
@@ -933,7 +972,7 @@ function setProjectEditingState(status) {
   const editable = !status || status === "INITIAL_REQUEST";
   saveBtn.disabled = !editable;
   deleteProjectBtn.disabled = !lastProjectId || status !== "INITIAL_REQUEST";
-  projectForm.querySelectorAll("input:not([type=hidden]), textarea").forEach((el) => {
+  projectForm.querySelectorAll("input:not([type=hidden]):not([type=file]), textarea").forEach((el) => {
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
       el.readOnly = !editable;
     }
@@ -970,6 +1009,7 @@ function clearProjectFields() {
   projectDetailTitle.textContent = "Nieuw project";
   drawingListEl.innerHTML = "";
   drawingFileInput.value = "";
+  showPickedDrawings([]);
   drawingFileInput.disabled = true;
   drawingUploadHintEl.textContent = "Sla het project eerst op, upload daarna PDF- of DWG-tekeningen.";
   renderProjectProgress(null);
@@ -1120,98 +1160,19 @@ gotoSigninBtn.addEventListener("click", () => {
   setAuthTab("signin");
   const uEl = loginForm.elements.namedItem("username");
   const pEl = loginForm.elements.namedItem("password");
-  if (uEl && issuedAccessUsername) uEl.value = issuedAccessUsername;
+  if (uEl && issuedAccessUsername) {
+    uEl.value = issuedAccessUsername;
+    rememberUsername(issuedAccessUsername);
+  }
   if (pEl && issuedAccessPassword) pEl.value = issuedAccessPassword;
   setStatus("Log in met het verstrekte wachtwoord", "ok");
 });
-profileBtn.addEventListener("click", () => {
-  methodPanelEl.classList.add("hidden");
-  profilePanelEl.classList.remove("hidden");
-  profilePwWarningEl.classList.toggle("hidden", !auth?.must_change_password);
-  void loadCustomerProfile();
-});
 methodBtn.addEventListener("click", () => {
-  if (auth?.must_change_password) return;
-  profilePanelEl.classList.add("hidden");
   methodPanelEl.classList.remove("hidden");
   methodPanelEl.querySelector(".method-scroll")?.focus();
 });
 methodCloseBtn.addEventListener("click", () => {
   methodPanelEl.classList.add("hidden");
-});
-profileCloseBtn.addEventListener("click", () => {
-  if (auth?.must_change_password) return;
-  profilePanelEl.classList.add("hidden");
-});
-customerProfileForm.addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  if (!auth?.token) {
-    showLogin();
-    return;
-  }
-  const c = readCustomerProfile();
-  if (!c.name) {
-    setStatus("Klantnaam is verplicht", "err");
-    return;
-  }
-  saveProfileBtn.disabled = true;
-  setStatus("Klantprofiel opslaan\u2026", "busy");
-  try {
-    const ret = await invokeString("API_SaveCustomerProfile", [
-      auth.token,
-      c.name,
-      c.email,
-      c.phone,
-      c.notes,
-      c.cust_street,
-      c.cust_postal,
-      c.cust_city,
-      c.cust_municipality,
-      c.cust_country
-    ]);
-    if (ret.startsWith("ERROR")) {
-      setStatus(ret, "err");
-      return;
-    }
-    setStatus("Klantprofiel opgeslagen", "ok");
-    if (!auth.must_change_password) profilePanelEl.classList.add("hidden");
-  } catch (err) {
-    setStatus(err instanceof Error ? err.message : String(err), "err");
-  } finally {
-    saveProfileBtn.disabled = false;
-  }
-});
-passwordForm.addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  if (!auth?.token) {
-    showLogin();
-    return;
-  }
-  const fd = new FormData(passwordForm);
-  const currentPassword = String(fd.get("current_password") ?? "");
-  const newPassword = String(fd.get("new_password") ?? "");
-  const confirmPassword = String(fd.get("confirm_password") ?? "");
-  if (newPassword !== confirmPassword) {
-    setStatus("Nieuwe wachtwoorden komen niet overeen", "err");
-    return;
-  }
-  changePwBtn.disabled = true;
-  setStatus("Wachtwoord bijwerken\u2026", "busy");
-  try {
-    const ret = await invokeString("API_ChangePassword", [auth.token, currentPassword, newPassword]);
-    if (ret.startsWith("ERROR")) {
-      setStatus(ret, "err");
-      return;
-    }
-    auth = { ...auth, must_change_password: false };
-    storeAuth2(auth);
-    profilePwWarningEl.classList.add("hidden");
-    setStatus("Wachtwoord bijgewerkt", "ok");
-  } catch (err) {
-    setStatus(err instanceof Error ? err.message : String(err), "err");
-  } finally {
-    changePwBtn.disabled = false;
-  }
 });
 projectForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
@@ -1219,10 +1180,15 @@ projectForm.addEventListener("submit", async (ev) => {
     showLogin();
     return;
   }
+  if (auth.must_change_password) {
+    setStatus("Wijzig eerst uw wachtwoord in het Stilte-portaal (Profiel)", "err");
+    profilePortalBanner.classList.remove("hidden");
+    return;
+  }
   const c = readCustomerProfile();
   if (!c.name) {
-    setStatus("Stel onder Profiel eerst uw klantnaam in voordat u een project opslaat", "err");
-    profilePanelEl.classList.remove("hidden");
+    setStatus("Stel eerst uw klantnaam in via Profiel in het Stilte-portaal", "err");
+    profilePortalBanner.classList.remove("hidden");
     return;
   }
   saveBtn.disabled = true;
@@ -1297,7 +1263,7 @@ reloadBtn.addEventListener("click", async () => {
 newProjectBtn.addEventListener("click", () => {
   clearProjectFields();
   projectDetailPanel.classList.remove("hidden");
-  setStatus("Nieuw project \u2014 stel zo nodig klantgegevens in onder Profiel", "ok");
+  setStatus("Nieuw project \u2014 klantgegevens beheert u in het Stilte-portaal (Profiel)", "ok");
 });
 deleteProjectBtn.addEventListener("click", async () => {
   if (!lastProjectId || !auth?.token || currentProjectStatus !== "INITIAL_REQUEST") return;
@@ -1332,30 +1298,39 @@ refreshListBtn.addEventListener("click", async () => {
     refreshListBtn.disabled = false;
   }
 });
+var drawingUploadBusy = false;
 drawingFileInput.addEventListener("change", async () => {
-  const files = drawingFileInput.files;
+  const picked = Array.from(drawingFileInput.files ?? []);
   const projectId = activeProjectId();
-  if (!files?.length || !auth?.token || !projectId) return;
-  if (currentProjectStatus && currentProjectStatus !== "INITIAL_REQUEST") {
-    setStatus("Tekeningen kunnen alleen worden ge\xFCpload zolang het project nog niet is ingediend", "err");
-    drawingFileInput.value = "";
+  if (!picked.length) return;
+  showPickedDrawings(picked.map((file) => file.name));
+  if (!auth?.token || !projectId) {
+    drawingUploadHintEl.textContent = "Sla het project eerst op. De gekozen bestanden blijven staan.";
     return;
   }
-  drawingFileInput.disabled = true;
-  setStatus("Tekeningen uploaden\u2026", "busy");
+  if (currentProjectStatus && currentProjectStatus !== "INITIAL_REQUEST") {
+    setStatus("Tekeningen kunnen alleen worden ge\xFCpload zolang het project nog niet is ingediend", "err");
+    return;
+  }
+  if (drawingUploadBusy) return;
+  drawingUploadBusy = true;
+  setStatus(picked.length === 1 ? "Tekening uploaden\u2026" : `${picked.length} tekeningen uploaden\u2026`, "busy");
   try {
-    for (const file of [...files]) {
+    for (const file of picked) {
       await uploadDrawingFile(file);
     }
+    drawingFileInput.value = "";
+    showPickedDrawings([]);
     await refreshProjectDocuments();
     setStatus(
-      files.length === 1 ? "1 tekening ge\xFCpload" : `${files.length} tekeningen ge\xFCpload`,
+      picked.length === 1 ? "1 tekening ge\xFCpload" : `${picked.length} tekeningen ge\xFCpload`,
       "ok"
     );
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
+    drawingUploadHintEl.textContent = "Upload mislukt. De gekozen bestanden staan nog in het vak.";
   } finally {
-    drawingFileInput.value = "";
+    drawingUploadBusy = false;
     drawingFileInput.disabled = currentProjectStatus !== null && currentProjectStatus !== "INITIAL_REQUEST";
   }
 });
@@ -1426,4 +1401,5 @@ emailReportBtn?.addEventListener("click", () => {
 bootstrapSession().catch((err) => {
   setStatus(err instanceof Error ? err.message : String(err), "err");
 });
+applyRememberedLoginFields();
 initPasswordToggles();

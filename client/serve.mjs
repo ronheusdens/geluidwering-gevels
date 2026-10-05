@@ -35,6 +35,21 @@ import {
   handleReportList,
   handleReportPublish,
 } from "./lib/report-api.mjs";
+import {
+  handleFacadeDiscoverOpenings,
+  handleFacadeDiscoverOptions,
+} from "./lib/facade-discover-api.mjs";
+import {
+  handleMaterialsStudioApiOptions,
+  handleMaterialsStudioApprovePublish,
+  handleMaterialsStudioComposePreview,
+  handleMaterialsStudioComposeSave,
+  handleMaterialsStudioMaterialSearch,
+  handleMaterialsStudioPublish,
+  handleMaterialsStudioQcReport,
+  handleMaterialsStudioRefineKalkzandsteen,
+  handleMaterialsStudioSummary,
+} from "./lib/materials-studio-api.mjs";
 import { closePool } from "./lib/pg-config.mjs";
 import { corsHeaders, jsonWithSecurity, securityHeaders } from "./lib/http-security.mjs";
 
@@ -111,6 +126,9 @@ const types = {
 };
 
 const server = http.createServer(async (req, res) => {
+  // PDF hi-res discover can take tens of seconds on large drawings.
+  req.setTimeout(180_000);
+  res.setTimeout(180_000);
   const urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
@@ -151,6 +169,84 @@ const server = http.createServer(async (req, res) => {
     }
     res.writeHead(405, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ ok: false, error: "method not allowed" }));
+    return;
+  }
+
+  if (
+    urlPath === "/api/materials-studio/summary" ||
+    urlPath === "/api/materials-studio/qc-report" ||
+    urlPath === "/api/materials-studio/publish" ||
+    urlPath === "/api/materials-studio/approve-publish" ||
+    urlPath === "/api/materials-studio/refine-kalkzandsteen" ||
+    urlPath === "/api/materials-studio/material-search" ||
+    urlPath === "/api/materials-studio/compose-preview" ||
+    urlPath === "/api/materials-studio/compose-save"
+  ) {
+    if (req.method === "OPTIONS") {
+      handleMaterialsStudioApiOptions(req, res);
+      return;
+    }
+    try {
+      if (urlPath === "/api/materials-studio/summary" && req.method === "GET") {
+        await handleMaterialsStudioSummary(req, res);
+        return;
+      }
+      if (urlPath === "/api/materials-studio/qc-report" && req.method === "GET") {
+        await handleMaterialsStudioQcReport(req, res);
+        return;
+      }
+      if (urlPath === "/api/materials-studio/material-search" && req.method === "GET") {
+        await handleMaterialsStudioMaterialSearch(req, res, url);
+        return;
+      }
+      if (urlPath === "/api/materials-studio/publish" && req.method === "POST") {
+        await handleMaterialsStudioPublish(req, res);
+        return;
+      }
+      if (urlPath === "/api/materials-studio/approve-publish" && req.method === "POST") {
+        await handleMaterialsStudioApprovePublish(req, res);
+        return;
+      }
+      if (urlPath === "/api/materials-studio/refine-kalkzandsteen" && req.method === "POST") {
+        await handleMaterialsStudioRefineKalkzandsteen(req, res);
+        return;
+      }
+      if (urlPath === "/api/materials-studio/compose-preview" && req.method === "POST") {
+        await handleMaterialsStudioComposePreview(req, res);
+        return;
+      }
+      if (urlPath === "/api/materials-studio/compose-save" && req.method === "POST") {
+        await handleMaterialsStudioComposeSave(req, res);
+        return;
+      }
+    } catch (err) {
+      console.error("materials-studio API error:", err);
+      if (!res.headersSent) {
+        jsonWithSecurity(req, res, 500, { ok: false, error: "internal server error" });
+      }
+      return;
+    }
+    jsonWithSecurity(req, res, 405, { ok: false, error: "method not allowed" });
+    return;
+  }
+
+  if (urlPath === "/api/floormap/discover-openings") {
+    if (req.method === "OPTIONS") {
+      handleFacadeDiscoverOptions(req, res);
+      return;
+    }
+    if (req.method === "POST") {
+      try {
+        await handleFacadeDiscoverOpenings(req, res);
+      } catch (err) {
+        console.error("discover-openings API error:", err);
+        if (!res.headersSent) {
+          jsonWithSecurity(req, res, 500, { ok: false, error: "internal server error" });
+        }
+      }
+      return;
+    }
+    jsonWithSecurity(req, res, 405, { ok: false, error: "method not allowed" });
     return;
   }
 
@@ -383,10 +479,13 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, host, () => {
+  server.requestTimeout = 180_000;
+  server.headersTimeout = 185_000;
   const url = `http://${host}:${port}/`;
   console.log(`Gevelwering UI: ${url} (loopback — use Apache HTTPS in production)`);
   console.log(`Session API: POST/DELETE ${url}api/session`);
   console.log(`Drawing API: POST ${url}api/drawings/upload  GET ${url}api/drawings/download`);
+  console.log(`Discover API: POST ${url}api/floormap/discover-openings (server PDF hi-res)`);
   if (BPP_ONLY) {
     console.log(
       `Floormap/drawing CRUD: 410 Gone (GEVELWERING_BPP_ONLY=1) — use bppServer WSS API_*`,

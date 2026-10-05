@@ -1,6 +1,7 @@
 /**
  * DGMR Geluidwering Gevels material taxonomy (rubriek + category-specific subrubriek).
- * Source: GG catalog UI. Subrubriek nr 0 = "all" filter only (not stored on rows).
+ * Source: GG catalog UI (1–9) plus app rubriek 10 (Losse materialen) and 11 (Interieur).
+ * Subrubriek nr 0 = "all" filter only (not stored on rows).
  */
 
 /** @typedef {{ nr: number, name: string }} Rubriek */
@@ -17,6 +18,8 @@ export const MATERIAL_RUBRIEKEN = [
   { nr: 7, name: "Ventilatievoorzieningen oud (voor 1-1-2012)" },
   { nr: 8, name: "Lichte scheidingsconstructies" },
   { nr: 9, name: "Kier- en naaddichtingsprofielen" },
+  { nr: 10, name: "Losse materialen" },
+  { nr: 11, name: "Interieur" },
 ];
 
 /** @type {Record<number, Subrubriek[]>} */
@@ -102,6 +105,27 @@ export const MATERIAL_SUBRUBRIEKEN = {
     { nr: 1, name: "Kierdichtingsprofielen" },
     { nr: 2, name: "Naaddichtingsprofielen" },
     { nr: 3, name: "Beglazingsranden" },
+  ],
+  /** Building blocks for composite / template layers (Materials Studio). */
+  10: [
+    { nr: 1, name: "Bekleding / buitenblad" },
+    { nr: 2, name: "Ventilerende spouw" },
+    { nr: 3, name: "Folie / membraan" },
+    { nr: 4, name: "Beplating" },
+    { nr: 5, name: "Skelet / stijlen" },
+    { nr: 6, name: "Isolatie" },
+    { nr: 7, name: "Damprem" },
+    { nr: 8, name: "Binnenafwerking" },
+    { nr: 9, name: "Constructie" },
+    { nr: 10, name: "Overig" },
+  ],
+  /** Isolatie / overdracht tussen ruimten (exposure INTERIOR). */
+  11: [
+    { nr: 1, name: "Scheidingswanden" },
+    { nr: 2, name: "Binnenwanden" },
+    { nr: 3, name: "Vloeren / plafonds" },
+    { nr: 4, name: "Vloerafwerking (ΔL)" },
+    { nr: 5, name: "Diversen" },
   ],
 };
 

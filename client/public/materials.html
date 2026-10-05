@@ -3,25 +3,27 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Geluidwering Gevels — Materiaalcatalogus</title>
-  <link rel="stylesheet" href="/styles.css?v=pw-eye" />
+  <title>Stilte advies en meten — Materiaalcatalogus</title>
+  <link rel="stylesheet" href="/styles.css?v=logo-wordmark" />
 </head>
 <body>
   <main class="page page-wide">
     <header class="header">
       <div class="brand">
-        <img class="brand-logo" src="/assets/stilte-logo.jpg" alt="" width="68" height="68" />
+        <img class="brand-logo" src="/assets/stilte-logo.png" alt="Stilte advies en meten" width="200" height="76" />
         <div class="brand-copy">
-          <p class="brand-name">Geluidwering Gevels</p>
+          <p class="brand-name">Stilte advies en meten</p>
           <h1 class="page-heading">Materiaalcatalogus</h1>
         </div>
       </div>
       <p class="lede">
-        Beheer van <code>app_gevelwering.material</code> (R&nbsp;63–4000&nbsp;Hz + RA / Rw(C,&nbsp;Ctr)).
-        Alleen voor <code>admin</code>.
+        Beheer van <code>app_gevelwering.material</code> (catalogus, QC en publicatie).
+        Alleen voor <code>admin</code> — engineers lezen de gepubliceerde catalogus via gevel/GA.
         <a href="/admin.html">← Projectenbeheer</a>
-        ·
-        <a id="mat-return-link" class="hidden" href="/ga.html">← Terug naar toekennen vlak (gevel)</a>
+        <span id="mat-return-wrap" class="hidden">
+          ·
+          <a id="mat-return-link" href="/ga.html">← Terug naar toekennen vlak (gevel)</a>
+        </span>
       </p>
     </header>
 
@@ -49,6 +51,12 @@
         <button type="button" id="mat-logout-btn" class="secondary">Uitloggen</button>
       </div>
 
+      <nav class="mat-tabs" role="tablist" aria-label="Materiaalcatalogus">
+        <button type="button" id="mat-tab-catalog-btn" class="mat-tab active" role="tab" aria-selected="true" aria-controls="mat-tab-catalog">Catalogus</button>
+        <button type="button" id="mat-tab-studio-btn" class="mat-tab" role="tab" aria-selected="false" aria-controls="mat-tab-studio">Studio</button>
+      </nav>
+
+      <div id="mat-tab-catalog" role="tabpanel">
       <section class="panel">
         <form id="mat-filter-form" class="form mat-filter-row">
           <label>Zoeken
@@ -62,6 +70,13 @@
           <label>Subrubriek
             <select id="mat-subcategory" disabled>
               <option value="">0 - Alle subrubrieken</option>
+            </select>
+          </label>
+          <label>Interieur / exterieur
+            <select id="mat-exposure-filter">
+              <option value="">Alle</option>
+              <option value="EXTERIOR" selected>Exterieur</option>
+              <option value="INTERIOR">Interieur</option>
             </select>
           </label>
           <div class="actions mat-filter-actions">
@@ -88,9 +103,11 @@
               <th>Rubriek</th>
               <th>Subrubriek</th>
               <th>Naam</th>
+              <th>Opbouw</th>
+              <th>I/E</th>
               <th>Dikte</th>
               <th>Gewicht</th>
-              <th>RA</th>
+              <th class="mat-col-ext">RA</th>
               <th>R63</th>
               <th>R125</th>
               <th>R250</th>
@@ -99,8 +116,9 @@
               <th>R2k</th>
               <th>R4k</th>
               <th>Rw</th>
-              <th>C</th>
-              <th>Ctr</th>
+              <th class="mat-col-ext">C</th>
+              <th class="mat-col-ext">Ctr</th>
+              <th class="mat-col-int hidden" title="Praktijkwaarde DnT,A,k [dB]">Praktijkwaarde</th>
             </tr>
           </thead>
           <tbody id="mat-tbody"></tbody>
@@ -109,6 +127,7 @@
 
       <section class="panel" id="mat-editor-panel">
         <h2 id="mat-editor-title">Materiaal bewerken</h2>
+        <p id="mat-opbouw" class="mat-opbouw-line hidden" aria-live="polite"></p>
         <form id="mat-editor-form" class="form mat-editor">
           <input type="hidden" id="mat-id" />
 
@@ -116,10 +135,10 @@
             <legend>Identiteit</legend>
             <div class="mat-row">
               <label class="mat-field mat-field-sm">Catalogus-id
-                <input id="mat-catalog-id" required maxlength="16" placeholder="D00118" />
+                <input id="mat-catalog-id" maxlength="16" placeholder="wordt toegewezen" title="Bij nieuw materiaal automatisch A#####. Bij bewerken mag je corrigeren." />
               </label>
               <label class="mat-field mat-field-sm">Nr
-                <input id="mat-no" type="number" step="1" />
+                <input id="mat-no" type="number" step="1" placeholder="auto" title="Bij nieuw materiaal automatisch. Uniek per bron samen met catalogus-id." />
               </label>
               <label class="mat-field mat-field-md">Rubriek
                 <select id="mat-master" required></select>
@@ -129,6 +148,12 @@
               </label>
               <label class="mat-field mat-field-md">Subrubriek
                 <select id="mat-cat"></select>
+              </label>
+              <label class="mat-field mat-field-md">Interieur / exterieur
+                <select id="mat-exposure" required>
+                  <option value="EXTERIOR" selected>Exterieur (gevelwering)</option>
+                  <option value="INTERIOR">Interieur (isolatie / overdracht)</option>
+                </select>
               </label>
             </div>
             <div class="mat-row">
@@ -151,6 +176,18 @@
                 <span>Meest gebruikt in dit project</span>
               </label>
             </div>
+            <div class="mat-row mat-preset-add-row" id="mat-preset-add-row">
+              <label class="mat-field mat-field-grow">Toevoegen aan favorieten-preset
+                <select id="mat-preset-add-select" disabled>
+                  <option value="">— kies preset —</option>
+                </select>
+              </label>
+              <div class="actions mat-preset-add-actions">
+                <button type="button" id="mat-preset-add-btn" class="secondary" disabled>Toevoegen</button>
+                <button type="button" id="mat-preset-add-new-btn" class="secondary" disabled>Nieuwe preset…</button>
+              </div>
+              <p class="hint" id="mat-preset-add-hint">Selecteer eerst een opgeslagen materiaal.</p>
+            </div>
           </fieldset>
 
           <fieldset class="mat-fieldset">
@@ -162,21 +199,26 @@
               <label class="mat-field mat-field-sm">Gewicht kg/m²
                 <input id="mat-weight" type="text" inputmode="decimal" autocomplete="off" />
               </label>
-              <label class="mat-field mat-field-sm">Glas t1 mm
-                <input id="mat-t1" type="text" inputmode="decimal" autocomplete="off" />
-              </label>
-              <label class="mat-field mat-field-sm">Spouw mm
-                <input id="mat-cav" type="text" inputmode="decimal" autocomplete="off" />
-              </label>
-              <label class="mat-field mat-field-sm">Glas t2 mm
-                <input id="mat-t2" type="text" inputmode="decimal" autocomplete="off" />
-              </label>
+              <span id="mat-glass-fields" class="mat-glass-fields hidden" aria-label="Glasopbouw">
+                <label class="mat-field mat-field-sm">Glas t1 mm
+                  <input id="mat-t1" type="text" inputmode="decimal" autocomplete="off" />
+                </label>
+                <label class="mat-field mat-field-sm">Spouw mm
+                  <input id="mat-cav" type="text" inputmode="decimal" autocomplete="off" />
+                </label>
+                <label class="mat-field mat-field-sm">Glas t2 mm
+                  <input id="mat-t2" type="text" inputmode="decimal" autocomplete="off" />
+                </label>
+              </span>
             </div>
           </fieldset>
 
           <fieldset class="mat-fieldset">
             <legend>Spectra (dB)</legend>
-            <div class="mat-spectrum" role="group" aria-label="Geluidweringspectrum en enkelgetalswaarden">
+            <p class="hint mat-col-int hidden" id="mat-spectrum-int-hint">
+              Interieur: R-spectrum + R<sub>w</sub> (lab) en praktijkwaarde D<sub>nT,A,k</sub>.
+            </p>
+            <div class="mat-spectrum" id="mat-spectrum" role="group" aria-label="Geluidweringspectrum en enkelgetalswaarden">
               <div class="mat-spectrum-headers">
                 <span>63&nbsp;Hz</span>
                 <span>125&nbsp;Hz</span>
@@ -185,10 +227,11 @@
                 <span>1000&nbsp;Hz</span>
                 <span>2000&nbsp;Hz</span>
                 <span>4000&nbsp;Hz</span>
-                <span>RA</span>
+                <span class="mat-col-ext">RA</span>
                 <span>Rw</span>
-                <span>C</span>
-                <span>Ctr</span>
+                <span class="mat-col-ext">C</span>
+                <span class="mat-col-ext">Ctr</span>
+                <span class="mat-col-int hidden" title="DnT,A,k [dB]">D<sub>nT,A,k</sub></span>
               </div>
               <div class="mat-spectrum-inputs">
                 <!-- text + inputmode: NL-komma (42,6) én punt (42.6) toestaan; type=number weigert komma -->
@@ -199,10 +242,11 @@
                 <input id="mat-r1000" type="text" inputmode="decimal" autocomplete="off" aria-label="R 1000 Hz" />
                 <input id="mat-r2000" type="text" inputmode="decimal" autocomplete="off" aria-label="R 2000 Hz" />
                 <input id="mat-r4000" type="text" inputmode="decimal" autocomplete="off" aria-label="R 4000 Hz" />
-                <input id="mat-ra" type="text" inputmode="decimal" autocomplete="off" aria-label="RA dB(A)" />
+                <input id="mat-ra" class="mat-col-ext" type="text" inputmode="decimal" autocomplete="off" aria-label="RA dB(A)" />
                 <input id="mat-rw" type="text" inputmode="decimal" autocomplete="off" aria-label="Rw" />
-                <input id="mat-c" type="text" inputmode="decimal" autocomplete="off" aria-label="C" />
-                <input id="mat-ctr" type="text" inputmode="decimal" autocomplete="off" aria-label="Ctr" />
+                <input id="mat-c" class="mat-col-ext" type="text" inputmode="decimal" autocomplete="off" aria-label="C" />
+                <input id="mat-ctr" class="mat-col-ext" type="text" inputmode="decimal" autocomplete="off" aria-label="Ctr" />
+                <input id="mat-dntak" class="mat-col-int hidden" type="text" inputmode="decimal" autocomplete="off" aria-label="Praktijkwaarde DnT,A,k" title="Praktijkwaarde DnT,A,k [dB]" />
               </div>
             </div>
           </fieldset>
@@ -219,14 +263,179 @@
       <section class="panel" id="mat-presets-panel">
         <h2>Favorieten-presets</h2>
         <p class="hint">
-          Benoemde templates die je op de geveltekening op een project kunt toepassen
-          («Meest gebruikt»). Beheer hier: hernoemen of verwijderen.
+          Herbruikbare sets voor «Meest gebruikt» op de geveltekening.
+          Open een preset om materialen te bekijken of te verwijderen; voeg het
+          geselecteerde catalogusmateriaal toe via de knoppen hieronder of bij het materiaal.
         </p>
+        <div class="actions mat-preset-toolbar">
+          <label class="mat-preset-create-field">
+            Nieuwe preset
+            <input id="mat-preset-create-name" type="text" maxlength="120" placeholder="Naam, bijv. Veelgebruikt" autocomplete="off" />
+          </label>
+          <button type="button" id="mat-preset-create-btn">Aanmaken</button>
+          <button type="button" id="mat-preset-refresh-btn" class="secondary">Vernieuwen</button>
+        </div>
+        <p class="hint" id="mat-preset-feedback" aria-live="polite">—</p>
         <ul id="mat-preset-list" class="mat-preset-list"></ul>
-        <p class="hint" id="mat-preset-empty">Nog geen presets.</p>
+        <p class="hint" id="mat-preset-empty">Nog geen presets. Typ een naam hierboven en klik Aanmaken.</p>
       </section>
+      </div>
+
+      <div id="mat-tab-studio" class="hidden" role="tabpanel" hidden>
+        <section class="panel">
+          <h2>Overzicht</h2>
+          <p class="hint" id="ms-summary-hint">Laden…</p>
+          <dl class="ms-stats" id="ms-stats"></dl>
+          <div class="actions">
+            <button type="button" id="ms-refresh-btn" class="secondary">Vernieuwen</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Homogeen vs samengesteld</h2>
+          <p class="hint">
+            Telling over de runtime-catalogus (<code>fw_material_opbouw</code>).
+            <strong>Enkellaags</strong> = één materiaallaag (massief, plaat, enkel glas, …).
+            <strong>Samengesteld</strong> = stapeling van lagen (buiten → binnen),
+            bv. dakopbouw of buitengevel.
+          </p>
+          <dl class="ms-stats" id="ms-kind-stats"></dl>
+        </section>
+
+        <section class="panel">
+          <h2>Laatst toegevoegd</h2>
+          <p class="hint">De vijf meest recente rijen in de runtime-catalogus (op <code>created_at</code>).</p>
+          <ol class="ms-recent-list" id="ms-recent-list"></ol>
+          <p class="hint hidden" id="ms-recent-empty">Nog geen materialen.</p>
+        </section>
+
+        <section class="panel">
+          <h2>Opbouwtemplates (samengesteld)</h2>
+          <p class="hint">
+            Starttemplates voor dak en buitengevel. Laagvolgorde altijd van buiten naar binnen
+            (laag&nbsp;1 = weerzijde / buitenzijde).
+          </p>
+          <div id="ms-templates"></div>
+        </section>
+
+        <section class="panel" id="ms-compose-panel">
+          <h2>Assistent — samengesteld component</h2>
+          <p class="hint">
+            Kies een bestaande template of start een nieuwe. Koppel per laag een
+            <em>enkellaags</em> catalogusmateriaal. Preview toont per laag R&nbsp;125–2000&nbsp;Hz + Rw(C,&nbsp;Ctr)
+            en een MSM-totaalspectrum (buiten→binnen).
+          </p>
+
+          <form id="ms-compose-form" class="form mat-editor">
+            <fieldset class="mat-fieldset">
+              <legend>Template</legend>
+              <div class="mat-row">
+                <label class="mat-field mat-field-md">Bron
+                  <select id="ms-compose-mode">
+                    <option value="existing">Bestaande template</option>
+                    <option value="new">Nieuwe template</option>
+                  </select>
+                </label>
+                <label class="mat-field mat-field-grow" id="ms-compose-tpl-wrap">Template
+                  <select id="ms-compose-template">
+                    <option value="">— kies —</option>
+                  </select>
+                </label>
+                <label class="mat-field mat-field-md">Familie
+                  <select id="ms-compose-family">
+                    <option value="buitengevel">Buitengevel</option>
+                    <option value="dak">Dakopbouw</option>
+                    <option value="overig">Overig</option>
+                  </select>
+                </label>
+                <label class="mat-field mat-field-grow">Naam
+                  <input id="ms-compose-name" maxlength="200" placeholder="bijv. HSB gevel — project X" />
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset class="mat-fieldset">
+              <legend>Lagen (buiten → binnen)</legend>
+              <div id="ms-compose-layers" class="ms-compose-layers"></div>
+              <div class="actions">
+                <button type="button" id="ms-compose-add-layer" class="secondary">Laag toevoegen</button>
+                <button type="button" id="ms-compose-preview-btn">Bereken spectrum / Rw</button>
+              </div>
+            </fieldset>
+          </form>
+
+          <div id="ms-compose-result" class="hidden">
+            <h3>Resultaat per laag</h3>
+            <div class="ms-compose-table-wrap">
+              <table class="ms-compose-table" id="ms-compose-layer-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Laag</th>
+                    <th>Materiaal</th>
+                    <th>Methode</th>
+                    <th>R125</th>
+                    <th>R250</th>
+                    <th>R500</th>
+                    <th>R1k</th>
+                    <th>R2k</th>
+                    <th>Rw</th>
+                    <th>C</th>
+                    <th>Ctr</th>
+                  </tr>
+                </thead>
+                <tbody id="ms-compose-layer-tbody"></tbody>
+              </table>
+            </div>
+            <h3>Totaal (MSM-preview)</h3>
+            <p class="hint" id="ms-compose-stack-note">—</p>
+            <dl class="ms-stats" id="ms-compose-stack-stats"></dl>
+            <div class="actions">
+              <label class="inline-check"><input type="checkbox" id="ms-compose-save-tpl" checked /> Opslaan als template</label>
+              <label class="inline-check"><input type="checkbox" id="ms-compose-save-concept" checked /> Voorstellen als samengesteld concept</label>
+              <label class="inline-check"><input type="checkbox" id="ms-compose-publish-catalog" checked /> Direct goedkeuren &amp; naar catalogus</label>
+              <button type="button" id="ms-compose-save-btn">Opslaan</button>
+            </div>
+            <p class="hint" id="ms-compose-save-out">—</p>
+          </div>
+        </section>
+
+        <section class="panel" id="ms-proposed-panel">
+          <h2>Voorstellen → catalogus</h2>
+          <p class="hint">
+            Samengestelde concepten met status <em>proposed</em>. Goedkeuren maakt een
+            <code>A#####</code>-rij in de catalogus (zoekbaar op gevel/GA).
+          </p>
+          <div id="ms-proposed-list"></div>
+          <p class="hint hidden" id="ms-proposed-empty">Geen openstaande voorstellen.</p>
+        </section>
+
+        <section class="panel">
+          <h2>QC-rapport</h2>
+          <p class="hint">
+            Gebaseerd op <code>data/materials-audit/report.json</code>.
+            Vernieuw met <code>python3 scripts/materials-qc-audit.py</code>.
+          </p>
+          <p class="hint" id="ms-qc-meta">—</p>
+          <div id="ms-qc-issues"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Publicatie</h2>
+          <p class="hint">
+            Sync: schrijft <em>reeds goedgekeurde</em> spectra opnieuw naar gekoppelde
+            <code>material</code>-rijen. Nieuwe compose-stacks: gebruik
+            <strong>Voorstellen → catalogus</strong> hierboven.
+          </p>
+          <div class="actions">
+            <button type="button" id="ms-publish-btn">Publiceren naar material</button>
+            <button type="button" id="ms-refine-kz-btn" class="secondary">Verfijn kalkzandsteen-patroon (R1/S2)</button>
+          </div>
+          <p class="hint" id="ms-action-out">—</p>
+        </section>
+      </div>
     </section>
   </main>
-  <script type="module" src="/materials.js?v=ui-nl"></script>
+  <script type="module" src="/materials.js?v=approve-pub"></script>
 </body>
 </html>

@@ -48,6 +48,33 @@ SQL32="$SQL_DIR/app_gevelwering_0_2_30.sql"
 SQL33="$SQL_DIR/app_gevelwering_0_2_31.sql"
 SQL34="$SQL_DIR/app_gevelwering_0_2_32.sql"
 SQL35="$SQL_DIR/app_gevelwering_0_2_33.sql"
+SQL36="$SQL_DIR/app_gevelwering_0_2_34.sql"
+SQL37="$SQL_DIR/app_gevelwering_0_2_35.sql"
+SQL38="$SQL_DIR/app_gevelwering_0_2_36.sql"
+SQL39="$SQL_DIR/app_gevelwering_0_2_37.sql"
+SQL40="$SQL_DIR/app_gevelwering_0_2_38.sql"
+SQL41="$SQL_DIR/app_gevelwering_0_2_39.sql"
+SQL42="$SQL_DIR/app_gevelwering_0_2_40.sql"
+SQL43="$SQL_DIR/app_gevelwering_0_2_41.sql"
+SQL44="$SQL_DIR/app_gevelwering_0_2_42.sql"
+SQL45="$SQL_DIR/app_gevelwering_0_2_43.sql"
+SQL46="$SQL_DIR/app_gevelwering_0_2_44.sql"
+SQL47="$SQL_DIR/app_gevelwering_0_2_45.sql"
+SQL48="$SQL_DIR/app_gevelwering_0_2_46.sql"
+SQL49="$SQL_DIR/app_gevelwering_0_2_47.sql"
+SQL50="$SQL_DIR/app_gevelwering_0_2_48.sql"
+SQL51="$SQL_DIR/app_gevelwering_0_2_49.sql"
+SQL52="$SQL_DIR/app_gevelwering_0_2_50.sql"
+SQL53="$SQL_DIR/app_gevelwering_0_2_51.sql"
+SQL54="$SQL_DIR/app_gevelwering_0_2_52.sql"
+SQL55="$SQL_DIR/app_gevelwering_0_2_53.sql"
+SQL56="$SQL_DIR/app_gevelwering_0_2_54.sql"
+SQL57="$SQL_DIR/app_gevelwering_0_2_55.sql"
+SQL58="$SQL_DIR/app_gevelwering_0_2_56.sql"
+SQL59="$SQL_DIR/app_gevelwering_0_2_57.sql"
+SQL60="$SQL_DIR/app_gevelwering_0_2_58.sql"
+SQL61="$SQL_DIR/app_gevelwering_0_2_59.sql"
+SQL62="$SQL_DIR/app_gevelwering_0_2_60.sql"
 SMOKE_SAVE_GEOM="$APP_ROOT/scripts/smoke-save-geometry.sh"
 
 BPP_PORT="${BPP_PORT:-18080}"
@@ -188,10 +215,68 @@ psql -d "$PG_DB" -f "$SQL34" >/dev/null
 # Re-assert portable normalize_ring after 0.2.30 replace (idempotent).
 echo "Re-applying DDL $SQL35 (re-assert fw_normalize_ring portability) to database ${PG_DB}..."
 psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL35" >/dev/null
+echo "Applying DDL $SQL36 (component orientatie in VR façade list) to database ${PG_DB}..."
+psql -d "$PG_DB" -f "$SQL36" >/dev/null
+echo "Applying DDL $SQL37 (kier seal attribute migration + GA length) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL37" >/dev/null
+echo "Applying DDL $SQL38 (component repeat_count ×N in GA list) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL38" >/dev/null
+echo "Applying DDL $SQL39 (no seal from superseded sources) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL39" >/dev/null
+echo "Applying DDL $SQL40 (ga_ready requires orientatie) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL40" >/dev/null
+echo "Applying DDL $SQL41 (inherit compose ×N to sources) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL41" >/dev/null
+echo "Applying DDL $SQL42 (seal length from superseded ±-sources in GA) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL42" >/dev/null
+echo "Applying DDL $SQL43 (acoustic_catalog schema + HSB assembly seed) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL43" >/dev/null
+echo "Applying DDL $SQL44 (assembly families + dak/buitengevel templates) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL44" >/dev/null
+echo "Applying DDL $SQL45 (material opbouw enkellaags/samengesteld) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL45" >/dev/null
+echo "Applying DDL $SQL46 (favorite preset add/remove/get) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL46" >/dev/null
+echo "Applying DDL $SQL47 (rubriek 10 losse materialen) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL47" >/dev/null
+echo "Applying DDL $SQL48 (dak hellend V2 regelwerk) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL48" >/dev/null
+echo "Applying DDL $SQL49 (gebakken dakpannen + V2 koppeling) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL49" >/dev/null
+echo "Applying DDL $SQL50 (scrub spectrum_ok uit source_ref) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL50" >/dev/null
+echo "Applying DDL $SQL51 (dak sandwichpaneel Unidek-achtig) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL51" >/dev/null
+echo "Applying DDL $SQL52 (schaal: maten herberekenen) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL52" >/dev/null
+echo "Applying DDL $SQL53 (bel-etage level_hint) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL53" >/dev/null
+echo "Applying DDL $SQL54 (fix schaal-herberekening record shadow) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL54" >/dev/null
+echo "Applying DDL $SQL55 (VG+VR uniek i.p.v. alleen VR) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL55" >/dev/null
+echo "Applying DDL $SQL56 (souterrain level_hint) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL56" >/dev/null
+echo "Applying DDL $SQL57 (material exposure interieur/exterieur) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL57" >/dev/null
+echo "Applying DDL $SQL58 (interior partition material seed) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL58" >/dev/null
+echo "Applying DDL $SQL59 (rubriek Interieur) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL59" >/dev/null
+echo "Applying DDL $SQL60 (praktijkwaarde DnT,A,k) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL60" >/dev/null
+echo "Applying DDL $SQL61 (document view_rotate) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL61" >/dev/null
+echo "Applying DDL $SQL62 (reorder drawing regions) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL62" >/dev/null
 
 echo "Smoke: save-geometry path (hypot / normalize_ring)..."
 chmod +x "$SMOKE_SAVE_GEOM"
 "$SMOKE_SAVE_GEOM"
+
+echo "Attaching shared Stilte accounts..."
+chmod +x "$APP_ROOT/../stilte/ensure-identity.sh"
+"$APP_ROOT/../stilte/ensure-identity.sh" app_gevelwering "$PG_DB"
 
 # Ensure seeded flag after first successful catalog load
 psql -d "$PG_DB" -c \
@@ -233,6 +318,17 @@ if [[ "${GEVELWERING_BPP_ONLY}" == "1" ]]; then
 else
   echo "Node UI: GEVELWERING_BPP_ONLY=${GEVELWERING_BPP_ONLY} (HTTP CRUD fallback ON)"
 fi
+# Free UI port so a previous serve.mjs cannot block restart.
+if command -v lsof >/dev/null 2>&1; then
+  old_ui="$(lsof -tiTCP:"$UI_PORT" -sTCP:LISTEN 2>/dev/null || true)"
+  if [[ -n "$old_ui" ]]; then
+    echo "Stopping previous listener(s) on :$UI_PORT ($old_ui)..."
+    # shellcheck disable=SC2086
+    kill $old_ui 2>/dev/null || true
+    sleep 0.3
+  fi
+fi
+
 node serve.mjs &
 UI_PID=$!
 

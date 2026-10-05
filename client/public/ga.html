@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Geluidwering Gevels — Berekening gevelwering</title>
-  <link rel="stylesheet" href="/styles.css?v=vlak-pick" />
+  <title>Stilte advies en meten — Berekening gevelwering</title>
+  <link rel="stylesheet" href="/styles.css?v=logo-wordmark" />
 </head>
 <body>
   <main class="page page-wide">
     <header class="header">
       <div class="brand">
-        <img class="brand-logo" src="/assets/stilte-logo.jpg" alt="" width="68" height="68" />
+        <img class="brand-logo" src="/assets/stilte-logo.png" alt="Stilte advies en meten" width="200" height="76" />
         <div class="brand-copy">
-          <p class="brand-name">Geluidwering Gevels</p>
+          <p class="brand-name">Stilte advies en meten</p>
           <h1 class="page-heading">Berekening gevelwering</h1>
         </div>
       </div>
@@ -180,12 +180,16 @@
               Zelfde materiaal wordt opgeteld tot één keuze. Meerdere materialen op dezelfde oriëntatie mogen.
               Een compositie (±) telt als één netto-component — bronnen (glas, kozijn, …) horen niet als apart vlak tenzij ze een eigen materiaal hebben.
             </p>
-            <label class="block-label ga-vlak-pick" id="ga-vlak-pick-wrap">
-              Vlak / oriëntatie (deze VR)
-              <select id="ga-vlak-pick" disabled aria-label="Kies vlak of nog niet gespecificeerde oriëntatie">
-                <option value="">— selecteer eerst een VR —</option>
-              </select>
-            </label>
+            <div class="ga-vlak-pick" id="ga-vlak-pick-wrap">
+              <p class="block-label" id="ga-vlak-pick-label">Geveloriëntatie (deze VR)</p>
+              <p class="hint ga-ori-led-legend">
+                <span class="scale-calibrated-led is-on" aria-hidden="true"></span> berekend
+                <span class="scale-calibrated-led is-warn" aria-hidden="true"></span> nog open
+              </p>
+              <ul id="ga-vlak-pick" class="ga-ori-pick-list drawing-list" role="listbox" aria-labelledby="ga-vlak-pick-label" aria-disabled="true">
+                <li class="hint">— selecteer eerst een VR —</li>
+              </ul>
+            </div>
             <form id="ga-vlak-form" class="form">
               <fieldset class="ga-vlak-props">
                 <legend>1. Vlak-eigenschappen</legend>
@@ -200,21 +204,20 @@
                   <label>Cg [dB] <input id="ga-vlak-cg" type="number" step="0.1" value="" readonly placeholder="0" title="Vast per geveloriëntatie (plattegrond) — niet live te wijzigen. Alleen op GA;k." /></label>
                 </div>
                 <label class="inline-check"><input id="ga-vlak-gak" type="checkbox" checked /> Meenemen in GA;k (Stot)</label>
-                <p class="hint" id="ga-vlak-edit-hint">Open een vlak in de lijst hieronder om te bewerken, of voeg een vlak toe voor een nog vrije oriëntatie.</p>
+                <p class="hint" id="ga-vlak-edit-hint">Kies hierboven alleen een oriëntatie. Materialen kies je bij 2; vastgelegde vlakken staan in de scrollbox «Toegevoegde vlakken».</p>
                 <p class="hint" id="ga-vlak-ori-status"></p>
               </fieldset>
 
               <fieldset class="ga-vlak-component" id="ga-vlak-component-fieldset">
-                <legend>2. Gevelcomponent (materiaal)</legend>
+                <legend>2. Gevelcomponent materiaal</legend>
                 <p class="hint">
-                  Hier kies je een <strong>gevelcomponent met materiaal</strong> van de geveltekening
-                  (geen cataloguslijst). Nog niet gekoppelde materialen verschijnen hier totdat de
-                  oppervlaktedekking 100% is.
+                  Nog niet gekoppelde materialen voor de gekozen oriëntatie. Zijn ze allemaal
+                  toebedeeld, dan is deze lijst leeg — open dan een regel onder «Toegevoegde vlakken».
                 </p>
                 <p class="hint" id="ga-vlak-props-gate-hint"></p>
                 <p class="ga-facade-linked" id="ga-vlak-facade-linked" hidden></p>
                 <ul class="ga-facade-compose" id="ga-vlak-facade-compose" hidden></ul>
-                <label class="block-label" id="ga-vlak-facade-label">Nog niet gekoppelde component van deze VR
+                <label class="block-label" id="ga-vlak-facade-label">Nog niet gekoppeld materiaal voor deze oriëntatie
                   <select id="ga-vlak-facade" class="ga-facade-select" size="5" disabled title="Eerst oriëntaties op de plattegrond">
                     <option value="">— eerst oriëntaties op plattegrond —</option>
                   </select>
@@ -240,7 +243,9 @@
               <p class="ga-vlak-coverage-meta" id="ga-vlak-coverage-meta"></p>
             </div>
             <p class="hint" id="ga-vlak-inventory"></p>
-            <ul id="ga-vlak-list" class="drawing-list"></ul>
+            <div class="ga-vlak-added" id="ga-vlak-added">
+              <ul id="ga-vlak-list" class="drawing-list"></ul>
+            </div>
             <div class="ga-results" id="ga-vr-results" aria-live="polite">
               <h3>Resultaten VR</h3>
               <p class="hint" id="ga-vr-results-werknummer" hidden></p>

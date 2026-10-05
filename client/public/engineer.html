@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Geluidwering Gevels — Tekeningen beoordelen</title>
-  <link rel="stylesheet" href="/styles.css?v=sidebar-list-full" />
+  <title>Stilte advies en meten — Tekeningen beoordelen</title>
+  <link rel="stylesheet" href="/styles.css?v=logo-wordmark" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body class="engineer-body">
   <main class="page page-engineer">
     <header class="header header-compact">
       <div class="brand">
-        <img class="brand-logo" src="/assets/stilte-logo.jpg" alt="" width="52" height="52" />
+        <img class="brand-logo" src="/assets/stilte-logo.png" alt="Stilte advies en meten" width="200" height="76" />
         <div class="brand-copy">
-          <p class="brand-name">Geluidwering Gevels</p>
+          <p class="brand-name">Stilte advies en meten</p>
           <h1 class="page-heading">Tekeningen beoordelen</h1>
         </div>
       </div>
@@ -54,7 +54,17 @@
           <span class="tools-panel-chevron" aria-hidden="true"></span>
         </summary>
         <div class="tools-panel-main engineer-queue-body">
-          <div id="engineer-queue-list" class="admin-projects-list"></div>
+          <label class="block-label">
+            Project
+            <select id="engineer-queue-select" size="8" class="admin-customer-listbox">
+              <option value="">— kies een project —</option>
+            </select>
+          </label>
+          <p class="hint" id="engineer-queue-hint">Kies een project om tekeningen te beoordelen.</p>
+          <div class="actions">
+            <button type="button" id="engineer-queue-open-btn">Openen</button>
+          </div>
+          <div id="engineer-queue-list" class="admin-projects-list hidden" hidden></div>
         </div>
       </details>
 
@@ -82,6 +92,10 @@
               <span id="engineer-zoom-label">100%</span>
               <button type="button" id="engineer-zoom-fit" class="secondary">Passend</button>
               <span class="toolbar-sep" aria-hidden="true"></span>
+              <button type="button" id="engineer-rotate-ccw" class="secondary toolbar-rotate" title="Draai 90° linksom" aria-label="Draai 90° linksom">⟲</button>
+              <span id="engineer-rotate-label" title="Extra rotatie t.o.v. PDF">0°</span>
+              <button type="button" id="engineer-rotate-cw" class="secondary toolbar-rotate" title="Draai 90° rechtsom" aria-label="Draai 90° rechtsom">⟳</button>
+              <span class="toolbar-sep" aria-hidden="true"></span>
               <button type="button" id="engineer-scale-btn" class="secondary">Schaal instellen</button>
             </div>
 
@@ -93,10 +107,13 @@
                   Werkelijke lengte van gemarkeerde lijn (mm)
                   <input id="engineer-scale-mm" type="number" min="1" step="1" value="1000" />
                 </label>
-                <button type="button" id="engineer-scale-apply-btn">Toepassen</button>
+                <button type="button" id="engineer-scale-apply-btn">Toepassen &amp; maten herberekenen</button>
                 <button type="button" id="engineer-scale-repick-btn" class="secondary">Punten opnieuw kiezen</button>
               </div>
-              <p class="hint" id="engineer-scale-hint">Klik Schaal instellen om een plattegrond, gevel of doorsnede te kalibreren.</p>
+              <p class="hint" id="engineer-scale-hint">
+                Klik Schaal instellen. Bij toepassen worden alle m²/m op deze sectie herberekend;
+                GA-resultaten worden gewist.
+              </p>
             </section>
 
             <details class="tools-panel panel-inset" id="engineer-tools-bar" open>
@@ -262,9 +279,11 @@
               <div class="actions" style="margin-bottom: 0.5rem">
                 <button type="button" id="region-clear-all-btn" class="secondary" disabled>Alles verwijderen</button>
               </div>
-              <ul id="engineer-region-list" class="drawing-list"></ul>
+              <p class="hint region-drag-hint">Sleep ⋮⋮ om de volgorde te wijzigen.</p>
+              <ul id="engineer-region-list" class="drawing-list region-list-sortable"></ul>
             </div>
 
+            <p class="hint review-done-banner hidden" id="engineer-review-done" role="status"></p>
             <form id="engineer-review-form" class="form engineer-review-form">
               <fieldset>
                 <legend>Tekeningreview</legend>
@@ -272,6 +291,8 @@
                 <label><input type="checkbox" id="review-sufficient" /> Voldoende om door te gaan</label>
                 <label>Notities <textarea id="review-notes" rows="2" placeholder="Schaal ontbreekt, onduidelijke labels…"></textarea></label>
               </fieldset>
+              <p class="hint">Secties markeren is optioneel (bijv. niet-bruikbare tekening). Beide checkboxen aan = vrijgeven voor uitwerking.</p>
+              <p class="hint review-feedback hidden" id="engineer-review-feedback" aria-live="polite"></p>
               <div class="actions">
                 <button type="submit" id="engineer-submit-review-btn">Review opslaan</button>
               </div>
@@ -281,6 +302,6 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/engineer.js?v=client-ref"></script>
+  <script type="module" src="/engineer.js?v=hide-review-when-accepted"></script>
 </body>
 </html>

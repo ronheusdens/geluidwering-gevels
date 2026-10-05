@@ -137,6 +137,16 @@ export function removeRingVertex(points: Pt[], index: number): Pt[] | null {
   return closeRing(ring);
 }
 
+/** Insert a vertex after `afterIndex` on a closed ring (edge afterIndex → afterIndex+1). */
+export function insertRingVertex(points: Pt[], afterIndex: number, pt: Pt): Pt[] | null {
+  const n = ringVertexCount(points);
+  if (n < 2) return null;
+  if (afterIndex < 0 || afterIndex >= n) return null;
+  const ring = points.slice(0, n);
+  ring.splice(afterIndex + 1, 0, { x: pt.x, y: pt.y });
+  return closeRing(ring);
+}
+
 /**
  * Drop superfluous anchors after fitting (RDP). Keeps at least 3 vertices.
  * `epsilon` is in the same units as the points (section-local 0–1).

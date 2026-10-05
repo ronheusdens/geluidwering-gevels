@@ -5,6 +5,8 @@
 **Store:** PostgreSQL  
 **Not in scope:** coding-agent / LLM tooling
 
+**Accounts:** `service_user` and `login_session` are views onto database `stilte`, schema `identity` (one account for every Stilte app). Project rows still store `owner_user_id` locally. See [stilte-dienstenportal.md](../../../app-isolatieberekening/docs/architecture/stilte-dienstenportal.md).
+
 ---
 
 ## Versioning
@@ -290,7 +292,7 @@ Engineer-only room geometry on committed `FLOORMAP` sections (customer progress 
 | Metrics | `area_norm`, `perimeter_norm`, `area_m2`, `perimeter_m` | m² / m filled when scale is set; recomputed on scale save |
 | Room scale | `drawing_subsection.metres_per_norm_unit` | Snapshot of scale applied with the room (0.2.11); edits can reuse without recalibration |
 | Lifecycle | `analysis_status` | `DRAFT` \| `READY_FOR_ANALYSIS` \| `ANALYZED` |
-| Level hint | `level_hint` | `GROUND` \| `FIRST` \| … \| `OTHER` |
+| Level hint | `level_hint` | `GROUND` \| `BEL_ETAGE` \| `FIRST` \| … \| `OTHER` |
 
 APIs: Basic++ `API_ListFloormapSections`, `API_SaveFloormapScale`; HTTP `/api/floormap/*` for section list, subsection CRUD (JSON polylines), scale + room recompute, materials list/create, and **`POST /api/floormap/subsections/reorder`** (`section_id` + `ordered_ids`) for persistent list order via `drawing_subsection.sort_order`. UI: `/floormap.html` — rooms on `FLOORMAP`; façade components + **compositie (+/−)** on elevation regions; ▲/▼ in the saved-components list. Material/compose workflow: [overview §5](app-gevelwering-overview.md#5-workflow-huidige-implementatie).
 
@@ -303,7 +305,7 @@ Shared reference catalog for façade sound reduction. One-time seed: DGMR **cata
 | Material | `app_gevelwering.material` | One shared catalog |
 | Identity | `(source, catalog_id)` unique; also `catalog_index` / `material_no` | Seed ids `D#####`; app-added ids `A#####` |
 | Source | `source` | `catalogusGG.pdf` \| `GL.cat` \| **`app`** (legacy `eigen` treated as app) |
-| Taxonomy | `rubriek_nr` 1–9, `subrubriek_nr`, `master_category`, `category` | GG taxonomy (`material-taxonomy.mjs`); no separate “custom” rubriek |
+| Taxonomy | `rubriek_nr` 1–10, `subrubriek_nr`, `master_category`, `category` | GG 1–9 (`material-taxonomy.mjs`); rubriek 10 = Losse materialen (template layers) |
 | Spectrum | `r_63_hz` … `r_4000_hz`, `ra_dba`, `rw_db` / `c_db` / `ctr_db` | Octave-band R + single-number ratings |
 
 **Rw / C / Ctr:** berekend of geverifieerd uit R-banden (ISO 717-1) via `sql/app_gevelwering_0_2_23_backfill_rw.py`. Procedure: [material-rw-c-ctr.md](material-rw-c-ctr.md) (`--verify`, `--force`).

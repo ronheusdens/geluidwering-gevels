@@ -1,4 +1,4 @@
-import { loadAuth, storeAuth as persistAuth, syncSessionCookie, apiAuthHeaders } from "./auth-store";
+import { apiAuthHeaders } from "./auth-store";
 import { resolveBppWsUrl } from "./ws-url";
 import { initPasswordToggles } from "./password-toggle";
 import {
@@ -9,6 +9,10 @@ import {
   subrubriekenFor,
 } from "../lib/material-taxonomy.mjs";
 import {
+  materialKindBadgeHtml,
+  materialKindTitle,
+} from "../lib/material-kind-labels.mjs";
+import {
   bppAddMaterialFavorite,
   bppListMaterialFavoritePresets,
   bppListMaterialFavorites,
@@ -16,20 +20,9 @@ import {
   bppPhase1Enabled,
   bppRemoveMaterialFavorite,
 } from "./bpp-api";
-
-type Envelope = {
-  v: number;
-  type: string;
-  request_id: string;
-  session_id?: string;
-  payload?: Record<string, unknown>;
-};
-
-type AuthInfo = {
-  token: string;
-  username: string;
-  display_name: string;
-};
+import { BppSession, type AuthInfo, type Envelope } from "./shared/bpp-session";
+import { esc } from "./shared/dom-helpers";
+import { initMaterialsStudioPanel, type MaterialsStudioPanel } from "./materials-studio-panel";
 
 type Material = {
   material_id: string;
@@ -57,9 +50,13 @@ type Material = {
   c_db: string;
   ctr_db: string;
   source: string;
+  material_kind?: string;
+  /** EXTERIOR (gevel) | INTERIOR (isolatie / overdracht) */
+  exposure?: string;
+  /** Praktijkwaarde DnT,A,k [dB] — interior only */
+  dnt_a_k_db?: string;
 };
 
-const BPP_WS = resolveBppWsUrl();
 const AUTH_KEY = "app_gevelwering_admin_auth";
 
 const bootParams = new URLSearchParams(location.search);
@@ -69,9 +66,14 @@ const deepNew =
   bootParams.get("new") === "1" ||
   bootParams.get("new") === "true" ||
   bootParams.get("mode") === "new";
-const returnHref = safeSameOriginPath(bootParams.get("return"));
+const returnHref = safeReturnHref(bootParams.get("return"));
 const returnLabel = (bootParams.get("return_label") || "Terug naar toekennen vlak (gevel)").trim();
+const pickTarget = (bootParams.get("pick_target") || "").trim().toLowerCase(); // rs | dl | …
+const deepExposure = (bootParams.get("exposure") || "").trim().toUpperCase();
+const deepRubriek = (bootParams.get("rubriek") || "").trim();
+const deepSubrubriek = (bootParams.get("subrubriek") || "").trim();
 const returnLinkEl = document.getElementById("mat-return-link") as HTMLAnchorElement | null;
+const returnWrapEl = document.getElementById("mat-return-wrap") as HTMLElement | null;
 const pickBarEl = document.getElementById("mat-pick-bar") as HTMLElement | null;
 const pickBtnEl = document.getElementById("mat-pick-btn") as HTMLButtonElement | null;
 const pickBtnEditorEl = document.getElementById("mat-pick-btn-editor") as HTMLButtonElement | null;
@@ -83,7 +85,7 @@ function buildingIdFromContext(): string {
   if (direct) return direct;
   if (!returnHref) return "";
   try {
-    return new URL(returnHref, location.origin).searchParams.get("building_id")?.trim() || "";
+    return new URL(returnHref, location.href).searchParams.get("building_id")?.trim() || "";
   } catch {
     return "";
   }
@@ -91,41 +93,106 @@ function buildingIdFromContext(): string {
 
 const contextBuildingId = buildingIdFromContext();
 
-function safeSameOriginPath(raw: string | null): string | null {
+function isLoopbackHost(host: string): boolean {
+  const h = host.toLowerCase();
+  return h === "127.0.0.1" || h === "localhost" || h === "[::1]" || h === "::1";
+}
+
+/** Same-origin path, or absolute loopback URL (isolatie :4174 ↔ gevel :4173). */
+function safeReturnHref(raw: string | null): string | null {
   if (!raw) return null;
   try {
     const u = new URL(raw, location.origin);
-    if (u.origin !== location.origin) return null;
     if (!u.pathname.startsWith("/")) return null;
-    return `${u.pathname}${u.search}${u.hash}`;
+    if (u.origin === location.origin) {
+      return `${u.pathname}${u.search}${u.hash}`;
+    }
+    if (isLoopbackHost(u.hostname) && isLoopbackHost(location.hostname)) {
+      return u.toString();
+    }
+    return null;
   } catch {
     return null;
   }
 }
 
+function isCrossOriginReturn(href: string): boolean {
+  try {
+    return new URL(href, location.href).origin !== location.origin;
+  } catch {
+    return false;
+  }
+}
+
 function setupReturnNav(): void {
-  if (!returnLinkEl) return;
+  const wrap = returnWrapEl ?? returnLinkEl;
+  if (!wrap) return;
   if (!returnHref) {
-    returnLinkEl.classList.add("hidden");
+    wrap.classList.add("hidden");
     return;
   }
-  returnLinkEl.href = returnHref;
-  returnLinkEl.textContent = `← ${returnLabel}`;
-  returnLinkEl.classList.remove("hidden");
+  if (returnLinkEl) {
+    returnLinkEl.href = returnHref;
+    returnLinkEl.textContent = `← ${returnLabel}`;
+  }
+  wrap.classList.remove("hidden");
+}
+
+type MatTab = "catalog" | "studio";
+const initialTab: MatTab = bootParams.get("tab") === "studio" ? "studio" : "catalog";
+const tabCatalogBtn = document.getElementById("mat-tab-catalog-btn") as HTMLButtonElement;
+const tabStudioBtn = document.getElementById("mat-tab-studio-btn") as HTMLButtonElement;
+const tabCatalogPane = document.getElementById("mat-tab-catalog") as HTMLElement;
+const tabStudioPane = document.getElementById("mat-tab-studio") as HTMLElement;
+let studioPanel: MaterialsStudioPanel | null = null;
+let activeTab: MatTab = initialTab;
+
+function setTab(tab: MatTab, opts?: { replaceUrl?: boolean }): void {
+  activeTab = tab;
+  tabCatalogBtn.classList.toggle("active", tab === "catalog");
+  tabStudioBtn.classList.toggle("active", tab === "studio");
+  tabCatalogBtn.setAttribute("aria-selected", tab === "catalog" ? "true" : "false");
+  tabStudioBtn.setAttribute("aria-selected", tab === "studio" ? "true" : "false");
+  tabCatalogPane.classList.toggle("hidden", tab !== "catalog");
+  tabStudioPane.classList.toggle("hidden", tab !== "studio");
+  tabStudioPane.hidden = tab !== "studio";
+  if (tab === "studio") {
+    void studioPanel?.load().catch((err) => {
+      setStatus(err instanceof Error ? err.message : "Studio laden mislukt", "err");
+    });
+  }
+  if (opts?.replaceUrl !== false) {
+    const url = new URL(location.href);
+    if (tab === "studio") url.searchParams.set("tab", "studio");
+    else url.searchParams.delete("tab");
+    history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+}
+
+function pickButtonLabel(): string {
+  if (pickTarget === "dl") return "Neem over in ΔL vloerafwerking (isolatie)";
+  if (pickTarget === "rs") return "Neem over in Rₛ scheidingswand (isolatie)";
+  return "Neem dit materiaal over in component";
 }
 
 function syncPickUi(): void {
   const canPick = Boolean(returnHref && selectedId);
   if (pickBarEl) pickBarEl.classList.toggle("hidden", !returnHref);
-  if (pickBtnEl) pickBtnEl.disabled = !canPick;
+  if (pickBtnEl) {
+    pickBtnEl.disabled = !canPick;
+    pickBtnEl.textContent = pickButtonLabel();
+  }
   if (pickBtnEditorEl) {
     pickBtnEditorEl.classList.toggle("hidden", !returnHref);
     pickBtnEditorEl.disabled = !canPick;
+    pickBtnEditorEl.textContent = pickButtonLabel();
   }
   if (pickHintEl && returnHref) {
     pickHintEl.textContent = canPick
-      ? "Geselecteerd materiaal wordt in het componentformulier gezet (ook als dat nog niet is opgeslagen)."
-      : "Zoek en selecteer een materiaal, daarna overnemen om terug te gaan naar het component.";
+      ? pickTarget === "dl" || pickTarget === "rs"
+        ? "Geselecteerd materiaal (spectrum) wordt teruggezet in de isolatieberekening."
+        : "Geselecteerd materiaal wordt in het componentformulier gezet (ook als dat nog niet is opgeslagen)."
+      : "Zoek en selecteer een materiaal, daarna overnemen om terug te gaan.";
   }
 }
 
@@ -139,19 +206,53 @@ function pickMaterialForCaller(): void {
       master_category: masterEl.value.trim(),
       category: catEl.value.trim(),
       name: nameEl.value.trim(),
+      r_125_hz: r125El.value.trim(),
+      r_250_hz: r250El.value.trim(),
+      r_500_hz: r500El.value.trim(),
+      r_1000_hz: r1000El.value.trim(),
+      r_2000_hz: r2000El.value.trim(),
+      exposure: exposureEl?.value || "",
     } as Partial<Material>);
   const payload: Record<string, unknown> = {
     material_id: String(row.material_id || selectedId).trim(),
-    catalog_id: String(row.catalog_id || "").trim(),
-    master_category: String(row.master_category || "").trim(),
-    category: String(row.category || "").trim(),
-    name: String(row.name || "").trim(),
+    catalog_id: String(row.catalog_id || catalogIdEl.value.trim()).trim(),
+    master_category: String(row.master_category || masterEl.value.trim()).trim(),
+    category: String(row.category || catEl.value.trim()).trim(),
+    name: String(row.name || nameEl.value.trim()).trim(),
+    exposure: String(row.exposure || exposureEl?.value || "").trim(),
+    pick_target: pickTarget || "",
+    r: [
+      Number(row.r_125_hz ?? r125El.value),
+      Number(row.r_250_hz ?? r250El.value),
+      Number(row.r_500_hz ?? r500El.value),
+      Number(row.r_1000_hz ?? r1000El.value),
+      Number(row.r_2000_hz ?? r2000El.value),
+    ],
   };
   if (!payload.material_id || !payload.master_category) {
     setStatus("Selecteer een materiaal met rubriek om over te nemen", "err");
     return;
   }
-  // Keep unsaved component geometry with the pick (same tab / storage).
+
+  // Cross-origin (isolatie :4174): pass pick via query params — storage is origin-scoped.
+  if (isCrossOriginReturn(returnHref)) {
+    try {
+      const u = new URL(returnHref, location.href);
+      u.searchParams.set("mat_pick", "1");
+      u.searchParams.set("material_id", String(payload.material_id));
+      u.searchParams.set("catalog_id", String(payload.catalog_id || ""));
+      u.searchParams.set("name", String(payload.name || ""));
+      u.searchParams.set("pick_target", pickTarget || "rs");
+      u.searchParams.set("r", (payload.r as number[]).map((n) => (Number.isFinite(n) ? String(n) : "")).join(","));
+      location.assign(u.toString());
+      return;
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "Terugkeer-URL ongeldig", "err");
+      return;
+    }
+  }
+
+  // Same-origin floormap pick: sessionStorage + relative return path.
   try {
     const draftRaw = sessionStorage.getItem("app-gevelwering-fm-component-draft");
     if (draftRaw) payload.draft = JSON.parse(draftRaw);
@@ -167,12 +268,12 @@ function pickMaterialForCaller(): void {
 }
 
 async function httpJson<T>(url: string, init?: RequestInit): Promise<T> {
-  if (!auth?.token) throw new Error("Niet ingelogd");
+  if (!auth()?.token) throw new Error("Niet ingelogd");
   const res = await fetch(url, {
     credentials: "include",
     ...init,
     headers: {
-      ...apiAuthHeaders(auth.token, Boolean(init?.body)),
+      ...apiAuthHeaders(auth()!.token, Boolean(init?.body)),
       ...(init?.headers || {}),
     },
   });
@@ -192,13 +293,13 @@ async function syncFavoriteCheckbox(): Promise<void> {
   }
   favoriteWrapEl.classList.remove("hidden");
   const mid = (selectedId || idEl.value || "").trim();
-  if (!mid || !auth?.token) {
+  if (!mid || !auth()?.token) {
     favoriteEl.checked = false;
     return;
   }
   try {
     const data = bppPhase1Enabled()
-      ? await bppListMaterialFavorites(invokeString, auth.token, contextBuildingId)
+      ? await bppListMaterialFavorites(invokeString, auth()!.token, contextBuildingId)
       : await httpJson<{ materials: Array<{ material_id: string }> }>(
           `/api/floormap/material-favorites?building_id=${encodeURIComponent(contextBuildingId)}`,
         );
@@ -209,12 +310,12 @@ async function syncFavoriteCheckbox(): Promise<void> {
 }
 
 async function setFavoriteForSelection(on: boolean): Promise<void> {
-  if (!contextBuildingId || !auth?.token) return;
+  if (!contextBuildingId || !auth()?.token) return;
   const mid = (selectedId || idEl.value || "").trim();
   if (!mid) return;
   if (on) {
     if (bppPhase1Enabled()) {
-      await bppAddMaterialFavorite(invokeString, auth.token, contextBuildingId, mid);
+      await bppAddMaterialFavorite(invokeString, auth()!.token, contextBuildingId, mid);
     } else {
       await httpJson("/api/floormap/material-favorites", {
         method: "POST",
@@ -222,7 +323,7 @@ async function setFavoriteForSelection(on: boolean): Promise<void> {
       });
     }
   } else if (bppPhase1Enabled()) {
-    await bppRemoveMaterialFavorite(invokeString, auth.token, contextBuildingId, mid);
+    await bppRemoveMaterialFavorite(invokeString, auth()!.token, contextBuildingId, mid);
   } else {
     await httpJson(
       `/api/floormap/material-favorites?building_id=${encodeURIComponent(contextBuildingId)}&material_id=${encodeURIComponent(mid)}`,
@@ -231,22 +332,328 @@ async function setFavoriteForSelection(on: boolean): Promise<void> {
   }
 }
 
+type FavoritePreset = {
+  preset_id: string;
+  name: string;
+  material_count: number;
+};
+
+type PresetMaterial = {
+  material_id: string;
+  catalog_id: string;
+  name: string;
+  master_category?: string;
+  ra_dba?: number | null;
+  sort_order?: number;
+};
+
+let cachedPresets: FavoritePreset[] = [];
+let expandedPresetId: string | null = null;
+/** Preset IDs that already contain the selected material. */
+let selectedMaterialPresetIds = new Set<string>();
+
+async function presetAction(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  if (bppPhase1Enabled()) {
+    return bppMaterialFavoritePresetAction(invokeString, auth()!.token, body);
+  }
+  return httpJson("/api/floormap/material-favorite-presets", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+function fillPresetAddSelect(): void {
+  if (!presetAddSelectEl) return;
+  const keep = presetAddSelectEl.value;
+  presetAddSelectEl.replaceChildren();
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = cachedPresets.length ? "— kies preset —" : "— geen presets —";
+  presetAddSelectEl.appendChild(ph);
+  for (const p of cachedPresets) {
+    const opt = document.createElement("option");
+    opt.value = p.preset_id;
+    const inIt = selectedMaterialPresetIds.has(p.preset_id);
+    opt.textContent = inIt
+      ? `${p.name} (${p.material_count}) · al erin`
+      : `${p.name} (${p.material_count})`;
+    if (inIt) opt.disabled = true;
+    presetAddSelectEl.appendChild(opt);
+  }
+  if (keep && [...presetAddSelectEl.options].some((o) => o.value === keep && !o.disabled)) {
+    presetAddSelectEl.value = keep;
+  } else {
+    presetAddSelectEl.value = "";
+  }
+}
+
+function syncPresetAddUi(): void {
+  const mid = selectedId || idEl.value.trim();
+  const hasMat = Boolean(mid);
+  const hasPresets = cachedPresets.length > 0;
+  if (presetAddSelectEl) presetAddSelectEl.disabled = !hasMat || !hasPresets;
+  if (presetAddBtn) {
+    presetAddBtn.disabled = !hasMat || !hasPresets || !presetAddSelectEl?.value;
+  }
+  if (presetAddNewBtn) presetAddNewBtn.disabled = !hasMat;
+  if (presetAddHintEl) {
+    if (!hasMat) {
+      presetAddHintEl.textContent = "Selecteer of sla eerst een materiaal op.";
+    } else if (!hasPresets) {
+      presetAddHintEl.textContent = "Nog geen presets — maak er een met «Nieuwe preset…».";
+    } else {
+      const n = selectedMaterialPresetIds.size;
+      presetAddHintEl.textContent =
+        n > 0
+          ? `Staat al in ${n} preset${n === 1 ? "" : "s"}. Kies een andere of maak een nieuwe.`
+          : "Kies een preset en klik Toevoegen.";
+    }
+  }
+}
+
+async function refreshPresetsForSelectedMaterial(): Promise<void> {
+  const mid = selectedId || idEl.value.trim();
+  selectedMaterialPresetIds = new Set();
+  if (!mid || !auth()?.token) {
+    fillPresetAddSelect();
+    syncPresetAddUi();
+    return;
+  }
+  try {
+    const data = (await presetAction({
+      action: "presets_for_material",
+      material_id: mid,
+    })) as { preset_ids?: string[] };
+    selectedMaterialPresetIds = new Set(data.preset_ids || []);
+  } catch {
+    selectedMaterialPresetIds = new Set();
+  }
+  fillPresetAddSelect();
+  syncPresetAddUi();
+  // Update checkmarks on expanded/list rows without full reload of details
+  presetListEl?.querySelectorAll<HTMLElement>("[data-preset-id]").forEach((el) => {
+    const pid = el.dataset.presetId || "";
+    const mark = el.querySelector(".mat-preset-contains");
+    if (!mark) return;
+    mark.classList.toggle("hidden", !selectedMaterialPresetIds.has(pid));
+  });
+}
+
+async function addSelectedToPreset(presetId: string): Promise<void> {
+  const mid = selectedId || idEl.value.trim();
+  if (!mid) throw new Error("Geen materiaal geselecteerd");
+  const out = (await presetAction({
+    action: "add_item",
+    preset_id: presetId,
+    material_id: mid,
+  })) as { already_present?: boolean; name?: string; material_count?: number };
+  await loadPresets();
+  if (expandedPresetId === presetId) await expandPreset(presetId, true);
+  await refreshPresetsForSelectedMaterial();
+  const label = out.name || "preset";
+  if (out.already_present) {
+    setStatus(`Stond al in «${label}»`, "ok");
+  } else {
+    setStatus(`Toegevoegd aan «${label}» (${out.material_count ?? "?"} materialen)`, "ok");
+  }
+}
+
+function setPresetFeedback(text: string, kind: "ok" | "err" | "busy" = "ok"): void {
+  if (!presetFeedbackEl) return;
+  presetFeedbackEl.textContent = text;
+  presetFeedbackEl.classList.remove("ok", "err", "busy");
+  presetFeedbackEl.classList.add(kind);
+}
+
+async function createPreset(name: string, withSelectedMaterial: boolean): Promise<string> {
+  setPresetFeedback(`Preset «${name}» aanmaken…`, "busy");
+  setStatus(`Preset «${name}» aanmaken…`, "busy");
+  const created = (await presetAction({
+    action: "create",
+    name,
+  })) as { preset_id?: string; name?: string; ok?: boolean };
+  if (!created?.preset_id) {
+    throw new Error("Preset aanmaken mislukt (geen preset_id in antwoord)");
+  }
+  if (withSelectedMaterial) {
+    const mid = selectedId || idEl.value.trim();
+    if (mid) {
+      await presetAction({
+        action: "add_item",
+        preset_id: created.preset_id,
+        material_id: mid,
+      });
+    }
+  }
+  expandedPresetId = created.preset_id;
+  await loadPresets();
+  await expandPreset(created.preset_id, true);
+  const li = presetListEl?.querySelector<HTMLElement>(
+    `[data-preset-id="${CSS.escape(created.preset_id)}"]`,
+  );
+  li?.classList.add("mat-preset-item-new");
+  li?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  document.getElementById("mat-presets-panel")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  await refreshPresetsForSelectedMaterial();
+  return created.preset_id;
+}
+
+async function expandPreset(presetId: string, force = false): Promise<void> {
+  if (!presetListEl) return;
+  const li = presetListEl.querySelector<HTMLElement>(`[data-preset-id="${CSS.escape(presetId)}"]`);
+  if (!li) return;
+  const detail = li.querySelector<HTMLElement>(".mat-preset-detail");
+  if (!detail) return;
+
+  if (!force && expandedPresetId === presetId && !detail.classList.contains("hidden")) {
+    detail.classList.add("hidden");
+    expandedPresetId = null;
+    li.querySelector(".mat-preset-toggle")?.setAttribute("aria-expanded", "false");
+    return;
+  }
+
+  // Collapse others
+  presetListEl.querySelectorAll<HTMLElement>(".mat-preset-detail").forEach((d) => d.classList.add("hidden"));
+  presetListEl.querySelectorAll(".mat-preset-toggle").forEach((b) => b.setAttribute("aria-expanded", "false"));
+
+  expandedPresetId = presetId;
+  detail.classList.remove("hidden");
+  detail.innerHTML = `<p class="hint">Laden…</p>`;
+  li.querySelector(".mat-preset-toggle")?.setAttribute("aria-expanded", "true");
+
+  try {
+    const data = (await presetAction({
+      action: "get",
+      preset_id: presetId,
+    })) as { materials?: PresetMaterial[]; name?: string; material_count?: number };
+    const mats = data.materials || [];
+    const countEl = li.querySelector(".mat-preset-count");
+    if (countEl) countEl.textContent = String(data.material_count ?? mats.length);
+
+    if (!mats.length) {
+      detail.innerHTML = `<p class="hint">Nog geen materialen in deze preset.</p>`;
+      return;
+    }
+
+    const ul = document.createElement("ul");
+    ul.className = "mat-preset-materials";
+    for (const m of mats) {
+      const row = document.createElement("li");
+      row.className = "mat-preset-material";
+      const link = document.createElement("button");
+      link.type = "button";
+      link.className = "mat-preset-mat-link";
+      const code = (m.catalog_id || "").trim();
+      const ra = m.ra_dba != null ? ` · RA ${m.ra_dba}` : "";
+      link.textContent = code ? `${code} · ${m.name}${ra}` : `${m.name}${ra}`;
+      link.title = "Open in catalogus";
+      link.addEventListener("click", () => {
+        if (listRows.some((r) => r.material_id === m.material_id)) {
+          selectFromList(m.material_id);
+        } else {
+          qEl.value = code || m.name;
+          offset = 0;
+          void loadList(m.material_id);
+        }
+      });
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "secondary danger";
+      rm.textContent = "Verwijderen";
+      rm.addEventListener("click", () => {
+        void (async () => {
+          try {
+            await presetAction({
+              action: "remove_item",
+              preset_id: presetId,
+              material_id: m.material_id,
+            });
+            setStatus(`Verwijderd uit preset`, "ok");
+            await loadPresets();
+            await expandPreset(presetId, true);
+            await refreshPresetsForSelectedMaterial();
+          } catch (err) {
+            setStatus(err instanceof Error ? err.message : String(err), "err");
+          }
+        })();
+      });
+      row.append(link, rm);
+      ul.appendChild(row);
+    }
+    detail.replaceChildren(ul);
+
+    const addHere = document.createElement("div");
+    addHere.className = "actions";
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "secondary";
+    const mid = selectedId || idEl.value.trim();
+    const already = mid && selectedMaterialPresetIds.has(presetId);
+    addBtn.textContent = already
+      ? "Geselecteerd materiaal staat al in deze preset"
+      : "Geselecteerd materiaal hier toevoegen";
+    addBtn.disabled = !mid || Boolean(already);
+    addBtn.addEventListener("click", () => {
+      void addSelectedToPreset(presetId).catch((err) =>
+        setStatus(err instanceof Error ? err.message : String(err), "err"),
+      );
+    });
+    addHere.appendChild(addBtn);
+    detail.appendChild(addHere);
+  } catch (err) {
+    detail.innerHTML = `<p class="hint">${esc(err instanceof Error ? err.message : "laden mislukt")}</p>`;
+  }
+}
+
 async function loadPresets(): Promise<void> {
-  if (!presetListEl || !presetEmptyEl || !auth?.token) return;
+  if (!presetListEl || !presetEmptyEl || !auth()?.token) return;
   try {
     const data = bppPhase1Enabled()
-      ? await bppListMaterialFavoritePresets(invokeString, auth.token)
+      ? await bppListMaterialFavoritePresets(invokeString, auth()!.token)
       : await httpJson<{
-          presets: Array<{ preset_id: string; name: string; material_count: number }>;
+          presets: FavoritePreset[];
         }>("/api/floormap/material-favorite-presets");
-    const presets = data.presets || [];
+    cachedPresets = data.presets || [];
     presetListEl.replaceChildren();
-    presetEmptyEl.classList.toggle("hidden", presets.length > 0);
-    for (const p of presets) {
+    presetEmptyEl.classList.toggle("hidden", cachedPresets.length > 0);
+    fillPresetAddSelect();
+    syncPresetAddUi();
+
+    for (const p of cachedPresets) {
       const li = document.createElement("li");
       li.className = "mat-preset-item";
-      const label = document.createElement("span");
-      label.textContent = `${p.name} (${p.material_count})`;
+      li.dataset.presetId = p.preset_id;
+
+      const head = document.createElement("div");
+      head.className = "mat-preset-head";
+
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "mat-preset-toggle";
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.title = "Toon materialen";
+      toggle.innerHTML = `<span class="mat-preset-chevron" aria-hidden="true">▸</span>`;
+      toggle.addEventListener("click", () => {
+        void expandPreset(p.preset_id);
+      });
+
+      const title = document.createElement("button");
+      title.type = "button";
+      title.className = "mat-preset-title";
+      title.innerHTML = `${esc(p.name)} <span class="mat-preset-count-wrap">(<span class="mat-preset-count">${esc(String(p.material_count))}</span>)</span>`;
+      title.addEventListener("click", () => {
+        void expandPreset(p.preset_id);
+      });
+
+      const contains = document.createElement("span");
+      contains.className = "mat-preset-contains mat-kind-badge mat-kind-single";
+      contains.textContent = "bevat selectie";
+      contains.title = "Het geselecteerde materiaal staat in deze preset";
+      if (!selectedMaterialPresetIds.has(p.preset_id)) contains.classList.add("hidden");
+
+      const actions = document.createElement("div");
+      actions.className = "mat-preset-actions";
+
       const renameBtn = document.createElement("button");
       renameBtn.type = "button";
       renameBtn.className = "secondary";
@@ -254,49 +661,61 @@ async function loadPresets(): Promise<void> {
       renameBtn.addEventListener("click", () => {
         const name = window.prompt("Nieuwe preset-naam:", p.name);
         if (!name?.trim() || name.trim() === p.name) return;
-        const run = bppPhase1Enabled()
-          ? bppMaterialFavoritePresetAction(invokeString, auth!.token, {
-              action: "rename",
-              preset_id: p.preset_id,
-              name: name.trim(),
-            })
-          : httpJson("/api/floormap/material-favorite-presets", {
-              method: "POST",
-              body: JSON.stringify({ action: "rename", preset_id: p.preset_id, name: name.trim() }),
-            });
-        void run
+        void presetAction({ action: "rename", preset_id: p.preset_id, name: name.trim() })
           .then(() => loadPresets())
           .then(() => setStatus(`Preset hernoemd naar «${name.trim()}»`, "ok"))
           .catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
       });
+
+      const addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.className = "secondary";
+      addBtn.textContent = "+ Selectie";
+      addBtn.title = "Geselecteerd materiaal aan deze preset toevoegen";
+      addBtn.disabled = !(selectedId || idEl.value.trim()) || selectedMaterialPresetIds.has(p.preset_id);
+      addBtn.addEventListener("click", () => {
+        void addSelectedToPreset(p.preset_id).catch((err) =>
+          setStatus(err instanceof Error ? err.message : String(err), "err"),
+        );
+      });
+
       const delBtn = document.createElement("button");
       delBtn.type = "button";
       delBtn.className = "danger secondary";
       delBtn.textContent = "Verwijderen";
       delBtn.addEventListener("click", () => {
-        if (!window.confirm(`Preset «${p.name}» verwijderen?`)) return;
-        const run = bppPhase1Enabled()
-          ? bppMaterialFavoritePresetAction(invokeString, auth!.token, {
-              action: "delete",
-              preset_id: p.preset_id,
-            })
-          : httpJson("/api/floormap/material-favorite-presets", {
-              method: "POST",
-              body: JSON.stringify({ action: "delete", preset_id: p.preset_id }),
-            });
-        void run
-          .then(() => loadPresets())
+        if (!window.confirm(`Preset «${p.name}» en alle koppelingen verwijderen?`)) return;
+        void presetAction({ action: "delete", preset_id: p.preset_id })
+          .then(() => {
+            if (expandedPresetId === p.preset_id) expandedPresetId = null;
+            return loadPresets();
+          })
           .then(() => setStatus(`Preset «${p.name}» verwijderd`, "ok"))
           .catch((err) => setStatus(err instanceof Error ? err.message : String(err), "err"));
       });
-      li.append(label, renameBtn, delBtn);
+
+      actions.append(addBtn, renameBtn, delBtn);
+      head.append(toggle, title, contains, actions);
+      const detail = document.createElement("div");
+      detail.className = "mat-preset-detail hidden";
+      li.append(head, detail);
       presetListEl.appendChild(li);
     }
+
+    if (expandedPresetId && cachedPresets.some((p) => p.preset_id === expandedPresetId)) {
+      await expandPreset(expandedPresetId, true);
+    } else {
+      expandedPresetId = null;
+    }
+    await refreshPresetsForSelectedMaterial();
   } catch (err) {
+    cachedPresets = [];
     presetListEl.replaceChildren();
     presetEmptyEl.classList.remove("hidden");
     presetEmptyEl.textContent =
       err instanceof Error ? `Presets laden mislukt: ${err.message}` : "Presets laden mislukt";
+    fillPresetAddSelect();
+    syncPresetAddUi();
   }
 }
 
@@ -313,6 +732,8 @@ const filterForm = document.getElementById("mat-filter-form") as HTMLFormElement
 const qEl = document.getElementById("mat-q") as HTMLInputElement;
 const categoryEl = document.getElementById("mat-category") as HTMLSelectElement;
 const subcategoryFilterEl = document.getElementById("mat-subcategory") as HTMLSelectElement;
+const exposureFilterEl = document.getElementById("mat-exposure-filter") as HTMLSelectElement | null;
+const exposureEl = document.getElementById("mat-exposure") as HTMLSelectElement | null;
 const pagerLabelEl = document.getElementById("mat-pager-label") as HTMLElement;
 const prevBtn = document.getElementById("mat-prev-btn") as HTMLButtonElement;
 const nextBtn = document.getElementById("mat-next-btn") as HTMLButtonElement;
@@ -320,6 +741,7 @@ const newBtn = document.getElementById("mat-new-btn") as HTMLButtonElement;
 const listboxEl = document.getElementById("mat-listbox") as HTMLElement;
 const tbodyEl = document.getElementById("mat-tbody") as HTMLTableSectionElement;
 const editorTitleEl = document.getElementById("mat-editor-title") as HTMLElement;
+const opbouwEl = document.getElementById("mat-opbouw") as HTMLElement;
 const editorForm = document.getElementById("mat-editor-form") as HTMLFormElement;
 const idEl = document.getElementById("mat-id") as HTMLInputElement;
 const catalogIdEl = document.getElementById("mat-catalog-id") as HTMLInputElement;
@@ -334,12 +756,70 @@ const favoriteWrapEl = document.getElementById("mat-fav-wrap") as HTMLElement | 
 const favoriteEl = document.getElementById("mat-favorite") as HTMLInputElement | null;
 const presetListEl = document.getElementById("mat-preset-list") as HTMLUListElement | null;
 const presetEmptyEl = document.getElementById("mat-preset-empty") as HTMLElement | null;
+const presetAddSelectEl = document.getElementById("mat-preset-add-select") as HTMLSelectElement | null;
+const presetAddBtn = document.getElementById("mat-preset-add-btn") as HTMLButtonElement | null;
+const presetAddNewBtn = document.getElementById("mat-preset-add-new-btn") as HTMLButtonElement | null;
+const presetAddHintEl = document.getElementById("mat-preset-add-hint") as HTMLElement | null;
+const presetCreateBtn = document.getElementById("mat-preset-create-btn") as HTMLButtonElement | null;
+const presetCreateNameEl = document.getElementById("mat-preset-create-name") as HTMLInputElement | null;
+const presetRefreshBtn = document.getElementById("mat-preset-refresh-btn") as HTMLButtonElement | null;
+const presetFeedbackEl = document.getElementById("mat-preset-feedback") as HTMLElement | null;
 const thickEl = document.getElementById("mat-thick") as HTMLInputElement;
 const weightEl = document.getElementById("mat-weight") as HTMLInputElement;
 const raEl = document.getElementById("mat-ra") as HTMLInputElement;
+const glassFieldsEl = document.getElementById("mat-glass-fields") as HTMLElement | null;
 const t1El = document.getElementById("mat-t1") as HTMLInputElement;
 const cavEl = document.getElementById("mat-cav") as HTMLInputElement;
 const t2El = document.getElementById("mat-t2") as HTMLInputElement;
+const dntakEl = document.getElementById("mat-dntak") as HTMLInputElement | null;
+const spectrumIntHintEl = document.getElementById("mat-spectrum-int-hint") as HTMLElement | null;
+
+function isGlassRubriek(master?: string): boolean {
+  const name = (master ?? masterEl.value).trim();
+  if (!name) return false;
+  if (name === "Glas") return true;
+  const rub = rubriekByName(name);
+  return rub?.nr === 2;
+}
+
+function syncGlassFieldsVisibility(): void {
+  const show = isGlassRubriek();
+  glassFieldsEl?.classList.toggle("hidden", !show);
+  if (!show) {
+    // Keep stored values when switching away; only hide UI.
+    t1El.removeAttribute("required");
+    cavEl.removeAttribute("required");
+    t2El.removeAttribute("required");
+  }
+}
+
+function editorIsInterior(): boolean {
+  if (exposureEl?.value === "INTERIOR") return true;
+  if (masterEl.value.trim() === "Interieur") return true;
+  return false;
+}
+
+/** Interior: hide RA/C/Ctr (façade corrections), show praktijkwaarde DnT,A,k. */
+function syncInteriorSpectrumUi(): void {
+  const interior = editorIsInterior();
+  const filter = (exposureFilterEl?.value || "").trim();
+  const spectrumEl = document.getElementById("mat-spectrum");
+  spectrumEl?.classList.toggle("is-interior", interior);
+  document.querySelectorAll("#mat-editor-panel .mat-col-int").forEach((el) => {
+    el.classList.toggle("hidden", !interior);
+  });
+  document.querySelectorAll("#mat-editor-panel .mat-col-ext").forEach((el) => {
+    el.classList.toggle("hidden", interior);
+  });
+  // Table: INTERIOR filter → praktijkwaarde; EXTERIOR → RA/C/Ctr; Alle → both.
+  document.querySelectorAll("#mat-table .mat-col-int").forEach((el) => {
+    el.classList.toggle("hidden", filter === "EXTERIOR");
+  });
+  document.querySelectorAll("#mat-table .mat-col-ext").forEach((el) => {
+    el.classList.toggle("hidden", filter === "INTERIOR");
+  });
+  spectrumIntHintEl?.classList.toggle("hidden", !interior);
+}
 const r63El = document.getElementById("mat-r63") as HTMLInputElement;
 const r125El = document.getElementById("mat-r125") as HTMLInputElement;
 const r250El = document.getElementById("mat-r250") as HTMLInputElement;
@@ -354,16 +834,11 @@ const saveBtn = document.getElementById("mat-save-btn") as HTMLButtonElement;
 const deleteBtn = document.getElementById("mat-delete-btn") as HTMLButtonElement;
 const clearBtn = document.getElementById("mat-clear-btn") as HTMLButtonElement;
 
-let ws: WebSocket | null = null;
-let sessionId: string | null = null;
-let auth: AuthInfo | null = null;
-let reqCounter = 0;
 let offset = 0;
 let total = 0;
 let selectedId: string | null = null;
 let listRows: Material[] = [];
 const PAGE_SIZE = 10;
-const pending = new Map<string, { resolve: (env: Envelope) => void; reject: (err: Error) => void; want: string }>();
 
 function setStatus(text: string, kind: "busy" | "ok" | "err" = "busy"): void {
   connStatusEl.textContent = text;
@@ -376,93 +851,48 @@ function setConnLed(connected: boolean): void {
   connLedEl.classList.toggle("disconnected", !connected);
 }
 
-function nextRequestId(prefix: string): string {
-  reqCounter += 1;
-  return `${prefix}_${reqCounter}_${Date.now()}`;
-}
-
-function storeAuth(info: AuthInfo | null): void {
-  persistAuth(AUTH_KEY, info);
-  void syncSessionCookie(info?.token ?? null);
-}
-
-function loadStoredAuth(): AuthInfo | null {
-  return loadAuth(AUTH_KEY);
-}
-
 function showLogin(): void {
-  auth = null;
-  storeAuth(null);
   loginPanelEl.classList.remove("hidden");
   panelEl.classList.add("hidden");
 }
 
 function showAdmin(info: AuthInfo): void {
-  auth = info;
-  storeAuth(info);
   loginPanelEl.classList.add("hidden");
   panelEl.classList.remove("hidden");
   userLabelEl.textContent = `Ingelogd als ${info.display_name || info.username}`;
   if (favoriteWrapEl) favoriteWrapEl.classList.toggle("hidden", !contextBuildingId);
+  if (!studioPanel) {
+    studioPanel = initMaterialsStudioPanel({ getToken: () => session.auth?.token });
+  }
+  setTab(activeTab, { replaceUrl: false });
   void loadPresets();
 }
 
-function send(type: string, payload: Record<string, unknown>, wantType: string): Promise<Envelope> {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    return Promise.reject(new Error("WebSocket niet open"));
-  }
-  const request_id = nextRequestId(type.replace(".", "_"));
-  const env: Envelope = { v: 1, type, request_id, payload };
-  if (sessionId && type !== "session.open") env.session_id = sessionId;
-  return new Promise((resolve, reject) => {
-    pending.set(request_id, { resolve, reject, want: wantType });
-    ws!.send(JSON.stringify(env));
-  });
+const session = new BppSession({
+  wsUrl: resolveBppWsUrl(),
+  authKey: AUTH_KEY,
+  clientName: "app-gevelwering-materials-web",
+  callbacks: {
+    onStatus: setStatus,
+    onConnLed: setConnLed,
+    onLogin: (info) => showAdmin(info),
+    onLogout: () => showLogin(),
+    onReady: async () => {
+      if (session.auth) {
+        if (activeTab === "studio") return;
+        if (deepMaterialId || deepNew) await applyDeepLink();
+        else await loadList();
+      }
+    },
+  },
+});
+
+function invokeString(target: string, args: unknown[]): Promise<string> {
+  return session.invokeString(target, args);
 }
 
-function onMessage(raw: string): void {
-  let env: Envelope;
-  try {
-    env = JSON.parse(raw) as Envelope;
-  } catch {
-    return;
-  }
-  if (env.type === "session.opened") {
-    const sid =
-      (typeof env.session_id === "string" && env.session_id) ||
-      (typeof env.payload?.session_id === "string" ? env.payload.session_id : null);
-    if (sid) sessionId = sid;
-  }
-  if (env.type === "error") {
-    const waiter = pending.get(env.request_id);
-    if (waiter) {
-      pending.delete(env.request_id);
-      waiter.reject(new Error(JSON.stringify(env.payload ?? env)));
-    }
-    return;
-  }
-  const waiter = pending.get(env.request_id);
-  if (!waiter) return;
-  if (env.type === waiter.want || env.type.endsWith(".completed") || env.type === "exec.completed") {
-    if (env.type === "invoke.accepted" || env.type === "exec.accepted") return;
-    pending.delete(env.request_id);
-    waiter.resolve(env);
-  }
-}
-
-async function invokeString(target: string, args: unknown[]): Promise<string> {
-  const inv = await send("invoke.request", { target_kind: "procedure", target, args }, "invoke.completed");
-  const ret = inv.payload?.return;
-  if (typeof ret !== "string") throw new Error(`Unexpected return from ${target}: ${JSON.stringify(inv.payload)}`);
-  return ret;
-}
-
-function esc(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+function auth(): AuthInfo | null {
+  return session.auth;
 }
 
 /** NL/EN decimal → canonieke vorm voor API/Postgres (`42,6` → `42.6`). Leeg blijft leeg. */
@@ -569,6 +999,44 @@ function listCategoryFilter(): string {
   return sub ? `${master}::${sub}` : master;
 }
 
+function syncListFilterToEditorTaxonomy(): void {
+  const master = masterEl.value.trim();
+  const sub = catEl.value.trim();
+  if (master && [...categoryEl.options].some((o) => o.value === master)) {
+    categoryEl.value = master;
+  }
+  fillFilterSubrubrieken();
+  if (sub && [...subcategoryFilterEl.options].some((o) => o.value === sub)) {
+    subcategoryFilterEl.value = sub;
+  } else {
+    subcategoryFilterEl.value = "";
+  }
+}
+
+/** After save: show the row in the list (filter + search), then ensure editor has it. */
+async function focusSavedMaterial(
+  materialId: string,
+  hint: { catalog_id?: string; name?: string; created: boolean },
+): Promise<void> {
+  offset = 0;
+  syncListFilterToEditorTaxonomy();
+  const qHint = (hint.catalog_id || hint.name || "").trim();
+  if (qHint) qEl.value = qHint;
+  await loadList(materialId);
+  if (!listRows.some((m) => m.material_id === materialId)) {
+    const ret = await invokeString("API_AdminGetMaterial", [auth()!.token, materialId]);
+    if (!ret.startsWith("ERROR")) {
+      fillEditor(JSON.parse(ret) as Material);
+    }
+  }
+  const label = (catalogIdEl.value || hint.catalog_id || hint.name || materialId).trim();
+  setStatus(
+    hint.created ? `Materiaal aangemaakt · ${label}` : `Materiaal bijgewerkt · ${label}`,
+    "ok",
+  );
+  highlightSelection();
+}
+
 function ensureSourceOption(value: string): void {
   const v = (value || "app").trim() || "app";
   const normalized = v === "eigen" ? "app" : v;
@@ -599,18 +1067,53 @@ function resolveSaveSource(): string {
   return src;
 }
 
+/** On create: catalog-id + nr are server-assigned (A#####). On edit: unlock for corrections. */
+function setIdentityFieldsForMode(mode: "create" | "edit"): void {
+  const creating = mode === "create";
+  catalogIdEl.readOnly = creating;
+  noEl.readOnly = creating;
+  catalogIdEl.classList.toggle("mat-field-readonly", creating);
+  noEl.classList.toggle("mat-field-readonly", creating);
+  if (creating) {
+    catalogIdEl.value = "";
+    noEl.value = "";
+    catalogIdEl.placeholder = "wordt toegewezen";
+    noEl.placeholder = "auto";
+  } else {
+    catalogIdEl.placeholder = "";
+    noEl.placeholder = "";
+  }
+  if (sourceEl instanceof HTMLSelectElement) {
+    sourceEl.disabled = creating;
+  }
+}
+
+function applyFilterTaxonomyToEditor(): void {
+  const filterRubriek = categoryEl.value.trim();
+  const filterSub = subcategoryFilterEl.value.trim();
+  if (filterRubriek && [...masterEl.options].some((o) => o.value === filterRubriek)) {
+    masterEl.value = filterRubriek;
+  } else if (![...masterEl.options].some((o) => o.value === masterEl.value)) {
+    masterEl.value = MATERIAL_RUBRIEKEN[0]?.name || "";
+  }
+  fillEditorSubrubrieken();
+  if (filterSub && [...catEl.options].some((o) => o.value === filterSub)) {
+    catEl.value = filterSub;
+  }
+}
+
 function clearEditor(): void {
   selectedId = null;
   highlightSelection();
   idEl.value = "";
-  catalogIdEl.value = "";
-  noEl.value = "";
-  masterEl.value = MATERIAL_RUBRIEKEN[0]?.name || "";
-  fillEditorSubrubrieken();
+  setIdentityFieldsForMode("create");
   nameEl.value = "";
-  catEl.value = "";
   sourceRefEl.value = "";
   ensureSourceOption("app");
+  if (exposureEl) {
+    const fromFilter = (exposureFilterEl?.value || "").trim();
+    exposureEl.value = fromFilter === "INTERIOR" ? "INTERIOR" : "EXTERIOR";
+  }
   spectrumOkEl.checked = true;
   thickEl.value = "";
   weightEl.value = "";
@@ -628,16 +1131,26 @@ function clearEditor(): void {
   rwEl.value = "";
   cEl.value = "";
   ctrEl.value = "";
+  if (dntakEl) dntakEl.value = "";
+  applyFilterTaxonomyToEditor();
+  syncGlassFieldsVisibility();
+  syncInteriorSpectrumUi();
   editorTitleEl.textContent = "Nieuw materiaal";
+  opbouwEl.classList.add("hidden");
+  opbouwEl.innerHTML = "";
   deleteBtn.disabled = true;
   syncPickUi();
   if (favoriteEl) favoriteEl.checked = false;
   if (favoriteWrapEl) favoriteWrapEl.classList.toggle("hidden", !contextBuildingId);
+  selectedMaterialPresetIds = new Set();
+  fillPresetAddSelect();
+  syncPresetAddUi();
 }
 
 function fillEditor(m: Material): void {
   selectedId = m.material_id || null;
   idEl.value = m.material_id || "";
+  setIdentityFieldsForMode(m.material_id ? "edit" : "create");
   catalogIdEl.value = m.catalog_id || "";
   noEl.value = m.material_no === "" || m.material_no == null ? "" : String(m.material_no);
   masterEl.value = m.master_category || MATERIAL_RUBRIEKEN[0]?.name || "";
@@ -660,6 +1173,9 @@ function fillEditor(m: Material): void {
   }
   sourceRefEl.value = m.source_ref || "";
   ensureSourceOption(m.source || "app");
+  if (exposureEl) {
+    exposureEl.value = m.exposure === "INTERIOR" ? "INTERIOR" : "EXTERIOR";
+  }
   spectrumOkEl.checked = m.spectrum_ok === "true" || m.spectrum_ok === "t";
   thickEl.value = m.thickness_mm || "";
   weightEl.value = m.weight_kg_m2 || "";
@@ -667,6 +1183,7 @@ function fillEditor(m: Material): void {
   t1El.value = m.glass_t1_mm || "";
   cavEl.value = m.glass_cavity_mm || "";
   t2El.value = m.glass_t2_mm || "";
+  syncGlassFieldsVisibility();
   r63El.value = m.r_63_hz || "";
   r125El.value = m.r_125_hz || "";
   r250El.value = m.r_250_hz || "";
@@ -677,11 +1194,21 @@ function fillEditor(m: Material): void {
   rwEl.value = m.rw_db || "";
   cEl.value = m.c_db || "";
   ctrEl.value = m.ctr_db || "";
+  if (dntakEl) dntakEl.value = m.dnt_a_k_db || "";
+  syncInteriorSpectrumUi();
   editorTitleEl.textContent = m.material_id ? `Bewerken · ${m.catalog_id || ""} · ${m.name}` : "Nieuw materiaal";
+  if (m.material_id) {
+    opbouwEl.classList.remove("hidden");
+    opbouwEl.innerHTML = `Opbouw: ${materialKindBadgeHtml(m.material_kind, esc)} <span class="hint-inline">${esc(materialKindTitle(m.material_kind))}</span>`;
+  } else {
+    opbouwEl.classList.add("hidden");
+    opbouwEl.innerHTML = "";
+  }
   deleteBtn.disabled = !m.material_id;
   highlightSelection();
   syncPickUi();
   void syncFavoriteCheckbox();
+  void refreshPresetsForSelectedMaterial();
 }
 
 function highlightSelection(): void {
@@ -701,7 +1228,13 @@ function updatePager(): void {
   const lim = limit();
   const from = total === 0 ? 0 : offset + 1;
   const to = Math.min(offset + lim, total);
-  pagerLabelEl.textContent = total === 0 ? "Geen materialen gevonden." : `Weergave ${from}–${to} van ${total}`;
+  const q = qEl.value.trim();
+  pagerLabelEl.textContent =
+    total === 0
+      ? q
+        ? `materiaal '${q}' niet gevonden.`
+        : "Geen materialen gevonden."
+      : `Weergave ${from}–${to} van ${total}`;
   prevBtn.disabled = offset <= 0;
   nextBtn.disabled = offset + lim >= total;
 }
@@ -740,15 +1273,16 @@ function moveSelection(delta: number): void {
 }
 
 async function loadList(preferId?: string | null): Promise<void> {
-  if (!auth?.token) return;
+  if (!auth()?.token) return;
   const lim = limit();
   const ret = await invokeString("API_AdminListMaterials", [
-    auth.token,
+    auth()!.token,
     qEl.value.trim(),
     listCategoryFilter(),
     String(lim),
     String(offset),
     "",
+    (exposureFilterEl?.value || "").trim(),
   ]);
   if (ret.startsWith("ERROR")) {
     setStatus(ret, "err");
@@ -766,9 +1300,11 @@ async function loadList(preferId?: string | null): Promise<void> {
         <td data-field="mat-master">${esc(m.master_category || "")}</td>
         <td data-field="mat-cat">${esc(m.category || "")}</td>
         <td class="mat-name-cell" data-field="mat-name">${esc(m.name)}</td>
+        <td class="mat-kind-cell">${materialKindBadgeHtml(m.material_kind, esc)}</td>
+        <td class="mat-exposure-cell" data-field="mat-exposure">${esc(m.exposure === "INTERIOR" ? "Interieur" : "Exterieur")}</td>
         <td data-field="mat-thick">${esc(m.thickness_mm || "")}</td>
         <td data-field="mat-weight">${esc(m.weight_kg_m2 || "")}</td>
-        <td data-field="mat-ra">${esc(m.ra_dba || "")}</td>
+        <td class="mat-col-ext" data-field="mat-ra">${esc(m.exposure === "INTERIOR" ? "" : m.ra_dba || "")}</td>
         <td data-field="mat-r63">${esc(m.r_63_hz || "")}</td>
         <td data-field="mat-r125">${esc(m.r_125_hz || "")}</td>
         <td data-field="mat-r250">${esc(m.r_250_hz || "")}</td>
@@ -777,42 +1313,73 @@ async function loadList(preferId?: string | null): Promise<void> {
         <td data-field="mat-r2000">${esc(m.r_2000_hz || "")}</td>
         <td data-field="mat-r4000">${esc(m.r_4000_hz || "")}</td>
         <td data-field="mat-rw">${esc(m.rw_db || "")}</td>
-        <td data-field="mat-c">${esc(m.c_db || "")}</td>
-        <td data-field="mat-ctr">${esc(m.ctr_db || "")}</td>
+        <td class="mat-col-ext" data-field="mat-c">${esc(m.exposure === "INTERIOR" ? "" : m.c_db || "")}</td>
+        <td class="mat-col-ext" data-field="mat-ctr">${esc(m.exposure === "INTERIOR" ? "" : m.ctr_db || "")}</td>
+        <td class="mat-col-int" data-field="mat-dntak">${esc(m.exposure === "INTERIOR" ? m.dnt_a_k_db || "" : "")}</td>
       </tr>`,
     )
     .join("");
+  syncInteriorSpectrumUi();
   updatePager();
 
   const want = preferId ?? selectedId;
-  const pick =
-    (want && listRows.find((m) => m.material_id === want)) || listRows[0] || null;
+  const preferred = want ? listRows.find((m) => m.material_id === want) : null;
+  if (preferred) {
+    fillEditor(preferred);
+    setStatus(`Geladen ${listRows.length} · ${preferred.name}`, "ok");
+    return;
+  }
+  // Explicit preferId missing from this page: do not silently select another row.
+  if (preferId) {
+    highlightSelection();
+    const q = qEl.value.trim();
+    if (total === 0 && q) setStatus(`materiaal '${q}' niet gevonden.`, "err");
+    else setStatus(`${listRows.length} materialen geladen`, "ok");
+    return;
+  }
+  const pick = listRows[0] || null;
   if (pick) {
     fillEditor(pick);
     setStatus(`Geladen ${listRows.length} · ${pick.name}`, "ok");
   } else {
     clearEditor();
-    setStatus(total === 0 ? "Geen materialen gevonden" : `${listRows.length} materialen geladen`, "ok");
+    const q = qEl.value.trim();
+    if (total === 0 && q) {
+      setStatus(`materiaal '${q}' niet gevonden.`, "err");
+    } else if (total === 0) {
+      setStatus("Geen materialen gevonden", "ok");
+    } else {
+      setStatus(`${listRows.length} materialen geladen`, "ok");
+    }
   }
 }
 
 /** Deep-link from GA/floormap: open editor for a material, or start a new one. */
 async function applyDeepLink(): Promise<void> {
-  if (!auth?.token) return;
+  if (!auth()?.token) return;
   if (deepNew && !deepMaterialId) {
     await loadList();
     clearEditor();
     editorForm.scrollIntoView({ block: "nearest", behavior: "smooth" });
     nameEl.focus({ preventScroll: true });
-    setStatus("Nieuw materiaal — vul rubriek, subrubriek, spectra en RA in", "ok");
+    setStatus(
+      "Nieuw materiaal — catalogus-id/nr automatisch; rubriek/subrubriek overgenomen uit filter waar mogelijk",
+      "ok",
+    );
     return;
   }
   if (!deepMaterialId) return;
   if (deepQ && !qEl.value.trim()) qEl.value = deepQ;
   setStatus("Materiaal laden…", "busy");
-  const ret = await invokeString("API_AdminGetMaterial", [auth.token, deepMaterialId]);
+  const ret = await invokeString("API_AdminGetMaterial", [auth()!.token, deepMaterialId]);
   if (ret.startsWith("ERROR")) {
-    setStatus(ret, "err");
+    const label = (deepQ || deepMaterialId).trim();
+    setStatus(
+      ret.includes("not found") || ret.includes("niet gevonden")
+        ? `materiaal '${label}' niet gevonden.`
+        : ret,
+      "err",
+    );
     await loadList();
     return;
   }
@@ -828,73 +1395,24 @@ async function applyDeepLink(): Promise<void> {
   setStatus(`Geopend: ${m.catalog_id || ""} · ${m.name}`, "ok");
 }
 
-async function bootstrapSession(): Promise<void> {
-  setStatus(`Verbinden met ${BPP_WS}…`, "busy");
-  ws = new WebSocket(BPP_WS);
-  setConnLed(false);
-  await new Promise<void>((resolve, reject) => {
-    const t = window.setTimeout(() => reject(new Error("WebSocket-verbinding time-out")), 8000);
-    ws!.onopen = () => {
-      window.clearTimeout(t);
-      setConnLed(true);
-      resolve();
-    };
-    ws!.onerror = () => {
-      window.clearTimeout(t);
-      setConnLed(false);
-      reject(new Error("WebSocket-verbinding mislukt — draait bppServer op poort 18080?"));
-    };
-  });
-  ws.onmessage = (ev) => onMessage(String(ev.data));
-  ws.onclose = () => {
-    setConnLed(false);
-    setStatus("Verbinding met bppServer verbroken", "err");
-  };
-
-  await send("session.open", { client_name: "app-gevelwering-materials-web", client_version: "0.2.12" }, "session.opened");
-  await send("exec.request", { code: 'INCLUDE "fixtures/app-gevelwering/shared_building_api.basicpp"\n' }, "exec.completed");
-  const bootRet = await invokeString("API_Bootstrap", []);
-  if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap mislukt: ${bootRet}`);
-  setStatus(`Verbonden · sessie ${sessionId ?? "?"} · Postgres gereed`, "ok");
-
-  const stored = loadStoredAuth();
-  if (stored?.token) {
-    const validated = await invokeString("API_ValidateSession", [stored.token]);
-    if (!validated.startsWith("ERROR")) {
-      const info = JSON.parse(validated) as AuthInfo;
-      if (info.username === "admin") {
-        showAdmin({ token: stored.token, username: info.username, display_name: info.display_name });
-        if (deepMaterialId || deepNew) await applyDeepLink();
-        else await loadList();
-        return;
-      }
-    }
-  }
-  showLogin();
-}
-
 loginForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   loginBtn.disabled = true;
   setStatus("Inloggen…", "busy");
   try {
-    const fd = new FormData(loginForm);
-    const username = String(fd.get("username") ?? "").trim();
-    const password = String(fd.get("password") ?? "");
-    const ret = await invokeString("API_Login", [username, password]);
-    if (ret.startsWith("ERROR")) {
-      setStatus(ret, "err");
-      return;
-    }
-    const info = JSON.parse(ret) as AuthInfo;
+    const info = await session.bootstrapAndLogin(
+      String(new FormData(loginForm).get("username") ?? "").trim(),
+      String(new FormData(loginForm).get("password") ?? ""),
+    );
     if (info.username !== "admin") {
       setStatus("Materiaaleditor is alleen voor gebruiker 'admin'", "err");
       return;
     }
-    showAdmin(info);
     offset = 0;
-    if (deepMaterialId || deepNew) await applyDeepLink();
-    else await loadList();
+    if (activeTab !== "studio") {
+      if (deepMaterialId || deepNew) await applyDeepLink();
+      else await loadList();
+    }
     setStatus("Beheerder ingelogd", "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
@@ -905,11 +1423,11 @@ loginForm.addEventListener("submit", async (ev) => {
 
 logoutBtn.addEventListener("click", async () => {
   try {
-    if (auth?.token) await invokeString("API_Logout", [auth.token]);
+    if (session.auth?.token) await invokeString("API_Logout", [session.auth.token]);
   } catch {
     /* ignore */
   }
-  showLogin();
+  session.logout();
   setStatus("Uitgelogd", "ok");
 });
 
@@ -929,6 +1447,13 @@ categoryEl.addEventListener("change", () => {
 
 masterEl.addEventListener("change", () => {
   fillEditorSubrubrieken();
+  if (exposureEl && masterEl.value === "Interieur") exposureEl.value = "INTERIOR";
+  syncGlassFieldsVisibility();
+  syncInteriorSpectrumUi();
+});
+exposureEl?.addEventListener("change", () => syncInteriorSpectrumUi());
+exposureFilterEl?.addEventListener("change", () => {
+  syncInteriorSpectrumUi();
 });
 
 prevBtn.addEventListener("click", async () => {
@@ -946,6 +1471,15 @@ nextBtn.addEventListener("click", async () => {
 newBtn.addEventListener("click", () => {
   clearEditor();
   nameEl.focus();
+  const rub = masterEl.value.trim();
+  const sub = catEl.value.trim();
+  const bits = [rub && `rubriek ${rub}`, sub && `subrubriek ${sub}`].filter(Boolean);
+  setStatus(
+    bits.length
+      ? `Nieuw materiaal — ${bits.join(", ")} overgenomen uit zoekfilter`
+      : "Nieuw materiaal — catalogus-id en nr worden automatisch toegewezen",
+    "ok",
+  );
 });
 
 clearBtn.addEventListener("click", () => clearEditor());
@@ -967,6 +1501,81 @@ favoriteEl?.addEventListener("change", () => {
     .catch((err) => {
       favoriteEl.checked = !favoriteEl.checked;
       setStatus(err instanceof Error ? err.message : String(err), "err");
+    });
+});
+
+presetAddSelectEl?.addEventListener("change", () => syncPresetAddUi());
+
+presetAddBtn?.addEventListener("click", () => {
+  const pid = presetAddSelectEl?.value;
+  if (!pid) return;
+  void addSelectedToPreset(pid).catch((err) =>
+    setStatus(err instanceof Error ? err.message : String(err), "err"),
+  );
+});
+
+function promptNewPreset(withSelected: boolean): void {
+  const fromInput = presetCreateNameEl?.value.trim() || "";
+  const name =
+    fromInput ||
+    window.prompt("Naam voor de nieuwe favorieten-preset:")?.trim() ||
+    "";
+  if (!name) {
+    setPresetFeedback("Vul eerst een preset-naam in.", "err");
+    presetCreateNameEl?.focus();
+    return;
+  }
+  if (presetCreateBtn) presetCreateBtn.disabled = true;
+  void createPreset(name, withSelected)
+    .then(() => {
+      if (presetCreateNameEl) presetCreateNameEl.value = "";
+      const msg = withSelected
+        ? `Preset «${name}» aangemaakt (geselecteerd materiaal toegevoegd).`
+        : `Preset «${name}» aangemaakt.`;
+      setPresetFeedback(msg, "ok");
+      setStatus(msg, "ok");
+    })
+    .catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      setPresetFeedback(msg, "err");
+      setStatus(msg, "err");
+    })
+    .finally(() => {
+      if (presetCreateBtn) presetCreateBtn.disabled = false;
+    });
+}
+
+presetAddNewBtn?.addEventListener("click", () => {
+  document.getElementById("mat-presets-panel")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  if (presetCreateNameEl) {
+    presetCreateNameEl.focus();
+    if (!presetCreateNameEl.value.trim()) {
+      setPresetFeedback("Typ een naam en druk Enter of klik Aanmaken (geselecteerd materiaal wordt meegenomen).", "busy");
+      return;
+    }
+  }
+  promptNewPreset(true);
+});
+presetCreateBtn?.addEventListener("click", () =>
+  promptNewPreset(Boolean(selectedId || idEl.value.trim())),
+);
+presetCreateNameEl?.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") {
+    ev.preventDefault();
+    promptNewPreset(Boolean(selectedId || idEl.value.trim()));
+  }
+});
+presetRefreshBtn?.addEventListener("click", () => {
+  void loadPresets()
+    .then(() => refreshPresetsForSelectedMaterial())
+    .then(() => {
+      setPresetFeedback("Presets vernieuwd", "ok");
+      setStatus("Presets vernieuwd", "ok");
+    })
+    .catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      setPresetFeedback(msg, "err");
+      setStatus(msg, "err");
     });
 });
 
@@ -1019,17 +1628,29 @@ listboxEl.addEventListener("keydown", (ev) => {
 
 editorForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  if (!auth?.token) return;
+  if (!auth()?.token) return;
+  const isNew = !idEl.value.trim();
+  const cid = catalogIdEl.value.trim();
+  if (!isNew && !cid) {
+    setStatus("Catalogus-id is verplicht bij bewerken", "err");
+    catalogIdEl.focus();
+    return;
+  }
   saveBtn.disabled = true;
   setStatus("Materiaal opslaan…", "busy");
+  const savedName = nameEl.value.trim();
+  const hasSpectrum = [r63El, r125El, r250El, r500El, r1000El, r2000El].some((el) => el.value.trim());
+  if (isNew && !hasSpectrum) {
+    spectrumOkEl.checked = false;
+  }
   try {
     const ret = await invokeString("API_AdminSaveMaterial", [
-      auth.token,
+      auth()!.token,
       idEl.value.trim(),
-      catalogIdEl.value.trim(),
+      isNew ? "" : catalogIdEl.value.trim(),
       masterEl.value.trim(),
-      noEl.value.trim(),
-      nameEl.value.trim(),
+      isNew ? "" : noEl.value.trim(),
+      savedName,
       catEl.value.trim(),
       decimalField(thickEl, "Dikte"),
       decimalField(weightEl, "Gewicht"),
@@ -1050,21 +1671,32 @@ editorForm.addEventListener("submit", async (ev) => {
       decimalField(cavEl, "Spouw"),
       decimalField(t2El, "Glas t2"),
       resolveSaveSource(),
+      masterEl.value.trim() === "Interieur" || exposureEl?.value === "INTERIOR"
+        ? "INTERIOR"
+        : "EXTERIOR",
+      dntakEl ? decimalField(dntakEl, "Praktijkwaarde") : "",
     ]);
     if (ret.startsWith("ERROR")) {
       setStatus(ret, "err");
       return;
     }
-    const saved = JSON.parse(ret) as { material_id: string; created: boolean };
+    const saved = JSON.parse(ret) as {
+      material_id: string;
+      catalog_id?: string;
+      created: boolean;
+    };
     const wantFav = Boolean(favoriteEl?.checked && contextBuildingId);
-    setStatus(saved.created ? "Materiaal aangemaakt" : "Materiaal bijgewerkt", "ok");
-    await loadList(saved.material_id || null);
+    await focusSavedMaterial(saved.material_id, {
+      catalog_id: saved.catalog_id,
+      name: savedName,
+      created: saved.created,
+    });
     if (wantFav && saved.material_id) {
       try {
         if (bppPhase1Enabled()) {
           await bppAddMaterialFavorite(
             invokeString,
-            auth!.token,
+            auth()!.token,
             contextBuildingId!,
             saved.material_id,
           );
@@ -1093,12 +1725,12 @@ editorForm.addEventListener("submit", async (ev) => {
 });
 
 deleteBtn.addEventListener("click", async () => {
-  if (!auth?.token || !idEl.value) return;
+  if (!auth()?.token || !idEl.value) return;
   if (!window.confirm(`Materiaal “${nameEl.value || idEl.value}” verwijderen?`)) return;
   deleteBtn.disabled = true;
   setStatus("Verwijderen…", "busy");
   try {
-    const ret = await invokeString("API_AdminDeleteMaterial", [auth.token, idEl.value]);
+    const ret = await invokeString("API_AdminDeleteMaterial", [auth()!.token, idEl.value]);
     if (ret.startsWith("ERROR")) {
       setStatus(ret, "err");
       return;
@@ -1115,12 +1747,61 @@ deleteBtn.addEventListener("click", async () => {
 
 fillFilterRubrieken();
 fillEditorRubrieken();
+syncGlassFieldsVisibility();
+syncInteriorSpectrumUi();
 setupReturnNav();
 syncPickUi();
 if (deepQ) qEl.value = deepQ;
-
-bootstrapSession().catch((err) => {
-  setStatus(err instanceof Error ? err.message : String(err), "err");
-});
+{
+  const exp =
+    deepExposure === "INTERIEUR" || deepExposure === "INTERIOR"
+      ? "INTERIOR"
+      : deepExposure === "EXTERIEUR" || deepExposure === "EXTERIOR"
+        ? "EXTERIOR"
+        : deepExposure === "ALL" || deepExposure === "ALLE"
+          ? ""
+          : deepExposure;
+  if (exposureFilterEl && (exp === "" || exp === "INTERIOR" || exp === "EXTERIOR")) {
+    exposureFilterEl.value = exp;
+  }
+  if (deepRubriek) {
+    const rub =
+      rubriekByName(deepRubriek) ||
+      MATERIAL_RUBRIEKEN.find((r) => String(r.nr) === deepRubriek) ||
+      null;
+    if (rub && [...categoryEl.options].some((o) => o.value === rub.name)) {
+      categoryEl.value = rub.name;
+      fillFilterSubrubrieken();
+      if (deepSubrubriek) {
+        const sub =
+          subrubriekenFor(rub.nr).find(
+            (s) => s.name === deepSubrubriek || String(s.nr) === deepSubrubriek,
+          ) || null;
+        if (sub && [...subcategoryFilterEl.options].some((o) => o.value === sub.name)) {
+          subcategoryFilterEl.value = sub.name;
+        }
+      }
+    }
+  }
+  if (masterEl && categoryEl.value) {
+    const fromFilter = categoryEl.value;
+    if ([...masterEl.options].some((o) => o.value === fromFilter)) {
+      masterEl.value = fromFilter;
+      fillEditorSubrubrieken();
+      if (
+        subcategoryFilterEl.value &&
+        [...catEl.options].some((o) => o.value === subcategoryFilterEl.value)
+      ) {
+        catEl.value = subcategoryFilterEl.value;
+      }
+    }
+  }
+  if (exposureEl && exposureFilterEl?.value === "INTERIOR") {
+    exposureEl.value = "INTERIOR";
+  }
+}
+tabCatalogBtn.addEventListener("click", () => setTab("catalog"));
+tabStudioBtn.addEventListener("click", () => setTab("studio"));
 
 initPasswordToggles();
+session.connect({ reconnectMs: 1500 });

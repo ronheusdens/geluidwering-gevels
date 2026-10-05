@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Geluidwering Gevels — Tekeninganalyse</title>
-  <link rel="stylesheet" href="/styles.css?v=save-ui-sync" />
+  <title>Stilte advies en meten — Tekeninganalyse</title>
+  <link rel="stylesheet" href="/styles.css?v=souterrain" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body class="engineer-body">
   <main class="page page-engineer">
     <header class="header header-compact">
       <div class="brand">
-        <img class="brand-logo" src="/assets/stilte-logo.jpg" alt="" width="52" height="52" />
+        <img class="brand-logo" src="/assets/stilte-logo.png" alt="Stilte advies en meten" width="200" height="76" />
         <div class="brand-copy">
-          <p class="brand-name">Geluidwering Gevels</p>
+          <p class="brand-name">Stilte advies en meten</p>
           <h1 class="page-heading">Tekeninganalyse</h1>
         </div>
       </div>
@@ -56,10 +56,33 @@
       </div>
 
       <section class="panel" id="fm-picker-panel">
-        <h2>Schaalbare secties</h2>
-        <p class="hint">Kies een plattegrond, gevel of doorsnede om te meten en componenten te markeren.</p>
+        <div class="fm-picker-head">
+          <div>
+            <h2>Schaalbare secties</h2>
+            <p class="hint">Kies een plattegrond, gevel of doorsnede om te meten en componenten te markeren.</p>
+          </div>
+          <button type="button" id="fm-vgvr-overview-btn" class="secondary" title="Alle toegekende VG/VR per plattegrond">
+            VG/VR-overzicht
+          </button>
+        </div>
         <div id="fm-section-list" class="fm-section-picker"></div>
       </section>
+
+      <dialog id="fm-vgvr-overview-dialog" class="fm-vgvr-dialog">
+        <form method="dialog" class="fm-vgvr-dialog-form">
+          <div class="fm-vgvr-dialog-head">
+            <h2 id="fm-vgvr-overview-title">VG/VR-overzicht</h2>
+            <div class="fm-vgvr-dialog-actions">
+              <button type="button" id="fm-vgvr-overview-copy" class="secondary" title="Overzicht kopiëren voor rapportage">
+                Naar clipboard
+              </button>
+              <button type="submit" class="secondary" value="close">Sluiten</button>
+            </div>
+          </div>
+          <p class="hint" id="fm-vgvr-overview-meta">Per plattegrond, van souterrain tot zolder.</p>
+          <div id="fm-vgvr-overview-body" class="fm-vgvr-overview-body"></div>
+        </form>
+      </dialog>
 
       <section class="panel hidden engineer-workspace-panel" id="fm-workspace-panel">
         <div class="engineer-workspace-head">
@@ -81,19 +104,21 @@
               <span class="toolbar-sep" aria-hidden="true"></span>
               <button type="button" id="fm-discover-btn" class="secondary">Ontdek ruimten</button>
               <div id="fm-discover-min-wrap" class="fm-discover-min-wrap hidden">
-                <label for="fm-discover-min-size" class="fm-discover-min-label">
-                  Min. opening
-                  <span id="fm-discover-min-val">0%</span>
-                </label>
-                <input
-                  type="range"
-                  id="fm-discover-min-size"
-                  min="0"
-                  max="100"
-                  value="0"
-                  step="1"
-                  title="Minimale grootte t.o.v. buitencontour (0 = kleinste, 100 = hele contour)"
-                />
+                <label for="fm-discover-min-size" class="fm-discover-min-label">Filtergrootte</label>
+                <div class="fm-discover-min-slider-row">
+                  <span class="fm-discover-min-end" aria-hidden="true">Grof</span>
+                  <input
+                    type="range"
+                    id="fm-discover-min-size"
+                    min="0"
+                    max="100"
+                    value="100"
+                    step="1"
+                    title="Filtergrootte: links alleen grote openingen, rechts ook kleine"
+                    aria-valuetext="Fijn"
+                  />
+                  <span class="fm-discover-min-end" aria-hidden="true">Fijn</span>
+                </div>
               </div>
               <p class="hint" id="fm-discover-hint" style="margin:0.25rem 0 0;font-size:0.8rem;">Plattegrond: ruimten op de crop. Gevel: selecteer eerst de buitencontour (VR), daarna openingen (kozijnen) in de bitmap.</p>
               <button type="button" id="fm-calibrate-btn" class="secondary">Schaal kalibreren</button>
@@ -116,10 +141,34 @@
                   Werkelijke lengte van gemarkeerde lijn (mm)
                   <input id="fm-calibrate-metres" type="number" min="1" step="1" value="5000" />
                 </label>
-                <button type="button" id="fm-calibrate-apply-btn">Toepassen</button>
+                <button type="button" id="fm-calibrate-apply-btn">Toepassen &amp; maten herberekenen</button>
                 <button type="button" id="fm-calibrate-repick-btn" class="secondary">Punten opnieuw kiezen</button>
               </div>
-              <p class="hint" id="fm-calibrate-hint">Klik op Schaal kalibreren wanneer u klaar bent.</p>
+              <p class="hint" id="fm-calibrate-hint">
+                Klik op Schaal kalibreren. Bij toepassen worden alle m²/m op deze tekening herberekend
+                (kierlengtes meegenomen); GA-resultaten worden gewist.
+              </p>
+            </section>
+
+            <section class="copy-layout-bar panel-inset hidden" id="fm-copy-layout-bar">
+              <label class="inline-check">
+                <input type="checkbox" id="fm-copy-layout-cb" />
+                Kopieer ruimte-indeling van
+              </label>
+              <div class="copy-layout-controls hidden" id="fm-copy-layout-controls">
+                <select id="fm-copy-layout-source" aria-label="Bronplattegrond">
+                  <option value="">— kies plattegrond —</option>
+                </select>
+                <label class="inline-check" title="Houdt VR gelijk; wijst nieuwe VG-nummers toe zodat VG+VR uniek blijft in het project">
+                  <input type="checkbox" id="fm-copy-layout-remap-vg" checked />
+                  Nieuwe VG-nummers (VR blijft gelijk)
+                </label>
+                <button type="button" id="fm-copy-layout-btn" disabled>Indeling kopiëren</button>
+                <p class="hint">
+                  Neemt polygonen, labels en geveloriëntaties over. Zelfde VR in een andere VG mag.
+                  Verdieping komt uit de keuzelijst rechts.
+                </p>
+              </div>
             </section>
 
             <details class="tools-panel panel-inset" id="fm-tools-bar" open>
@@ -189,17 +238,19 @@
             <section class="discovery-dock hidden" id="fm-discovery-dock">
               <div class="discovery-dock-top">
                 <strong>Ontdekte ruimte <span id="fm-discovery-progress"></span></strong>
-                <p class="hint" id="fm-discovery-hint">Sleep witte ankers langs de muren. Dubbelklik een anker om te verwijderen, of Vereenvoudigen om de polylijn te dunnen. Daarna Accepteren.</p>
+                <p class="hint" id="fm-discovery-hint">Sleep witte ankers langs de muren. Dubbelklik op een rand voor een extra anker; dubbelklik een anker om te verwijderen; of Vereenvoudigen. Daarna Accepteren.</p>
               </div>
               <div class="discovery-dock-body">
                 <label class="discovery-inline">Omschrijving <input id="fm-discovery-label" /></label>
                 <label class="discovery-inline">Verdieping
                   <select id="fm-discovery-level">
+                    <option value="SOUTERRAIN">Souterrain</option>
                     <option value="GROUND">Begane vloer</option>
-                    <option value="FIRST">Verdieping</option>
+                    <option value="BEL_ETAGE">Bel-etage</option>
+                    <option value="FIRST">1e verdieping</option>
                     <option value="SECOND">2e verdieping</option>
                     <option value="THIRD">3e verdieping</option>
-                    <option value="ROOF">Dak</option>
+                    <option value="ROOF">Zolder</option>
                     <option value="OTHER">Overig</option>
                   </select>
                 </label>
@@ -249,7 +300,23 @@
                   <input id="fm-room-vr" type="text" maxlength="16" placeholder="3A" autocomplete="off" />
                 </label>
               </div>
-              <p class="hint" id="fm-vg-vr-hint">Zelfde VG + andere VR = ruimten in hetzelfde verblijfsgebied. VR is uniek per project (bijv. 1, 3A).</p>
+              <p class="hint" id="fm-vg-vr-hint">Zelfde VG + andere VR = ruimten in hetzelfde verblijfsgebied. De combinatie VG+VR is uniek (zelfde VR in een andere VG mag).</p>
+              <div id="fm-component-ori-block" class="fm-component-ori-block hidden">
+                <label class="block-label">Geveloriëntatie (component) *
+                  <select id="fm-component-ori" aria-label="Windrichting van dit gevelcomponent">
+                    <option value="">— kies oriëntatie —</option>
+                    <option value="N">N · noord</option>
+                    <option value="NO">NO · noordoost</option>
+                    <option value="O">O · oost</option>
+                    <option value="ZO">ZO · zuidoost</option>
+                    <option value="Z">Z · zuid</option>
+                    <option value="ZW">ZW · zuidwest</option>
+                    <option value="W">W · west</option>
+                    <option value="NW">NW · noordwest</option>
+                  </select>
+                </label>
+                <p class="hint" id="fm-component-ori-hint">Verplicht bij opslaan. De listbox onthoudt je laatste keuze — handig bij meerdere componenten achter elkaar.</p>
+              </div>
               <div id="fm-expected-ori-block" class="fm-expected-ori-block hidden">
                 <p class="fm-expected-ori-label">Geveloriëntaties (VR) *</p>
                 <div class="fm-expected-ori-row" id="fm-expected-ori-row" role="group" aria-label="Verplichte geveloriëntaties van deze VR">
@@ -316,15 +383,17 @@
                     <span class="fm-spectrum-val fm-spectrum-val--total" id="fm-ra">—</span>
                   </div>
                 </div>
-                <p class="hint">Materiaal is optioneel bij opslaan (oranje led). Koppel later voor de berekening; alleen complete componenten (groen) zijn kiesbaar bij vlakdelen.</p>
+                <p class="hint">Materiaal is optioneel bij opslaan (oranje led in de lijst = materiaal/oriëntatie, niet de schaal). Koppel later voor de berekening; alleen complete componenten (groen) zijn kiesbaar bij vlakdelen.</p>
               </div>
               <label class="block-label">Verdieping
                 <select id="fm-room-level">
+                  <option value="SOUTERRAIN">Souterrain</option>
                   <option value="GROUND">Begane vloer</option>
-                  <option value="FIRST">Verdieping</option>
+                  <option value="BEL_ETAGE">Bel-etage</option>
+                  <option value="FIRST">1e verdieping</option>
                   <option value="SECOND">2e verdieping</option>
                   <option value="THIRD">3e verdieping</option>
-                  <option value="ROOF">Dak</option>
+                  <option value="ROOF">Zolder</option>
                   <option value="OTHER">Overig</option>
                 </select>
               </label>
@@ -334,7 +403,7 @@
                   <input type="checkbox" id="fm-kier-suggest-cb" />
                   Kierdichting voor dit vlak (omtrek)
                 </label>
-                <p class="hint" id="fm-kier-suggest-hint">Optioneel. Standaard D02408. Bij aanvinken wordt een extra lengtecomponent gemaakt; lengtes van hetzelfde kierdichtingsstype worden opgeteld.</p>
+                <p class="hint" id="fm-kier-suggest-hint">Optioneel kenmerk. Standaard D02408. Meestal op een samengesteld (±) component; lengtes van hetzelfde type worden opgeteld.</p>
                 <label class="block-label">Kierdichtingsmateriaal
                   <select id="fm-kier-suggest-mat">
                     <option value="">D02408 (standaard)</option>
@@ -364,16 +433,21 @@
               </div>
             </fieldset>
 
-            <fieldset id="fm-set-ops-fieldset" class="hidden">
-              <legend>Compositie (+/−)</legend>
-              <p class="hint" id="fm-compose-hint">Selecteer ≥2 gesloten componenten in de lijst hieronder. Grootste = buitencontour; overige moeten er volledig in passen. Zet per deel <strong>+</strong> of <strong>−</strong>, kies een materiaal hierboven, en klik <strong>Toepassen &amp; opslaan</strong>. Het netto-resultaat erft VG/VR; de originelen blijven in de lijst (groene markering) en zijn via <strong>Bronnen</strong> op het resultaat te vinden. De selectie wordt gewist.</p>
-              <ul id="fm-compose-parts" class="compose-parts-list" aria-label="Tekens per component"></ul>
-              <div class="actions actions-stack">
-                <button type="button" id="fm-set-apply-btn">Toepassen &amp; opslaan</button>
-                <button type="button" id="fm-set-clear-sel-btn" class="secondary">Selectie wissen</button>
+            <details id="fm-set-ops-fieldset" class="compose-panel tools-panel panel-inset hidden">
+              <summary class="tools-panel-toggle">
+                <strong>Compositie (+/−)</strong>
+                <span class="tools-panel-chevron" aria-hidden="true"></span>
+              </summary>
+              <div class="compose-panel-body">
+                <p class="hint" id="fm-compose-hint">Selecteer ≥2 gesloten componenten in de lijst hieronder. Grootste = buitencontour; overige moeten er volledig in passen. Zet per deel <strong>+</strong> of <strong>−</strong>, kies een materiaal hierboven, en klik <strong>Toepassen &amp; opslaan</strong>. Het netto-resultaat erft VG/VR; de originelen blijven in de lijst (groene markering) en zijn via <strong>Bronnen</strong> op het resultaat te vinden. De selectie wordt gewist.</p>
+                <ul id="fm-compose-parts" class="compose-parts-list" aria-label="Tekens per component"></ul>
+                <div class="actions actions-stack">
+                  <button type="button" id="fm-set-apply-btn">Toepassen &amp; opslaan</button>
+                  <button type="button" id="fm-set-clear-sel-btn" class="secondary">Selectie wissen</button>
+                </div>
+                <p class="compose-feedback" id="fm-compose-feedback" aria-live="polite"></p>
               </div>
-              <p class="compose-feedback" id="fm-compose-feedback" aria-live="polite"></p>
-            </fieldset>
+            </details>
 
             <div class="saved-sections-block" id="fm-saved-block">
               <h3 id="fm-saved-heading" class="saved-list-heading">
@@ -396,6 +470,6 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/floormap.js?v=discover-shape-min"></script>
+  <script type="module" src="/floormap.js?v=souterrain2"></script>
 </body>
 </html>

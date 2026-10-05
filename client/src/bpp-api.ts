@@ -62,7 +62,16 @@ export async function bppSaveFloormapScale(
     scale_source: string;
     scale_aspect_yx?: number | null;
   },
-): Promise<void> {
+): Promise<{
+  ok?: boolean;
+  section_id?: string;
+  metres_per_norm_unit?: number;
+  scale_aspect_yx?: number;
+  subsections?: number;
+  verblijfsruimten_vloer?: number;
+  vlakken?: number;
+  ga_cleared?: number;
+}> {
   const ret = await invoke("API_SaveFloormapScale", [
     token,
     opts.section_id,
@@ -71,7 +80,7 @@ export async function bppSaveFloormapScale(
     opts.scale_source || "CALIBRATED",
     bppAspectArg(opts.scale_aspect_yx),
   ]);
-  parseBppJson<{ ok?: boolean }>(ret);
+  return parseBppJson(ret);
 }
 
 export type BppProjectDocument = {
@@ -222,6 +231,7 @@ export type BppVrFacadeComponent = {
   area_m2?: number | null;
   quantity_kind?: string;
   length_m?: number | null;
+  repeat_count?: number | null;
   ga_ready?: boolean;
   material_id?: string | null;
   catalog_id?: string | null;
@@ -229,6 +239,9 @@ export type BppVrFacadeComponent = {
   material_name?: string | null;
   ra_dba?: number | null;
   boolean_op?: string | null;
+  orientatie?: string | null;
+  from_seal?: boolean;
+  source_subsection_id?: string | null;
   constituents?: BppVrFacadeConstituent[];
 };
 

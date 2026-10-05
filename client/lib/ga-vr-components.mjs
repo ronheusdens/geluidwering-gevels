@@ -160,9 +160,14 @@ export function partitionVrGaComponents(subsections, vrNr, opts = {}) {
     const analysis = asAnalysis(s.analysis);
     const materialId = analysis.material_id != null ? String(analysis.material_id) : null;
     const sourcesComplete = composeSourcesMaterialComplete(s, subsections);
+    const ori = String(analysis.orientatie || "")
+      .trim()
+      .toUpperCase();
+    const ORI = new Set(["N", "NO", "O", "ZO", "Z", "ZW", "W", "NW"]);
+    const oriOk = Boolean(ori) && ORI.has(ori);
     eligible.push({
       ...s,
-      ga_ready: Boolean(materialId) && sourcesComplete,
+      ga_ready: Boolean(materialId) && sourcesComplete && oriOk,
       material_id: materialId,
       master_category: analysis.master_category != null ? String(analysis.master_category) : null,
       material_name: analysis.material_name != null ? String(analysis.material_name) : null,

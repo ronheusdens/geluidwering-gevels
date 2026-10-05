@@ -9,6 +9,7 @@ export type GaAnalysis = {
   material_name?: string | null;
   source_subsection_ids?: string[] | null;
   boolean_op?: string | null;
+  orientatie?: string | null;
 };
 
 export type GaComponentLike = {
@@ -133,6 +134,13 @@ export function isGaEligibleForVr(
   const mat = component.analysis?.material_id;
   if (mat == null || !String(mat).length) {
     return { eligible: true, ga_ready: false, reason: "geen materiaal" };
+  }
+  const ori = String(component.analysis?.orientatie || "")
+    .trim()
+    .toUpperCase();
+  const ORI = new Set(["N", "NO", "O", "ZO", "Z", "ZW", "W", "NW"]);
+  if (!ori || !ORI.has(ori)) {
+    return { eligible: true, ga_ready: false, reason: "geen oriëntatie" };
   }
   return { eligible: true, ga_ready: true };
 }

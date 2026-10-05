@@ -347,7 +347,7 @@ export function pixelsToSectionNorm(points: Pt[], canvasW: number, canvasH: numb
   );
 }
 
-export type OpeningKind = "dark_fill" | "paper_pocket";
+export type OpeningKind = "dark_fill" | "paper_pocket" | "line_rect";
 
 export type OpeningShape = "circle" | "rect";
 
@@ -359,14 +359,30 @@ export type DiscoveredOpening = DiscoveredRoom & {
   suggestedLabel: string;
 };
 
+export type DiscoverInteriorMeta = {
+  inputW: number;
+  inputH: number;
+  workW: number;
+  workH: number;
+  lineWorkW: number;
+  lineWorkH: number;
+  kindCounts: Record<OpeningKind, number>;
+};
+
 export type DiscoverInteriorOptions = {
   /** 0 = kleinste openingen; 1 = minimaal zo groot als buitencontour (≈ niets). */
   minAreaFraction?: number;
+  /** Max lange zijde werkbitmap voor blobs (client default 640; server typisch 2048). */
+  maxWorkDim?: number;
+  /** Max lange zijde voor H/V-lijn-assen (default = maxWorkDim). */
+  maxLineWorkDim?: number;
+  /** Wordt ingevuld wanneer meegegeven — diagnostiek server/client. */
+  meta?: DiscoverInteriorMeta;
 };
 
-const CIRCLE_CIRC_MIN = 0.68;
+const LINE_REF_DIM = 640;
+
 const RECT_FILL_MIN = 0.72;
-const CIRCLE_FILL_MIN = 0.62;
 
 function circularityOf(ring: Pt[]): number {
   const a = shoelaceArea(ring);
@@ -399,41 +415,19 @@ function isContourAxisAligned(ring: Pt[], angleTolDeg = 14): boolean {
   return total >= 3 && aligned / total >= 0.72;
 }
 
+/** Facade openings are H/V rectangles; do not classify blobs as circles. */
 function classifyBlobShape(blob: Blob, ring: Pt[]): OpeningShape | null {
-  const circ = circularityOf(ring);
   const bw = blob.maxX - blob.minX + 1;
   const bh = blob.maxY - blob.minY + 1;
   const bboxArea = bw * bh;
   const fill = blob.pixels.length / Math.max(1, bboxArea);
   const aspect = Math.max(bw, bh) / Math.max(1, Math.min(bw, bh));
 
-  if (circ >= CIRCLE_CIRC_MIN && fill >= CIRCLE_FILL_MIN && aspect <= 1.4) {
-    return "circle";
-  }
-
-  if (circ < CIRCLE_CIRC_MIN && fill >= RECT_FILL_MIN) {
-    if (fill >= 0.86 || isContourAxisAligned(ring)) return "rect";
-  }
-
+  if (aspect > 12) return null;
+  if (fill < 0.32) return null;
+  if (fill >= RECT_FILL_MIN && (fill >= 0.86 || isContourAxisAligned(ring))) return "rect";
+  if (fill >= 0.55 && aspect <= 8) return "rect";
   return null;
-}
-
-function circleRingPx(cx: number, cy: number, r: number, segments = 24): Pt[] {
-  const pts: Pt[] = [];
-  for (let i = 0; i < segments; i++) {
-    const t = (i / segments) * Math.PI * 2;
-    pts.push({ x: cx + r * Math.cos(t), y: cy + r * Math.sin(t) });
-  }
-  return closePx(pts);
-}
-
-function circleRingFromBlob(blob: Blob, w0: number, h0: number, sw: number, sh: number): Pt[] {
-  const cx = ((blob.minX + blob.maxX + 1) / 2 / sw) * w0;
-  const cy = ((blob.minY + blob.maxY + 1) / 2 / sh) * h0;
-  const bw = ((blob.maxX - blob.minX + 1) / sw) * w0;
-  const bh = ((blob.maxY - blob.minY + 1) / sh) * h0;
-  const r = Math.min(bw, bh) * 0.48;
-  return circleRingPx(cx, cy, Math.max(2, r));
 }
 
 function rasterizeOuterMask(
@@ -572,6 +566,304 @@ function openingsTooSimilar(a: Pt[], b: Pt[]): boolean {
   return ratio > 0.55;
 }
 
+type AxisSeg = { a: number; b: number; c: number };
+
+function edgeInk(ink: Uint8Array, w: number, h: number): Uint8Array {
+  const out = new Uint8Array(ink.length);
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      if (!ink[i]) continue;
+      if (!ink[i - 1] || !ink[i + 1] || !ink[i - w] || !ink[i + w]) out[i] = 1;
+    }
+  }
+  return out;
+}
+
+/** Drop diagonal strokes: keep pixels only on long horizontal or vertical ink runs. */
+function keepAxisAlignedInk(ink: Uint8Array, w: number, h: number, minLen: number): Uint8Array {
+  const out = new Uint8Array(ink.length);
+  for (let y = 0; y < h; y++) {
+    let x = 0;
+    while (x < w) {
+      if (!ink[y * w + x]) {
+        x++;
+        continue;
+      }
+      const start = x;
+      while (x < w && ink[y * w + x]) x++;
+      if (x - start >= minLen) {
+        for (let xx = start; xx < x; xx++) out[y * w + xx] = 1;
+      }
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    let y = 0;
+    while (y < h) {
+      if (!ink[y * w + x]) {
+        y++;
+        continue;
+      }
+      const start = y;
+      while (y < h && ink[y * w + x]) y++;
+      if (y - start >= minLen) {
+        for (let yy = start; yy < y; yy++) out[yy * w + x] = 1;
+      }
+    }
+  }
+  return out;
+}
+
+function openingKindScore(kind: OpeningKind): number {
+  return kind === "line_rect" ? 3 : kind === "paper_pocket" ? 2 : 1;
+}
+
+function extractAxisSegs(mask: Uint8Array, w: number, h: number, minLen: number): { h: AxisSeg[]; v: AxisSeg[] } {
+  const hSegs: AxisSeg[] = [];
+  const vSegs: AxisSeg[] = [];
+  for (let y = 0; y < h; y++) {
+    let x = 0;
+    while (x < w) {
+      if (!mask[y * w + x]) {
+        x++;
+        continue;
+      }
+      const start = x;
+      while (x < w && mask[y * w + x]) x++;
+      if (x - start >= minLen) hSegs.push({ a: start, b: x - 1, c: y });
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    let y = 0;
+    while (y < h) {
+      if (!mask[y * w + x]) {
+        y++;
+        continue;
+      }
+      const start = y;
+      while (y < h && mask[y * w + x]) y++;
+      if (y - start >= minLen) vSegs.push({ a: start, b: y - 1, c: x });
+    }
+  }
+  return { h: hSegs, v: vSegs };
+}
+
+type SegCluster = { pos: number; segs: AxisSeg[] };
+
+function clusterSegs(segs: AxisSeg[], bin: number): SegCluster[] {
+  const sorted = segs.slice().sort((a, b) => a.c - b.c || a.a - b.a);
+  const clusters: SegCluster[] = [];
+  for (const s of sorted) {
+    const last = clusters[clusters.length - 1];
+    if (last && Math.abs(s.c - last.pos) <= bin) {
+      last.segs.push(s);
+      last.pos = (last.pos * (last.segs.length - 1) + s.c) / last.segs.length;
+    } else {
+      clusters.push({ pos: s.c, segs: [s] });
+    }
+  }
+  return clusters;
+}
+
+function intervalCover(segs: AxisSeg[], from: number, to: number): number {
+  const span = to - from;
+  if (span <= 1) return 0;
+  const iv: Array<[number, number]> = [];
+  for (const s of segs) {
+    const a = Math.max(s.a, from);
+    const b = Math.min(s.b, to);
+    if (b > a) iv.push([a, b]);
+  }
+  if (!iv.length) return 0;
+  iv.sort((p, q) => p[0] - q[0]);
+  let covered = 0;
+  let cs = iv[0][0];
+  let ce = iv[0][1];
+  for (let i = 1; i < iv.length; i++) {
+    if (iv[i][0] <= ce + 1) ce = Math.max(ce, iv[i][1]);
+    else {
+      covered += ce - cs;
+      cs = iv[i][0];
+      ce = iv[i][1];
+    }
+  }
+  covered += ce - cs;
+  return covered / span;
+}
+
+/** True when the side is a local segment, not a long façade line that merely overlaps. */
+function sideIsLocal(segs: AxisSeg[], from: number, to: number, minCover: number): boolean {
+  const sideLen = to - from;
+  if (sideLen < 1) return false;
+  let maxLen = 0;
+  let maxOverlap = 0;
+  for (const s of segs) {
+    const ov = Math.min(s.b, to) - Math.max(s.a, from);
+    if (ov <= 0) continue;
+    if (ov > maxOverlap) maxOverlap = ov;
+    if (ov > sideLen * 0.5) maxLen = Math.max(maxLen, s.b - s.a);
+  }
+  if (maxOverlap / sideLen < minCover) return false;
+  if (maxLen > sideLen * 1.4) return false;
+  return true;
+}
+
+function rectInkFraction(
+  ink: Uint8Array,
+  w: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+): number {
+  const ix0 = Math.ceil(x0) + 2;
+  const iy0 = Math.ceil(y0) + 2;
+  const ix1 = Math.floor(x1) - 2;
+  const iy1 = Math.floor(y1) - 2;
+  if (ix1 <= ix0 || iy1 <= iy0) return 1;
+  let n = 0;
+  let inkN = 0;
+  for (let y = iy0; y <= iy1; y++) {
+    for (let x = ix0; x <= ix1; x++) {
+      n++;
+      if (ink[y * w + x]) inkN++;
+    }
+  }
+  return n ? inkN / n : 1;
+}
+
+type LineRect = { x0: number; y0: number; x1: number; y1: number; area: number };
+
+type LineDetectParams = {
+  minLen: number;
+  minSide: number;
+  clusterBin: number;
+  minCover: number;
+  maxAspect: number;
+  maxInteriorInk: number;
+  nestTol: number;
+};
+
+/** Scale H/V line thresholds so physical size stays constant across work resolutions. */
+function lineDetectParams(sw: number, sh: number): LineDetectParams {
+  const s = Math.min(sw, sh) / LINE_REF_DIM;
+  return {
+    minLen: Math.max(4, Math.round(8 * s)),
+    minSide: Math.max(6, Math.round(10 * s)),
+    clusterBin: Math.max(1, Math.round(2 * s)),
+    minCover: 0.68,
+    maxAspect: 8,
+    maxInteriorInk: 0.28,
+    nestTol: Math.max(2, Math.round(2 * s)),
+  };
+}
+
+function findClosedLineRects(
+  ink: Uint8Array,
+  search: Uint8Array,
+  sw: number,
+  sh: number,
+  p: LineDetectParams = lineDetectParams(sw, sh),
+): LineRect[] {
+  const edges = edgeInk(andMask(ink, search), sw, sh);
+  const { h, v } = extractAxisSegs(edges, sw, sh, p.minLen);
+  if (h.length < 2 || v.length < 2) return [];
+
+  let bin = p.clusterBin;
+  let hCl = clusterSegs(h, bin);
+  let vCl = clusterSegs(v, bin);
+  while ((hCl.length > 55 || vCl.length > 55) && bin < p.clusterBin + 3) {
+    bin += 1;
+    hCl = clusterSegs(h, bin);
+    vCl = clusterSegs(v, bin);
+  }
+  if (hCl.length < 2 || vCl.length < 2) return [];
+
+  const found: LineRect[] = [];
+
+  for (let i = 0; i < vCl.length; i++) {
+    for (let j = i + 1; j < vCl.length; j++) {
+      const x0 = Math.min(vCl[i].pos, vCl[j].pos);
+      const x1 = Math.max(vCl[i].pos, vCl[j].pos);
+      const width = x1 - x0;
+      if (width < p.minSide) continue;
+      const left = vCl[i].pos <= vCl[j].pos ? vCl[i] : vCl[j];
+      const right = vCl[i].pos <= vCl[j].pos ? vCl[j] : vCl[i];
+      for (let pIdx = 0; pIdx < hCl.length; pIdx++) {
+        for (let q = pIdx + 1; q < hCl.length; q++) {
+          const y0 = Math.min(hCl[pIdx].pos, hCl[q].pos);
+          const y1 = Math.max(hCl[pIdx].pos, hCl[q].pos);
+          const height = y1 - y0;
+          if (height < p.minSide) continue;
+          const aspect = Math.max(width, height) / Math.min(width, height);
+          if (aspect > p.maxAspect) continue;
+          const top = hCl[pIdx].pos <= hCl[q].pos ? hCl[pIdx] : hCl[q];
+          const bot = hCl[pIdx].pos <= hCl[q].pos ? hCl[q] : hCl[pIdx];
+          if (intervalCover(top.segs, x0, x1) < p.minCover) continue;
+          if (intervalCover(bot.segs, x0, x1) < p.minCover) continue;
+          if (intervalCover(left.segs, y0, y1) < p.minCover) continue;
+          if (intervalCover(right.segs, y0, y1) < p.minCover) continue;
+          if (!sideIsLocal(top.segs, x0, x1, p.minCover)) continue;
+          if (!sideIsLocal(bot.segs, x0, x1, p.minCover)) continue;
+          if (!sideIsLocal(left.segs, y0, y1, p.minCover)) continue;
+          if (!sideIsLocal(right.segs, y0, y1, p.minCover)) continue;
+          if (rectInkFraction(ink, sw, x0, y0, x1, y1) > p.maxInteriorInk) continue;
+          found.push({ x0, y0, x1, y1, area: width * height });
+        }
+      }
+    }
+  }
+
+  found.sort((a, b) => b.area - a.area);
+  const kept: LineRect[] = [];
+  for (const r of found) {
+    const nested = kept.some(
+      (k) =>
+        r.x0 >= k.x0 - p.nestTol &&
+        r.y0 >= k.y0 - p.nestTol &&
+        r.x1 <= k.x1 + p.nestTol &&
+        r.y1 <= k.y1 + p.nestTol,
+    );
+    if (nested) continue;
+    const dup = kept.some((k) => {
+      const ox0 = Math.max(k.x0, r.x0);
+      const oy0 = Math.max(k.y0, r.y0);
+      const ox1 = Math.min(k.x1, r.x1);
+      const oy1 = Math.min(k.y1, r.y1);
+      if (ox1 <= ox0 || oy1 <= oy0) return false;
+      const inter = (ox1 - ox0) * (oy1 - oy0);
+      return inter / Math.min(k.area, r.area) > 0.7;
+    });
+    if (dup) continue;
+    kept.push(r);
+  }
+  return kept;
+}
+
+function lineRectToOpening(
+  r: LineRect,
+  sw: number,
+  sh: number,
+  w0: number,
+  h0: number,
+): DiscoveredOpening {
+  const ring = closePx([
+    { x: (r.x0 / sw) * w0, y: (r.y0 / sh) * h0 },
+    { x: (r.x1 / sw) * w0, y: (r.y0 / sh) * h0 },
+    { x: (r.x1 / sw) * w0, y: (r.y1 / sh) * h0 },
+    { x: (r.x0 / sw) * w0, y: (r.y1 / sh) * h0 },
+  ]);
+  const area = shoelaceArea(ring);
+  return {
+    points: ring,
+    areaPx: area,
+    kind: "line_rect",
+    shape: "rect",
+    circularity: circularityOf(ring),
+    suggestedLabel: suggestOpeningLabel("rect", 0),
+  };
+}
+
 function blobToOpening(
   blob: Blob,
   mask: Uint8Array,
@@ -598,10 +890,7 @@ function blobToOpening(
   const shape = classifyBlobShape(blob, probe);
   if (!shape) return null;
 
-  const ring =
-    shape === "circle"
-      ? circleRingFromBlob(blob, w0, h0, sw, sh)
-      : blobToRingPixels(blob, w0, h0, sw, sh);
+  const ring = blobToRingPixels(blob, w0, h0, sw, sh);
   const area = shoelaceArea(ring);
   if (area < 8) return null;
   const circ = circularityOf(ring);
@@ -619,8 +908,9 @@ function blobToOpening(
  * Discover openings (kozijnen, glasvlakken, …) **inside** an outer façade contour.
  * `outerNorm` is section-local 0–1. Returns rings in **pixel** coords of `img`.
  *
- * Bitmap analysis: adaptive ink threshold + dark-fill blobs and enclosed paper pockets
- * restricted to an eroded outer mask (so the outer wall itself is ignored).
+ * Bitmap analysis: adaptive ink threshold + dark-fill blobs, enclosed paper pockets,
+ * and closed H/V line-segment rectangles (outline kozijnen without dark fill).
+ * Restricted to an eroded outer mask (so the outer wall itself is ignored).
  */
 export function discoverInteriorOpenings(
   img: ImageData,
@@ -640,19 +930,30 @@ export function discoverInteriorOpenings(
   const outerAreaPx = shoelaceArea(outerPx);
   if (outerAreaPx < 80) return [];
 
-  const scale = Math.min(1, 640 / Math.max(w0, h0));
+  const maxWorkDim = Math.max(64, Math.min(4096, opts?.maxWorkDim ?? 640));
+  const maxLineWorkDim = Math.max(64, Math.min(4096, opts?.maxLineWorkDim ?? maxWorkDim));
+  const scale = Math.min(1, maxWorkDim / Math.max(w0, h0));
   const sw = Math.max(40, Math.floor(w0 * scale));
   const sh = Math.max(40, Math.floor(h0 * scale));
+  const lineScale = Math.min(1, maxLineWorkDim / Math.max(w0, h0));
+  const lsw = Math.max(40, Math.floor(w0 * lineScale));
+  const lsh = Math.max(40, Math.floor(h0 * lineScale));
 
   const outerMask = rasterizeOuterMask(outerPx, sw, sh, w0, h0);
   // Mild peel — keep cavities; 2px is enough to ignore a thin CAD stroke.
   const search = erodeMask(outerMask, sw, sh, 2);
+  const linePeel = Math.max(2, Math.round(2 * (Math.min(lsw, lsh) / LINE_REF_DIM)));
+  const lineOuterMask = rasterizeOuterMask(outerPx, lsw, lsh, w0, h0);
+  const lineSearch = erodeMask(lineOuterMask, lsw, lsh, linePeel);
   let searchCount = 0;
   for (let i = 0; i < search.length; i++) if (search[i]) searchCount++;
   if (searchCount < 40) return [];
 
   // Prefer raw ink for dark fills (no morphology that fattens the outer wall into the field).
   const inkRaw = toInkMap(img, sw, sh);
+  const inkLineFull = lsw === sw && lsh === sh ? inkRaw : toInkMap(img, lsw, lsh);
+  const lineParams = lineDetectParams(lsw, lsh);
+  const inkLine = keepAxisAlignedInk(inkLineFull, lsw, lsh, lineParams.minLen);
   let inkMorph = dilate(inkRaw, sw, sh);
   inkMorph = erode(inkMorph, sw, sh);
 
@@ -691,21 +992,67 @@ export function discoverInteriorOpenings(
 
   pushBlobs(dark, "dark_fill");
   pushBlobs(paperCavities, "paper_pocket");
+  for (const r of findClosedLineRects(inkLine, lineSearch, lsw, lsh)) {
+    const opening = lineRectToOpening(r, lsw, lsh, w0, h0);
+    if (opening.areaPx < minAreaImg || opening.areaPx > Math.min(maxAreaImg, outerAreaPx * 0.5)) continue;
+    const c = ringCentroid(opening.points);
+    if (!pointInRingLocal(c, outerPx)) continue;
+    raw.push(opening);
+  }
 
-  raw.sort((a, b) => b.areaPx - a.areaPx);
+  raw.sort((a, b) => {
+    const kd = openingKindScore(b.kind) - openingKindScore(a.kind);
+    if (kd) return kd;
+    return b.areaPx - a.areaPx;
+  });
 
   const kept: DiscoveredOpening[] = [];
   for (const o of raw) {
-    if (kept.some((k) => openingsTooSimilar(k.points, o.points))) continue;
+    const dupIdx = kept.findIndex((k) => openingsTooSimilar(k.points, o.points));
+    if (dupIdx >= 0) {
+      if (openingKindScore(o.kind) > openingKindScore(kept[dupIdx].kind)) {
+        kept[dupIdx] = o;
+      }
+      continue;
+    }
+    const c = ringCentroid(o.points);
+    if (
+      kept.some(
+        (k) =>
+          k.areaPx > o.areaPx &&
+          o.areaPx < k.areaPx * 0.85 &&
+          pointInRingLocal(c, k.points),
+      )
+    ) {
+      continue;
+    }
     kept.push(o);
   }
 
   kept.sort((a, b) => b.areaPx - a.areaPx);
 
-  return kept.slice(0, 40).map((o, i) => ({
+  const result = kept.slice(0, 40).map((o, i) => ({
     ...o,
     suggestedLabel: suggestOpeningLabel(o.shape, i + 1),
   }));
+
+  if (opts?.meta) {
+    const kindCounts: Record<OpeningKind, number> = {
+      dark_fill: 0,
+      paper_pocket: 0,
+      line_rect: 0,
+    };
+    for (const o of result) kindCounts[o.kind]++;
+    opts.meta.inputW = w0;
+    opts.meta.inputH = h0;
+    opts.meta.workW = sw;
+    opts.meta.workH = sh;
+    opts.meta.lineWorkW = lsw;
+    opts.meta.lineWorkH = lsh;
+    opts.meta.kindCounts = kindCounts;
+  }
+
+  return result;
 }
 
 /** Debug counts for unit tests / tuning. */

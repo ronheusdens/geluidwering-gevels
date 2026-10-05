@@ -1,4 +1,4 @@
-import { loadAuth, storeAuth as persistAuth, syncSessionCookie, apiAuthHeaders } from "./auth-store";
+import { apiAuthHeaders } from "./auth-store";
 import { resolveBppWsUrl } from "./ws-url";
 import { initPasswordToggles } from "./password-toggle";
 import { initEngineerLayoutSplit } from "./layout-split";
@@ -11,33 +11,15 @@ import {
   scaledPathLength,
   shoelaceArea,
 } from "./geom";
-
-type Envelope = {
-  v: number;
-  type: string;
-  request_id: string;
-  session_id?: string;
-  payload?: Record<string, unknown>;
-};
-
-type AuthInfo = {
-  token: string;
-  username: string;
-  display_name: string;
-};
-
-type ProjectStatus =
-  | "INITIAL_REQUEST"
-  | "PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED"
-  | "PROJECT_UNDERWAY"
-  | "PROJECT_NEAR_FINAL"
-  | "PROJECT_FINISHED";
+import { BppSession, type AuthInfo } from "./shared/bpp-session";
+import { statusLabel, type ProjectStatus } from "./shared/dom-helpers";
 
 type QueueProject = {
   building_id: string;
   label: string;
   client_ref?: string;
   customer_name: string;
+  username?: string;
   project_status: ProjectStatus;
   drawing_count: string;
   reviewed_at: string;
@@ -49,6 +31,8 @@ type ProjectDocument = {
   file_ext: string;
   byte_size: string;
   created_at: string;
+  /** Extra CW degrees on top of PDF page /Rotate (0/90/180/270). */
+  view_rotate?: number;
 };
 
 type DrawingRegion = {
@@ -65,6 +49,7 @@ type DrawingRegion = {
   metres_per_norm_unit?: number | null;
   scale_aspect_yx?: number | null;
   scale_source?: string | null;
+  sort_order?: number;
 };
 
 type ProjectDetail = {
@@ -123,6 +108,10 @@ const refreshBtn = document.getElementById("engineer-refresh-btn") as HTMLButton
 const gaLinkEl = document.getElementById("engineer-ga-link") as HTMLAnchorElement | null;
 const fileMenuRoot = document.getElementById("engineer-file-menu") as HTMLElement | null;
 const queueListEl = document.getElementById("engineer-queue-list") as HTMLElement;
+const queueSelectEl = document.getElementById("engineer-queue-select") as HTMLSelectElement | null;
+const queueHintEl = document.getElementById("engineer-queue-hint") as HTMLElement | null;
+const queueOpenBtn = document.getElementById("engineer-queue-open-btn") as HTMLButtonElement | null;
+const reviewFeedbackEl = document.getElementById("engineer-review-feedback") as HTMLElement | null;
 const reviewPanelEl = document.getElementById("engineer-review-panel") as HTMLElement;
 const projectTitleEl = document.getElementById("engineer-project-title") as HTMLElement;
 const projectMetaEl = document.getElementById("engineer-project-meta") as HTMLElement;
@@ -172,6 +161,9 @@ const zoomInBtn = document.getElementById("engineer-zoom-in") as HTMLButtonEleme
 const zoomBtn = document.getElementById("engineer-zoom-btn") as HTMLButtonElement;
 const zoomFitBtn = document.getElementById("engineer-zoom-fit") as HTMLButtonElement;
 const zoomLabelEl = document.getElementById("engineer-zoom-label") as HTMLElement;
+const rotateCcwBtn = document.getElementById("engineer-rotate-ccw") as HTMLButtonElement | null;
+const rotateCwBtn = document.getElementById("engineer-rotate-cw") as HTMLButtonElement | null;
+const rotateLabelEl = document.getElementById("engineer-rotate-label") as HTMLElement | null;
 const discoveryPanelEl = document.getElementById("discovery-review-panel") as HTMLElement;
 const discoveryProgressEl = document.getElementById("discovery-progress") as HTMLElement;
 const discoveryHintEl = document.getElementById("discovery-hint") as HTMLElement;
@@ -189,15 +181,11 @@ const discGrowHBtn = document.getElementById("disc-grow-h") as HTMLButtonElement
 const discShrinkVBtn = document.getElementById("disc-shrink-v") as HTMLButtonElement;
 const discGrowVBtn = document.getElementById("disc-grow-v") as HTMLButtonElement;
 const reviewForm = document.getElementById("engineer-review-form") as HTMLFormElement;
+const reviewDoneEl = document.getElementById("engineer-review-done") as HTMLElement | null;
 const reviewLegibleEl = document.getElementById("review-legible") as HTMLInputElement;
 const reviewSufficientEl = document.getElementById("review-sufficient") as HTMLInputElement;
 const reviewNotesEl = document.getElementById("review-notes") as HTMLTextAreaElement;
 
-let ws: WebSocket | null = null;
-let sessionId: string | null = null;
-let auth: AuthInfo | null = null;
-let reqCounter = 0;
-const pending = new Map<string, { resolve: (env: Envelope) => void; reject: (err: Error) => void; want: string }>();
 
 let activeProject: ProjectDetail | null = null;
 let projectMenu: ProjectMenuApi | null = null;
@@ -209,6 +197,8 @@ let canvasWidth = 0;
 let canvasHeight = 0;
 /** PDF.js render scale (1.0 ≈ 72dpi CSS pixels). */
 let pdfZoom = 2.0;
+/** Extra CW rotation on top of PDF page /Rotate (0/90/180/270). */
+let pdfViewRotate = 0;
 const PDF_ZOOM_MIN = 0.75;
 const PDF_ZOOM_MAX = 5;
 const PDF_ZOOM_STEP = 0.35;
@@ -259,23 +249,7 @@ function setConnLed(connected: boolean): void {
   connLedEl.classList.toggle("disconnected", !connected);
 }
 
-function nextRequestId(prefix: string): string {
-  reqCounter += 1;
-  return `${prefix}_${reqCounter}_${Date.now()}`;
-}
-
-function storeAuth(info: AuthInfo | null): void {
-  persistAuth(AUTH_KEY, info);
-  void syncSessionCookie(info?.token ?? null);
-}
-
-function loadStoredAuth(): AuthInfo | null {
-  return loadAuth(AUTH_KEY);
-}
-
 function showLogin(): void {
-  auth = null;
-  storeAuth(null);
   loginPanelEl.classList.remove("hidden");
   panelEl.classList.add("hidden");
   reviewPanelEl.classList.add("hidden");
@@ -284,8 +258,6 @@ function showLogin(): void {
 }
 
 function showPanel(info: AuthInfo): void {
-  auth = info;
-  storeAuth(info);
   loginPanelEl.classList.add("hidden");
   panelEl.classList.remove("hidden");
   userLabelEl.textContent = `Ingelogd als ${info.display_name || info.username}`;
@@ -294,105 +266,70 @@ function showPanel(info: AuthInfo): void {
   projectMenu?.refreshTitle();
 }
 
-function send(type: string, payload: Record<string, unknown>, wantType: string): Promise<Envelope> {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    return Promise.reject(new Error("WebSocket niet open"));
-  }
-  const request_id = nextRequestId(type.replace(".", "_"));
-  const env: Envelope = { v: 1, type, request_id, payload };
-  if (sessionId && type !== "session.open") env.session_id = sessionId;
-  return new Promise((resolve, reject) => {
-    pending.set(request_id, { resolve, reject, want: wantType });
-    ws!.send(JSON.stringify(env));
-  });
+const session = new BppSession({
+  wsUrl: resolveBppWsUrl(),
+  authKey: AUTH_KEY,
+  clientName: "app-gevelwering-engineer",
+  callbacks: {
+    onStatus: setStatus,
+    onConnLed: setConnLed,
+    onLogin: (info) => showPanel(info),
+    onLogout: () => showLogin(),
+    onReady: async () => {
+      if (session.auth) await loadQueue();
+    },
+  },
+});
+
+function invokeString(target: string, args: unknown[]): Promise<string> {
+  return session.invokeString(target, args);
 }
 
-function onMessage(raw: string): void {
-  let env: Envelope;
-  try {
-    env = JSON.parse(raw) as Envelope;
-  } catch {
+function auth(): AuthInfo | null {
+  return session.auth;
+}
+
+function setReviewFeedback(text: string, kind: "ok" | "err" | "busy" | "" = ""): void {
+  if (!reviewFeedbackEl) return;
+  reviewFeedbackEl.classList.remove("hidden", "ok", "err", "busy");
+  if (!text) {
+    reviewFeedbackEl.classList.add("hidden");
+    reviewFeedbackEl.textContent = "";
     return;
   }
-  if (env.type === "session.opened") {
-    const sid =
-      (typeof env.session_id === "string" && env.session_id) ||
-      (typeof env.payload?.session_id === "string" ? env.payload.session_id : null);
-    if (sid) sessionId = sid;
-  }
-  if (env.type === "error") {
-    const waiter = pending.get(env.request_id);
-    if (waiter) {
-      pending.delete(env.request_id);
-      waiter.reject(new Error(JSON.stringify(env.payload ?? env)));
-    }
-    return;
-  }
-  const waiter = pending.get(env.request_id);
-  if (!waiter) return;
-  if (env.type === waiter.want || env.type.endsWith(".completed") || env.type === "exec.completed") {
-    if (env.type === "invoke.accepted" || env.type === "exec.accepted") return;
-    pending.delete(env.request_id);
-    waiter.resolve(env);
-  }
+  if (kind) reviewFeedbackEl.classList.add(kind);
+  reviewFeedbackEl.textContent = text;
 }
 
-async function invokeString(target: string, args: unknown[]): Promise<string> {
-  const inv = await send("invoke.request", { target_kind: "procedure", target, args }, "invoke.completed");
-  const ret = inv.payload?.return;
-  if (typeof ret !== "string") throw new Error(`Onverwacht resultaat van ${target}: ${JSON.stringify(inv.payload)}`);
-  return ret;
-}
-
-function statusLabel(status: ProjectStatus | string): string {
-  switch (status) {
-    case "INITIAL_REQUEST":
-      return "Project gestart";
-    case "PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED":
-      return "Gegevens aangeleverd — nog niet verwerkt";
-    case "PROJECT_UNDERWAY":
-      return "Project in uitvoering";
-    case "PROJECT_NEAR_FINAL":
-      return "Project bijna afgerond";
-    case "PROJECT_FINISHED":
-      return "Project afgerond";
-    default:
-      return status;
-  }
-}
-
-async function loadSharedApi(): Promise<void> {
-  await send(
-    "exec.request",
-    { code: 'INCLUDE "fixtures/app-gevelwering/shared_building_api.basicpp"\n' },
-    "exec.completed",
+function reviewIsAccepted(status: ProjectStatus | string | undefined): boolean {
+  return (
+    status === "PROJECT_UNDERWAY" ||
+    status === "PROJECT_NEAR_FINAL" ||
+    status === "PROJECT_FINISHED"
   );
-  const bootRet = await invokeString("API_Bootstrap", []);
-  if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap mislukt: ${bootRet}`);
 }
 
-async function bootstrapAndLogin(username: string, password: string): Promise<void> {
-  await loadSharedApi();
-  const ret = await invokeString("API_Login", [username, password]);
-  if (ret.startsWith("ERROR")) throw new Error(ret);
-  const parsed = JSON.parse(ret) as {
-    ok?: boolean;
-    token?: string;
-    username?: string;
-    display_name?: string;
-  };
-  if (!parsed.ok || !parsed.token) throw new Error("Inloggen mislukt");
-  showPanel({
-    token: parsed.token,
-    username: parsed.username || username,
-    display_name: parsed.display_name || username,
-  });
+/** Hide the review form once drawings are accepted — keep a one-line status. */
+function syncReviewFormVisibility(): void {
+  const accepted = reviewIsAccepted(activeProject?.project_status);
+  reviewForm.classList.toggle("hidden", accepted);
+  if (!reviewDoneEl) return;
+  if (accepted) {
+    const notes = (activeProject?.review?.notes || "").trim();
+    reviewDoneEl.classList.remove("hidden");
+    reviewDoneEl.textContent = notes
+      ? `Tekeningen geaccepteerd · ${statusLabel(activeProject!.project_status)}. Notitie: ${notes}`
+      : `Tekeningen geaccepteerd · ${statusLabel(activeProject!.project_status)}. Reviewformulier is niet meer nodig.`;
+  } else {
+    reviewDoneEl.classList.add("hidden");
+    reviewDoneEl.textContent = "";
+  }
 }
 
-async function loadQueue(): Promise<void> {
-  if (!auth?.token) return;
-  setStatus("Projecten laden…", "busy");
-  const ret = await invokeString("API_EngineerListReviewQueue", [auth.token]);
+async function loadQueue(keepStatus?: { text: string; kind: "busy" | "ok" | "err" }): Promise<void> {
+  if (!auth()?.token) return;
+  if (!keepStatus) setStatus("Projecten laden…", "busy");
+  const ret = await invokeString("API_EngineerListReviewQueue", [auth()!.token]);
   if (ret.startsWith("ERROR")) {
     setStatus(ret, "err");
     if (ret.includes("login") || ret.includes("engineer")) showLogin();
@@ -400,37 +337,51 @@ async function loadQueue(): Promise<void> {
   }
   const parsed = JSON.parse(ret) as { projects: QueueProject[] };
   const projects = parsed.projects ?? [];
-  queueListEl.innerHTML = "";
+  const prev = queueSelectEl?.value || activeProject?.building_id || "";
+  if (queueSelectEl) {
+    queueSelectEl.innerHTML = "";
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = "— kies een project —";
+    queueSelectEl.appendChild(blank);
+  }
+  if (queueListEl) queueListEl.innerHTML = "";
   if (projects.length === 0) {
-    queueListEl.innerHTML = `<p class="hint">Geen actieve projecten (status: gegevens aangeleverd / in uitvoering / bijna afgerond). Zet de status in admin of laat de opdrachtgever tekeningen indienen. Of gebruik Bestand → Openen.</p>`;
-    setStatus("Geen actieve projecten", "ok");
+    if (queueHintEl) {
+      queueHintEl.textContent =
+        "Geen actieve projecten (status: gegevens aangeleverd / in uitvoering / bijna afgerond). Zet de status in admin of laat de opdrachtgever tekeningen indienen. Of gebruik Bestand → Openen.";
+    }
+    setStatus(keepStatus?.text ?? "Geen actieve projecten", keepStatus?.kind ?? "ok");
     return;
   }
   for (const p of projects) {
-    const card = document.createElement("article");
-    card.className = "admin-project-card panel";
     const title = p.label || p.building_id.slice(0, 8);
     const docs = Number(p.drawing_count) || 0;
-    card.innerHTML = `
-      <h3>${title}</h3>
-      <p class="hint">${p.customer_name} · ${statusLabel(p.project_status)} · kenmerk ${p.client_ref || "—"} · ${docs} tekening(en)</p>
-    `;
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = "Openen";
-    btn.addEventListener("click", () => {
-      void openProject(p.building_id);
-    });
-    card.appendChild(btn);
-    queueListEl.appendChild(card);
+    const who = (p.username || "").trim()
+      ? p.username === p.customer_name
+        ? p.username
+        : `${p.username} — ${p.customer_name}`
+      : p.customer_name;
+    if (queueSelectEl) {
+      const opt = document.createElement("option");
+      opt.value = p.building_id;
+      opt.textContent = `${title} · ${who} · ${statusLabel(p.project_status)} · ${docs} tekening(en)`;
+      queueSelectEl.appendChild(opt);
+    }
   }
-  setStatus(`${projects.length} project(en)`, "ok");
+  if (queueSelectEl && prev && [...queueSelectEl.options].some((o) => o.value === prev)) {
+    queueSelectEl.value = prev;
+  }
+  if (queueHintEl) {
+    queueHintEl.textContent = `${projects.length} project(en) — kies er één en klik Openen (of dubbelklik).`;
+  }
+  setStatus(keepStatus?.text ?? `${projects.length} project(en)`, keepStatus?.kind ?? "ok");
 }
 
 async function openProject(buildingId: string): Promise<void> {
-  if (!auth?.token) return;
+  if (!auth()?.token) return;
   setStatus("Project laden…", "busy");
-  const ret = await invokeString("API_EngineerGetProject", [auth.token, buildingId]);
+  const ret = await invokeString("API_EngineerGetProject", [auth()!.token, buildingId]);
   if (ret.startsWith("ERROR")) {
     setStatus(ret, "err");
     return;
@@ -448,6 +399,7 @@ async function openProject(buildingId: string): Promise<void> {
   reviewLegibleEl.checked = Boolean(activeProject.review?.legible);
   reviewSufficientEl.checked = Boolean(activeProject.review?.sufficient);
   reviewNotesEl.value = activeProject.review?.notes || "";
+  syncReviewFormVisibility();
 
   docSelectEl.innerHTML = "";
   for (const doc of activeProject.documents) {
@@ -488,12 +440,16 @@ function normalizeRegion(raw: Partial<DrawingRegion> & { region_id?: string }): 
     metres_per_norm_unit: Number.isFinite(mpu) ? mpu : null,
     scale_aspect_yx: Number.isFinite(aspect) && aspect > 0 ? aspect : null,
     scale_source: raw.scale_source != null ? String(raw.scale_source) : null,
+    sort_order: Number.isFinite(Number(raw.sort_order)) ? Number(raw.sort_order) : 0,
   };
 }
 
 function regionsForActiveDoc(): DrawingRegion[] {
   if (!activeProject || !activeDocumentId) return [];
-  return activeProject.regions.filter((r) => r.document_id === activeDocumentId);
+  return activeProject.regions
+    .filter((r) => r.document_id === activeDocumentId)
+    .slice()
+    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.label.localeCompare(b.label, "nl"));
 }
 
 function filteredRegionsForActiveDoc(): DrawingRegion[] {
@@ -501,6 +457,72 @@ function filteredRegionsForActiveDoc(): DrawingRegion[] {
   const kind = currentRegionKindFilter();
   if (!kind) return all;
   return all.filter((r) => String(r.region_kind || "").toUpperCase() === kind.toUpperCase());
+}
+
+/** Merge a reordered filtered subset back into the full document region order. */
+function mergeFilteredRegionOrder(
+  fullOrdered: DrawingRegion[],
+  filteredOrderedIds: string[],
+): DrawingRegion[] {
+  const filteredSet = new Set(filteredOrderedIds);
+  const queue = filteredOrderedIds
+    .map((id) => fullOrdered.find((r) => r.id === id))
+    .filter((r): r is DrawingRegion => Boolean(r));
+  return fullOrdered.map((r) => (filteredSet.has(r.id) ? queue.shift()! : r));
+}
+
+let regionDragId: string | null = null;
+
+async function persistRegionOrder(ordered: DrawingRegion[]): Promise<void> {
+  if (!auth()?.token || !activeDocumentId || !activeProject) return;
+  const prev = activeProject.regions.map((r) => ({
+    id: r.id,
+    sort_order: r.sort_order ?? 0,
+  }));
+  ordered.forEach((r, i) => {
+    r.sort_order = i;
+  });
+  // Keep non-active-doc regions; replace active-doc ones with new order.
+  const others = activeProject.regions.filter((r) => r.document_id !== activeDocumentId);
+  activeProject.regions = [...others, ...ordered];
+  renderRegionList();
+  drawRegionsOverlay();
+  try {
+    const ret = await invokeString("API_ReorderDrawingRegions", [
+      auth()!.token,
+      activeDocumentId,
+      ordered.map((r) => r.id).join(","),
+    ]);
+    if (ret.startsWith("ERROR")) throw new Error(ret.replace(/^ERROR:\s*/, ""));
+    const parsed = JSON.parse(ret) as { ok?: boolean; error?: string };
+    if (parsed.ok === false) throw new Error(parsed.error || "Volgorde opslaan mislukt");
+    setStatus("Sectievolgorde opgeslagen", "ok");
+  } catch (err) {
+    for (const p of prev) {
+      const r = activeProject.regions.find((x) => x.id === p.id);
+      if (r) r.sort_order = p.sort_order;
+    }
+    renderRegionList();
+    drawRegionsOverlay();
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+  }
+}
+
+async function reorderRegionsByDrag(fromId: string, toId: string): Promise<void> {
+  if (!fromId || !toId || fromId === toId) return;
+  const full = regionsForActiveDoc();
+  const visible = filteredRegionsForActiveDoc();
+  const fromIdx = visible.findIndex((r) => r.id === fromId);
+  const toIdx = visible.findIndex((r) => r.id === toId);
+  if (fromIdx < 0 || toIdx < 0) return;
+  const nextVisible = visible.slice();
+  const [moved] = nextVisible.splice(fromIdx, 1);
+  nextVisible.splice(toIdx, 0, moved);
+  const merged = mergeFilteredRegionOrder(
+    full,
+    nextVisible.map((r) => r.id),
+  );
+  await persistRegionOrder(merged);
 }
 
 function selectedRegion(): DrawingRegion | null {
@@ -893,22 +915,30 @@ function drawMeasureOverlay(ctx: CanvasRenderingContext2D): void {
   }
 }
 
-async function saveSectionScale(sectionId: string, mpu: number, aspectYx: number): Promise<void> {
-  if (!auth?.token) throw new Error("Niet ingelogd");
+async function saveSectionScale(
+  sectionId: string,
+  mpu: number,
+  aspectYx: number,
+): Promise<{
+  subsections?: number;
+  ga_cleared?: number;
+  verblijfsruimten_vloer?: number;
+  vlakken?: number;
+}> {
+  if (!auth()?.token) throw new Error("Niet ingelogd");
   if (bppPhase1Enabled()) {
-    await bppSaveFloormapScale(invokeString, auth.token, {
+    return bppSaveFloormapScale(invokeString, auth()!.token, {
       section_id: sectionId,
       metres_per_norm_unit: mpu,
       scale_ratio: null,
       scale_source: "CALIBRATED",
       scale_aspect_yx: aspectYx,
     });
-    return;
   }
   const res = await fetch("/api/floormap/scale", {
     method: "POST",
     credentials: "include",
-    headers: apiAuthHeaders(auth.token, true),
+    headers: apiAuthHeaders(auth()!.token, true),
     body: JSON.stringify({
       section_id: sectionId,
       metres_per_norm_unit: mpu,
@@ -917,20 +947,28 @@ async function saveSectionScale(sectionId: string, mpu: number, aspectYx: number
       scale_aspect_yx: aspectYx,
     }),
   });
-  let body: { ok?: boolean; error?: string } = {};
+  let body: {
+    ok?: boolean;
+    error?: string;
+    subsections?: number;
+    ga_cleared?: number;
+    verblijfsruimten_vloer?: number;
+    vlakken?: number;
+  } = {};
   try {
-    body = (await res.json()) as { ok?: boolean; error?: string };
+    body = (await res.json()) as typeof body;
   } catch {
     /* non-JSON */
   }
   if (!res.ok || !body.ok) {
     throw new Error(body.error || `Schaal opslaan mislukt (HTTP ${res.status})`);
   }
+  return body;
 }
 
 async function finishScalePick(): Promise<void> {
   const sel = selectedRegion();
-  if (!auth?.token) {
+  if (!auth()?.token) {
     setStatus("Niet ingelogd — schaal kan niet worden opgeslagen", "err");
     return;
   }
@@ -971,16 +1009,32 @@ async function finishScalePick(): Promise<void> {
     drawRegionsOverlay();
     return;
   }
-  setStatus("Schaal opslaan…", "busy");
+  const hadScale = sel.metres_per_norm_unit != null && Number(sel.metres_per_norm_unit) > 0;
+  if (hadScale) {
+    const ok = window.confirm(
+      `Nieuwe schaal toepassen en alle maten op deze sectie herberekenen?\n\n` +
+        `Oppervlakten, lengtes en kierlengtes worden bijgewerkt; opgeslagen GA-resultaten worden gewist.`,
+    );
+    if (!ok) {
+      setStatus("Schaalwijziging geannuleerd", "err");
+      return;
+    }
+  }
+  setStatus("Schaal opslaan en maten herberekenen…", "busy");
   try {
-    await saveSectionScale(sel.id, mpu, aspect);
+    const stats = await saveSectionScale(sel.id, mpu, aspect);
     sel.metres_per_norm_unit = mpu;
     sel.scale_aspect_yx = aspect;
     sel.scale_source = "CALIBRATED";
     sel.scale_ratio = null;
-    endScalePick(`Schaal opgeslagen: gemarkeerde lijn = ${mm} mm`);
+    const n = Number(stats.subsections) || 0;
+    const ga = Number(stats.ga_cleared) || 0;
+    const detail =
+      n > 0
+        ? ` ${n} component(en) herberekend` + (ga > 0 ? `; GA gewist voor ${ga} VR(’s)` : "")
+        : "";
+    endScalePick(`Schaal opgeslagen: gemarkeerde lijn = ${mm} mm.${detail}`);
     renderRegionList();
-    // Unlock measure tools the same way floormap does after calibrate
     setMeasureTool("length");
     document.getElementById("engineer-tools-bar")?.scrollIntoView({
       behavior: "smooth",
@@ -990,28 +1044,80 @@ async function finishScalePick(): Promise<void> {
       behavior: "smooth",
       block: "nearest",
     });
-    setStatus(`Schaal opgeslagen (${mm} mm). Lengtetool klaar — klik twee punten.`, "ok");
+    setStatus(
+      `Schaal opgeslagen (${mm} mm).${detail} Lengtetool klaar — klik twee punten.`,
+      "ok",
+    );
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), "err");
     updateScaleUi();
   }
 }
 
+const REGION_KIND_OPTIONS: Array<{ value: DrawingRegion["region_kind"]; label: string }> = [
+  { value: "FLOORMAP", label: "Plattegrond" },
+  { value: "FACADE", label: "Gevel" },
+  { value: "CROSS_SECTION", label: "Dwarsdoorsnede" },
+  { value: "SECTION", label: "Doorsnede" },
+  { value: "OTHER", label: "Overig" },
+];
+
 function regionKindLabel(kind: string): string {
-  switch (kind) {
-    case "FACADE":
-      return "Gevel";
-    case "SECTION":
-      return "Doorsnede";
-    case "FLOORMAP":
-      return "Plattegrond";
-    case "CROSS_SECTION":
-      return "Dwarsdoorsnede";
-    case "OTHER":
-      return "Overig";
-    default:
-      return kind;
+  return REGION_KIND_OPTIONS.find((o) => o.value === kind)?.label || kind;
+}
+
+function nextRegionSortOrder(documentId: string): number {
+  if (!activeProject) return 0;
+  let max = -1;
+  for (const r of activeProject.regions) {
+    if (r.document_id !== documentId) continue;
+    max = Math.max(max, r.sort_order ?? 0);
   }
+  return max + 1;
+}
+
+async function updateSavedRegion(
+  r: DrawingRegion,
+  label: string,
+  kind: DrawingRegion["region_kind"],
+): Promise<void> {
+  if (!auth()?.token || !r.document_id || !r.id) {
+    setStatus("Sectie kan niet worden bijgewerkt", "err");
+    return;
+  }
+  const lbl = label.trim() || r.label || "Sectie";
+  if (
+    lbl === r.label &&
+    kind === r.region_kind
+  ) {
+    return;
+  }
+  setStatus("Sectie bijwerken…", "busy");
+  const ret = await invokeString("API_SaveDrawingRegion", [
+    auth()!.token,
+    r.document_id,
+    String(r.page_index),
+    lbl,
+    kind,
+    String(r.x_min),
+    String(r.y_min),
+    String(r.x_max),
+    String(r.y_max),
+    r.id,
+  ]);
+  if (ret.startsWith("ERROR")) {
+    setStatus(ret.replace(/^ERROR:\s*/, ""), "err");
+    renderRegionList();
+    return;
+  }
+  r.label = lbl;
+  r.region_kind = kind;
+  selectedRegionId = r.id;
+  renderRegionList();
+  drawRegionsOverlay();
+  updateScaleUi();
+  updateAnalyzePanel();
+  setStatus(`Sectie bijgewerkt: ${regionKindLabel(kind)} · ${lbl}`, "ok");
 }
 
 function regionKindColor(kind: string): string {
@@ -1063,6 +1169,25 @@ function updateZoomLabel(): void {
   zoomLabelEl.textContent = `${Math.round(pdfZoom * 100)}%`;
 }
 
+function normalizeViewRotate(deg: number): number {
+  const n = ((Math.round(deg) % 360) + 360) % 360;
+  return n === 90 || n === 180 || n === 270 ? n : 0;
+}
+
+function updateRotateLabel(): void {
+  if (rotateLabelEl) rotateLabelEl.textContent = `${pdfViewRotate}°`;
+}
+
+function activeDocViewRotate(): number {
+  const doc = activeProject?.documents.find((d) => d.id === activeDocumentId);
+  return normalizeViewRotate(Number(doc?.view_rotate) || 0);
+}
+
+function syncViewRotateFromDoc(): void {
+  pdfViewRotate = activeDocViewRotate();
+  updateRotateLabel();
+}
+
 async function setPdfZoom(next: number, opts?: { fitScroll?: boolean }): Promise<void> {
   const clamped = Math.min(PDF_ZOOM_MAX, Math.max(PDF_ZOOM_MIN, next));
   if (Math.abs(clamped - pdfZoom) < 0.001 && !opts?.fitScroll) {
@@ -1077,7 +1202,9 @@ async function setPdfZoom(next: number, opts?: { fitScroll?: boolean }): Promise
 async function zoomToFitWidth(): Promise<void> {
   if (!pdfDoc) return;
   const page = await pdfDoc.getPage(pdfPageNum);
-  const base = page.getViewport({ scale: 1 });
+  const pageRotate = typeof page.rotate === "number" ? page.rotate : 0;
+  const rotation = (pageRotate + pdfViewRotate) % 360;
+  const base = page.getViewport({ scale: 1, rotation });
   const avail = Math.max(200, pdfScrollEl.clientWidth - 16);
   await setPdfZoom(avail / base.width, { fitScroll: true });
 }
@@ -1103,8 +1230,20 @@ function renderRegionList(): void {
   }
   for (const r of regions) {
     const li = document.createElement("li");
-    li.className = "drawing-list-item";
+    li.className = "drawing-list-item region-list-item";
+    li.dataset.regionId = r.id;
     if (r.id === selectedRegionId) li.classList.add("selected");
+
+    const handle = document.createElement("span");
+    handle.className = "region-drag-handle";
+    handle.title = "Verslepen om volgorde te wijzigen";
+    handle.setAttribute("aria-hidden", "true");
+    handle.textContent = "⋮⋮";
+    handle.addEventListener("mousedown", () => {
+      li.draggable = true;
+    });
+    li.appendChild(handle);
+
     const info = document.createElement("button");
     info.type = "button";
     info.className = "drawing-list-select";
@@ -1114,7 +1253,7 @@ function renderRegionList(): void {
       r.metres_per_norm_unit > 0
         ? " · geschaald"
         : "";
-    info.textContent = `p${r.page_index + 1} · ${regionKindLabel(r.region_kind)} · ${r.label}${scaleNote}`;
+    info.textContent = `p${r.page_index + 1} · ${r.label}${scaleNote}`;
     info.addEventListener("click", () => {
       selectedRegionId = r.id;
       if (r.page_index !== pdfPageNum - 1 && pdfDoc) {
@@ -1132,6 +1271,49 @@ function renderRegionList(): void {
       drawRegionsOverlay();
     });
     li.appendChild(info);
+
+    const editRow = document.createElement("div");
+    editRow.className = "region-edit-row";
+    const kindSel = document.createElement("select");
+    kindSel.className = "region-list-kind";
+    kindSel.setAttribute("aria-label", "Soort sectie");
+    for (const opt of REGION_KIND_OPTIONS) {
+      const o = document.createElement("option");
+      o.value = opt.value;
+      o.textContent = opt.label;
+      if (opt.value === r.region_kind) o.selected = true;
+      kindSel.appendChild(o);
+    }
+    const labelInput = document.createElement("input");
+    labelInput.type = "text";
+    labelInput.className = "region-list-label";
+    labelInput.value = r.label;
+    labelInput.placeholder = "Omschrijving";
+    labelInput.addEventListener("click", (ev) => ev.stopPropagation());
+    labelInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        void updateSavedRegion(r, labelInput.value, kindSel.value as DrawingRegion["region_kind"]);
+      }
+    });
+    kindSel.addEventListener("click", (ev) => ev.stopPropagation());
+    kindSel.addEventListener("change", () => {
+      void updateSavedRegion(r, labelInput.value, kindSel.value as DrawingRegion["region_kind"]);
+    });
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.className = "secondary";
+    saveBtn.textContent = "Opslaan";
+    saveBtn.title = "Omschrijving of soort bijwerken";
+    saveBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      void updateSavedRegion(r, labelInput.value, kindSel.value as DrawingRegion["region_kind"]);
+    });
+    editRow.appendChild(labelInput);
+    editRow.appendChild(kindSel);
+    editRow.appendChild(saveBtn);
+    li.appendChild(editRow);
+
     const actions = document.createElement("span");
     actions.className = "drawing-list-actions";
     if (regionSupportsScale(r.region_kind) && activeProject) {
@@ -1151,6 +1333,36 @@ function renderRegionList(): void {
     });
     actions.appendChild(btn);
     li.appendChild(actions);
+
+    li.addEventListener("dragstart", (ev) => {
+      regionDragId = r.id;
+      li.classList.add("is-dragging");
+      ev.dataTransfer?.setData("text/plain", r.id);
+      if (ev.dataTransfer) ev.dataTransfer.effectAllowed = "move";
+    });
+    li.addEventListener("dragend", () => {
+      regionDragId = null;
+      li.draggable = false;
+      li.classList.remove("is-dragging");
+      regionListEl.querySelectorAll(".region-list-item.drag-over").forEach((el) => {
+        el.classList.remove("drag-over");
+      });
+    });
+    li.addEventListener("dragover", (ev) => {
+      ev.preventDefault();
+      if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+      if (regionDragId && regionDragId !== r.id) li.classList.add("drag-over");
+    });
+    li.addEventListener("dragleave", () => {
+      li.classList.remove("drag-over");
+    });
+    li.addEventListener("drop", (ev) => {
+      ev.preventDefault();
+      li.classList.remove("drag-over");
+      const fromId = regionDragId || ev.dataTransfer?.getData("text/plain") || "";
+      void reorderRegionsByDrag(fromId, r.id);
+    });
+
     regionListEl.appendChild(li);
   }
   updateScaleUi();
@@ -1160,13 +1372,14 @@ function renderRegionList(): void {
 }
 
 async function loadActiveDocument(): Promise<void> {
-  if (!auth?.token || !activeDocumentId || !activeProject) return;
+  if (!auth()?.token || !activeDocumentId || !activeProject) return;
   const doc = activeProject.documents.find((d) => d.id === activeDocumentId);
   if (!doc) return;
 
   pdfDoc = null;
   pdfPageNum = 1;
   pdfTotalPages = 0;
+  syncViewRotateFromDoc();
   if (discoveryCandidates.length > 0) endDiscoveryReview("Ontdekken geannuleerd (tekening gewijzigd)");
   endScalePick();
   selectedRegionId = null;
@@ -1197,7 +1410,7 @@ async function loadActiveDocument(): Promise<void> {
   docHintEl.textContent = "Sleep een rechthoek om een sectie te markeren, of klik Secties ontdekken.";
   const res = await fetch(`/api/drawings/download?document_id=${encodeURIComponent(activeDocumentId)}`, {
     credentials: "include",
-    headers: apiAuthHeaders(auth.token),
+    headers: apiAuthHeaders(auth()!.token),
   });
   if (!res.ok) {
     docHintEl.textContent = `PDF laden mislukt (HTTP ${res.status})`;
@@ -1221,8 +1434,9 @@ async function loadActiveDocument(): Promise<void> {
 async function renderPdfPage(): Promise<void> {
   if (!pdfDoc) return;
   const page = await pdfDoc.getPage(pdfPageNum);
-  // Keep page /Rotate (e.g. 90°) explicit so re-renders after discover match the first paint.
-  const rotation = typeof page.rotate === "number" ? page.rotate : 0;
+  // Keep page /Rotate plus engineer view_rotate so crops match floormap.
+  const pageRotate = typeof page.rotate === "number" ? page.rotate : 0;
+  const rotation = (pageRotate + pdfViewRotate) % 360;
   const viewport = page.getViewport({ scale: pdfZoom, rotation });
   canvasWidth = Math.floor(viewport.width);
   canvasHeight = Math.floor(viewport.height);
@@ -1238,6 +1452,7 @@ async function renderPdfPage(): Promise<void> {
   pageLabelEl.textContent = `Pagina ${pdfPageNum} / ${pdfTotalPages}`;
   setPageDisplay(pdfPageNum);
   updateZoomLabel();
+  updateRotateLabel();
   drawRegionsOverlay();
 }
 
@@ -1355,7 +1570,7 @@ function overlayPoint(evt: MouseEvent): { x: number; y: number } {
 }
 
 async function savePendingRegion(): Promise<void> {
-  if (!auth?.token || !activeDocumentId || !pendingMarkNorm || canvasWidth === 0) return;
+  if (!auth()?.token || !activeDocumentId || !pendingMarkNorm || canvasWidth === 0) return;
   const { x_min: xMin, y_min: yMin, x_max: xMax, y_max: yMax, pageIndex } = pendingMarkNorm;
   const label = regionLabelInput.value.trim() || `Sectie ${savedRegionCount + 1}`;
   const kind = regionKindSelect.value;
@@ -1367,7 +1582,7 @@ async function savePendingRegion(): Promise<void> {
   regionSaveBtn.disabled = true;
   setStatus("Sectie opslaan…", "busy");
   const ret = await invokeString("API_SaveDrawingRegion", [
-    auth.token,
+    auth()!.token,
     activeDocumentId,
     String(pageIndex),
     label,
@@ -1395,6 +1610,7 @@ async function savePendingRegion(): Promise<void> {
       y_min: yMin,
       x_max: xMax,
       y_max: yMax,
+      sort_order: nextRegionSortOrder(activeDocumentId),
     });
   }
   savedRegionCount += 1;
@@ -1406,7 +1622,7 @@ async function savePendingRegion(): Promise<void> {
 }
 
 async function deleteRegion(regionId: string): Promise<void> {
-  if (!auth?.token || !activeProject) return;
+  if (!auth()?.token || !activeProject) return;
   if (!regionId) {
     setStatus("Sectie kan niet worden verwijderd — id ontbreekt", "err");
     return;
@@ -1415,12 +1631,12 @@ async function deleteRegion(regionId: string): Promise<void> {
   setStatus("Sectie verwijderen…", "busy");
   try {
     if (bppPhase1Enabled()) {
-      await bppDeleteDrawingRegion(invokeString, auth.token, regionId);
+      await bppDeleteDrawingRegion(invokeString, auth()!.token, regionId);
     } else {
       const res = await fetch(`/api/drawings/sections?section_id=${encodeURIComponent(regionId)}`, {
         method: "DELETE",
         credentials: "include",
-        headers: apiAuthHeaders(auth.token),
+        headers: apiAuthHeaders(auth()!.token),
       });
       let parsed: { ok?: boolean; error?: string } = {};
       try {
@@ -1448,7 +1664,7 @@ async function deleteRegion(regionId: string): Promise<void> {
 }
 
 async function clearAllSections(): Promise<void> {
-  if (!auth?.token || !activeProject || !activeDocumentId) return;
+  if (!auth()?.token || !activeProject || !activeDocumentId) return;
   const toDelete = regionsForActiveDoc();
   const n = toDelete.length;
   if (n < 1) return;
@@ -1457,13 +1673,13 @@ async function clearAllSections(): Promise<void> {
   try {
     if (bppPhase1Enabled()) {
       for (const r of toDelete) {
-        if (r.id) await bppDeleteDrawingRegion(invokeString, auth.token, r.id);
+        if (r.id) await bppDeleteDrawingRegion(invokeString, auth()!.token, r.id);
       }
     } else {
       const res = await fetch(`/api/drawings/sections?document_id=${encodeURIComponent(activeDocumentId)}`, {
         method: "DELETE",
         credentials: "include",
-        headers: apiAuthHeaders(auth.token),
+        headers: apiAuthHeaders(auth()!.token),
       });
       let parsed: { ok?: boolean; error?: string; deleted_count?: number } = {};
       try {
@@ -1644,7 +1860,7 @@ function discoverRectangularFrames(
 }
 
 async function discoverSections(): Promise<void> {
-  if (!auth?.token || !activeDocumentId || !pdfDoc || canvasWidth === 0) {
+  if (!auth()?.token || !activeDocumentId || !pdfDoc || canvasWidth === 0) {
     setStatus("Open eerst een PDF-tekening", "err");
     return;
   }
@@ -1848,7 +2064,7 @@ function showCurrentDiscoveryCandidate(): void {
 }
 
 async function acceptDiscoveryCandidate(): Promise<void> {
-  if (!auth?.token || !activeDocumentId) return;
+  if (!auth()?.token || !activeDocumentId) return;
   if (discoveryIndex >= discoveryCandidates.length) return;
   const box = discoveryCandidates[discoveryIndex];
   const label = discoveryLabelInput.value.trim() || `Sectie ${savedRegionCount + 1}`;
@@ -1857,7 +2073,7 @@ async function acceptDiscoveryCandidate(): Promise<void> {
   setStatus("Sectie opslaan…", "busy");
   try {
     const ret = await invokeString("API_SaveDrawingRegion", [
-      auth.token,
+      auth()!.token,
       activeDocumentId,
       String(discoveryPageIndex),
       label,
@@ -1884,6 +2100,7 @@ async function acceptDiscoveryCandidate(): Promise<void> {
         y_min: box.y_min,
         x_max: box.x_max,
         y_max: box.y_max,
+        sort_order: nextRegionSortOrder(activeDocumentId),
       });
     }
     savedRegionCount += 1;
@@ -1909,7 +2126,11 @@ function skipDiscoveryCandidate(): void {
 
 async function submitReview(evt: Event): Promise<void> {
   evt.preventDefault();
-  if (!auth?.token || !activeProject) return;
+  if (!auth()?.token || !activeProject) {
+    setReviewFeedback("Open eerst een project uit de listbox.", "err");
+    setStatus("Open eerst een project", "err");
+    return;
+  }
 
   if (discoveryCandidates.length > 0 && discoveryIndex < discoveryCandidates.length) {
     const left = discoveryCandidates.length - discoveryIndex;
@@ -1934,83 +2155,80 @@ async function submitReview(evt: Event): Promise<void> {
     clearPendingMark();
   }
 
-  if ((activeProject.regions?.length ?? 0) < 1) {
-    setStatus("Sla minstens één geïdentificeerde sectie op voordat je de review opslaat", "err");
-    return;
-  }
-
-  setStatus("Review opslaan en sectieobjecten vastleggen…", "busy");
-  const ret = await invokeString("API_ReviewDrawings", [
-    auth.token,
-    activeProject.building_id,
-    reviewSufficientEl.checked ? "true" : "false",
-    reviewLegibleEl.checked ? "true" : "false",
-    reviewNotesEl.value.trim(),
-  ]);
-  if (ret.startsWith("ERROR")) {
-    setStatus(ret, "err");
-    return;
-  }
-  const parsed = JSON.parse(ret) as {
-    project_status: ProjectStatus;
-    section_count?: number | string;
-    review_id?: string;
-    sections?: Array<{ id: string; label: string; section_type: string; area_norm: number; perimeter_norm: number }>;
-  };
-  activeProject.project_status = parsed.project_status;
-  projectMetaEl.textContent = `${activeProject.customer_name} · ${statusLabel(activeProject.project_status)} · werknummer ${activeProject.external_ref || "—"} · kenmerk ${activeProject.client_ref || "—"}`;
-  const n = Number(parsed.section_count ?? parsed.sections?.length ?? 0);
-  setStatus(
-    parsed.project_status === "PROJECT_UNDERWAY"
-      ? `Review opgeslagen — ${n} sectieobject(en) vastgelegd voor analyse · project in uitvoering`
-      : `Review opgeslagen — ${n} sectieobject(en) vastgelegd · wacht op voldoende tekeningen`,
-    "ok",
-  );
-  void loadQueue();
-}
-
-function connect(): void {
-  setConnLed(false);
-  setStatus("Verbinden…", "busy");
-  ws = new WebSocket(BPP_WS);
-  ws.onopen = async () => {
-    setConnLed(true);
-    setStatus("Verbonden", "ok");
-    await send("session.open", {}, "session.opened");
-    try {
-      await loadSharedApi();
-      setStatus(`Verbonden · sessie ${sessionId ?? "?"} · Postgres gereed`, "ok");
-      const stored = loadStoredAuth();
-      if (stored) {
-        auth = stored;
-        const valid = await invokeString("API_ValidateSession", [stored.token]);
-        if (valid.startsWith("ERROR")) throw new Error(valid);
-        showPanel(stored);
-        await loadQueue();
-      }
-    } catch (err) {
-      setStatus(err instanceof Error ? err.message : String(err), "err");
-      showLogin();
+  if (!reviewLegibleEl.checked || !reviewSufficientEl.checked) {
+    const msg =
+      "Beide checkboxen (Leesbaar én Voldoende om door te gaan) moeten aan staan om het project vrij te geven. Nu alleen opslaan als concept? Klik OK om toch op te slaan.";
+    if (!window.confirm(msg)) {
+      setReviewFeedback("Review niet opgeslagen — vink beide checkboxen aan om vrij te geven.", "err");
+      return;
     }
-  };
-  ws.onmessage = (ev) => onMessage(String(ev.data));
-  ws.onclose = () => {
-    setConnLed(false);
-    setStatus("Verbinding verbroken — opnieuw verbinden…", "err");
-    setTimeout(connect, 1500);
-  };
-  ws.onerror = () => ws?.close();
+  }
+
+  const submitBtn = document.getElementById("engineer-submit-review-btn") as HTMLButtonElement | null;
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Opslaan…";
+  }
+  setReviewFeedback("Review wordt opgeslagen…", "busy");
+  setStatus("Review opslaan…", "busy");
+  try {
+    const ret = await invokeString("API_ReviewDrawings", [
+      auth()!.token,
+      activeProject.building_id,
+      reviewSufficientEl.checked ? "true" : "false",
+      reviewLegibleEl.checked ? "true" : "false",
+      reviewNotesEl.value.trim(),
+    ]);
+    if (ret.startsWith("ERROR")) {
+      const err = ret.replace(/^ERROR:\s*/, "");
+      setReviewFeedback(err, "err");
+      setStatus(err, "err");
+      return;
+    }
+    const parsed = JSON.parse(ret) as {
+      project_status: ProjectStatus;
+      section_count?: number | string;
+      review_id?: string;
+      sections?: Array<{ id: string; label: string; section_type: string; area_norm: number; perimeter_norm: number }>;
+    };
+    activeProject.project_status = parsed.project_status;
+    activeProject.review = {
+      ...(activeProject.review || {}),
+      sufficient: reviewSufficientEl.checked,
+      legible: reviewLegibleEl.checked,
+      notes: reviewNotesEl.value.trim(),
+    };
+    projectMetaEl.textContent = `${activeProject.customer_name} · ${statusLabel(activeProject.project_status)} · werknummer ${activeProject.external_ref || "—"} · kenmerk ${activeProject.client_ref || "—"}`;
+    const n = Number(parsed.section_count ?? parsed.sections?.length ?? 0);
+    const title = activeProject.label || activeProject.building_id.slice(0, 8);
+    const sectionBit =
+      n > 0 ? `${n} sectieobject(en) vastgelegd` : "geen secties (alleen beoordeling)";
+    const msg =
+      parsed.project_status === "PROJECT_UNDERWAY"
+        ? `Review opgeslagen — «${title}»: ${sectionBit} · project in uitvoering (tekeningen geaccepteerd).`
+        : `Review opgeslagen — «${title}»: ${sectionBit} · nog niet vrijgegeven.`;
+    setReviewFeedback(msg, "ok");
+    setStatus(msg, "ok");
+    syncReviewFormVisibility();
+    await loadQueue({ text: msg, kind: "ok" });
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Review opslaan";
+    }
+  }
 }
 
 loginForm.addEventListener("submit", async (evt) => {
   evt.preventDefault();
   const fd = new FormData(loginForm);
-  const username = String(fd.get("username") || "").trim();
-  const password = String(fd.get("password") || "");
   loginBtn.disabled = true;
   try {
     setStatus("Inloggen…", "busy");
-    await bootstrapAndLogin(username, password);
+    await session.bootstrapAndLogin(
+      String(fd.get("username") || "").trim(),
+      String(fd.get("password") || ""),
+    );
     await loadQueue();
     setStatus("Ingelogd", "ok");
   } catch (err) {
@@ -2022,12 +2240,38 @@ loginForm.addEventListener("submit", async (evt) => {
 });
 
 logoutBtn.addEventListener("click", () => {
-  if (auth?.token) void invokeString("API_Logout", [auth.token]).catch(() => {});
-  showLogin();
+  if (auth()?.token) void invokeString("API_Logout", [auth()!.token]).catch(() => {});
+  session.logout();
 });
 
 refreshBtn.addEventListener("click", () => {
   void loadQueue();
+});
+
+function openSelectedQueueProject(): void {
+  const id = queueSelectEl?.value || "";
+  if (!id) {
+    setStatus("Kies eerst een project in de listbox", "err");
+    if (queueHintEl) queueHintEl.textContent = "Kies eerst een project in de listbox.";
+    return;
+  }
+  void openProject(id);
+}
+
+queueOpenBtn?.addEventListener("click", () => {
+  openSelectedQueueProject();
+});
+
+queueSelectEl?.addEventListener("dblclick", () => {
+  openSelectedQueueProject();
+});
+
+queueSelectEl?.addEventListener("change", () => {
+  if (queueHintEl) {
+    queueHintEl.textContent = queueSelectEl.value
+      ? "Klik Openen (of dubbelklik) om dit project te beoordelen."
+      : "Kies een project om tekeningen te beoordelen.";
+  }
 });
 
 docSelectEl.addEventListener("change", () => {
@@ -2064,6 +2308,80 @@ zoomBtn.addEventListener("click", () => {
 
 zoomFitBtn.addEventListener("click", () => {
   void zoomToFitWidth();
+});
+
+async function rotateActiveDocument(delta: 90 | -90): Promise<void> {
+  if (!auth()?.token || !activeDocumentId || !activeProject) {
+    setStatus("Open eerst een tekening", "err");
+    return;
+  }
+  const doc = activeProject.documents.find((d) => d.id === activeDocumentId);
+  if (!doc) return;
+  if (doc.file_ext.toLowerCase() !== "pdf") {
+    setStatus("Draaien is alleen beschikbaar voor PDF-tekeningen", "err");
+    return;
+  }
+  const regionCount = activeProject.regions.filter((r) => r.document_id === activeDocumentId).length;
+  if (regionCount > 0) {
+    const ok = window.confirm(
+      `Tekening ${delta > 0 ? "90° rechtsom" : "90° linksom"} draaien?\n\n` +
+        `${regionCount} sectie(s) en bijbehorende componenten worden meegetransformeerd.`,
+    );
+    if (!ok) return;
+  }
+  const next = normalizeViewRotate(pdfViewRotate + delta);
+  setStatus(`Tekening draaien naar ${next}°…`, "busy");
+  try {
+    const ret = await invokeString("API_SetDocumentViewRotate", [
+      auth()!.token,
+      activeDocumentId,
+      String(next),
+    ]);
+    if (ret.startsWith("ERROR")) {
+      setStatus(ret.replace(/^ERROR:\s*/, ""), "err");
+      return;
+    }
+    const parsed = JSON.parse(ret) as { ok?: boolean; view_rotate?: number; error?: string };
+    if (parsed.ok === false) {
+      setStatus(parsed.error || "Draaien mislukt", "err");
+      return;
+    }
+    const applied = normalizeViewRotate(Number(parsed.view_rotate ?? next));
+    doc.view_rotate = applied;
+    pdfViewRotate = applied;
+    updateRotateLabel();
+
+    // Refresh region coords (transformed server-side) without resetting the viewer.
+    const refresh = await invokeString("API_EngineerGetProject", [
+      auth()!.token,
+      activeProject.building_id,
+    ]);
+    if (!refresh.startsWith("ERROR")) {
+      const detail = JSON.parse(refresh) as ProjectDetail;
+      activeProject.documents = detail.documents || activeProject.documents;
+      activeProject.regions = (detail.regions || []).map(normalizeRegion);
+      const refreshed = activeProject.documents.find((d) => d.id === activeDocumentId);
+      if (refreshed) {
+        refreshed.view_rotate = normalizeViewRotate(Number(refreshed.view_rotate) || applied);
+        pdfViewRotate = refreshed.view_rotate;
+      }
+      renderRegionList();
+    }
+
+    endScalePick();
+    clearPendingMark();
+    await renderPdfPage();
+    setStatus(`Tekening gedraaid (${pdfViewRotate}°)`, "ok");
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+  }
+}
+
+rotateCwBtn?.addEventListener("click", () => {
+  void rotateActiveDocument(90);
+});
+rotateCcwBtn?.addEventListener("click", () => {
+  void rotateActiveDocument(-90);
 });
 
 regionSaveBtn.addEventListener("click", () => {
@@ -2366,14 +2684,14 @@ initEngineerLayoutSplit();
 
 if (fileMenuRoot) {
   projectMenu = mountProjectMenu(fileMenuRoot, {
-    getToken: () => auth?.token ?? null,
+    getToken: () => auth()?.token ?? null,
     getBuildingId: () => activeProject?.building_id || "",
     getProjectMeta: () => ({
       label: activeProject?.label || "",
       external_ref: activeProject?.external_ref || "",
     }),
     invokeString: (name, args) => invokeString(name, args),
-    apiAuthHeaders: () => (auth ? apiAuthHeaders(auth.token, true) : {}),
+    apiAuthHeaders: () => (auth ? apiAuthHeaders(auth()!.token, true) : {}),
     openBuilding: (id) => openProject(id),
     saveProject: async () => {
       if (!activeProject) throw new Error("Geen project geselecteerd");
@@ -2399,10 +2717,10 @@ if (fileMenuRoot) {
     setTitle: (title) => {
       document.title =
         title === "Geen project"
-          ? "Geluidwering Gevels — Tekeningen beoordelen"
+          ? "Stilte advies en meten — Tekeningen beoordelen"
           : `${title} — Ingenieur`;
     },
   });
   fileMenuRoot.hidden = true;
 }
-connect();
+session.connect();

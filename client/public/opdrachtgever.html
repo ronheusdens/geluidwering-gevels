@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Geluidwering Gevels — Opdrachtgever</title>
-  <link rel="stylesheet" href="/styles.css?v=method-help" />
+  <title>Stilte advies en meten — Geluidwering gevels</title>
+  <link rel="stylesheet" href="/styles.css?v=logo-wordmark" />
 </head>
 <body>
   <main class="page">
     <header class="header">
       <div class="brand">
-        <img class="brand-logo" src="/assets/stilte-logo.jpg" alt="" width="68" height="68" />
+        <img class="brand-logo" src="/assets/stilte-logo.png" alt="Stilte advies en meten" width="200" height="76" />
         <div class="brand-copy">
-          <p class="brand-name">Geluidwering Gevels</p>
+          <p class="brand-name">Stilte advies en meten</p>
           <h1 id="page-title" class="page-heading">Opdrachtgever</h1>
         </div>
       </div>
@@ -33,8 +33,8 @@
       <form id="login-form" class="form auth-pane" novalidate>
         <fieldset>
           <legend>Inloggen</legend>
-          <label>Gebruikersnaam <input name="username" required autocomplete="username" value="demo" /></label>
-          <label>Wachtwoord <input name="password" type="password" required autocomplete="current-password" value="demo" /></label>
+          <label>Gebruikersnaam <input name="username" required autocomplete="username" /></label>
+          <label>Wachtwoord <input name="password" type="password" required autocomplete="current-password" /></label>
         </fieldset>
         <div class="actions">
           <button type="submit" id="login-btn">Inloggen</button>
@@ -59,7 +59,7 @@
         <h2>Toegang verleend</h2>
         <p id="register-message"></p>
         <p class="access-pw">Toegangswachtwoord: <code id="access-password"></code></p>
-        <p class="hint">Log in met dit wachtwoord en wijzig het daarna onder <strong>Profiel</strong>.</p>
+        <p class="hint">Log in met dit wachtwoord en wijzig het daarna onder <strong>Profiel</strong> in het Stilte-portaal.</p>
         <button type="button" id="goto-signin-btn" class="secondary">Naar inloggen</button>
       </section>
     </section>
@@ -68,10 +68,16 @@
       <div class="panel user-bar">
         <div class="user-actions">
           <button type="button" id="method-btn" class="secondary">Berekeningsmethode</button>
-          <button type="button" id="profile-btn" class="secondary">Profiel</button>
+          <a id="profile-portal-link" class="user-action-link" href="http://127.0.0.1:4174/opdrachtgever.html#profiel">Profiel (portaal)</a>
           <button type="button" id="logout-btn" class="secondary">Uitloggen</button>
         </div>
       </div>
+
+      <p id="profile-portal-banner" class="panel pw-warning hidden" role="status">
+        Stel eerst uw wachtwoord/profiel in via het
+        <a href="http://127.0.0.1:4174/opdrachtgever.html#profiel">Stilte-portaal</a>
+        (geldt voor alle producten).
+      </p>
 
       <section id="method-panel" class="panel method-panel hidden" aria-labelledby="method-title">
         <h2 id="method-title">Berekeningsmethode GA / GA;k</h2>
@@ -114,49 +120,6 @@ GA;k = GA − 10·log<sub>10</sub>(max(V/S<sub>tot</sub>, 3) / (6·T<sub>0</sub>
         </div>
         <div class="actions">
           <button type="button" id="method-close-btn" class="secondary">Sluiten</button>
-        </div>
-      </section>
-
-      <section id="profile-panel" class="panel hidden">
-        <h2>Profiel</h2>
-        <p id="profile-service-email" class="hint"></p>
-        <p id="profile-pw-warning" class="pw-warning hidden">Stel eerst een nieuw wachtwoord in voordat u verdergaat.</p>
-
-        <form id="customer-profile-form" class="form" novalidate>
-          <fieldset>
-            <legend>Klantgegevens</legend>
-            <label>Naam <input name="name" required autocomplete="name" /></label>
-            <label>E-mail <input name="email" type="email" autocomplete="email" /></label>
-            <label>Telefoon <input name="phone" type="tel" autocomplete="tel" /></label>
-            <label>Opmerkingen <textarea name="notes" rows="2"></textarea></label>
-          </fieldset>
-          <fieldset>
-            <legend>Klantadres (optioneel)</legend>
-            <label>Straat <input name="cust_street" autocomplete="street-address" /></label>
-            <label>Postcode <input name="cust_postal" autocomplete="postal-code" /></label>
-            <label>Plaats <input name="cust_city" autocomplete="address-level2" /></label>
-            <label>Gemeente <input name="cust_municipality" /></label>
-            <label>Land <input name="cust_country" maxlength="2" value="NL" /></label>
-          </fieldset>
-          <div class="actions">
-            <button type="submit" id="save-profile-btn">Klantprofiel opslaan</button>
-          </div>
-        </form>
-
-        <form id="password-form" class="form" novalidate>
-          <fieldset>
-            <legend>Wachtwoord wijzigen</legend>
-            <label>Huidig wachtwoord <input name="current_password" type="password" required autocomplete="current-password" /></label>
-            <label>Nieuw wachtwoord <input name="new_password" type="password" required autocomplete="new-password" minlength="6" /></label>
-            <label>Bevestig nieuw wachtwoord <input name="confirm_password" type="password" required autocomplete="new-password" minlength="6" /></label>
-          </fieldset>
-          <div class="actions">
-            <button type="submit" id="change-pw-btn">Wachtwoord bijwerken</button>
-          </div>
-        </form>
-
-        <div class="actions">
-          <button type="button" id="profile-close-btn" class="secondary">Sluiten</button>
         </div>
       </section>
 
@@ -206,18 +169,6 @@ GA;k = GA − 10·log<sub>10</sub>(max(V/S<sub>tot</sub>, 3) / (6·T<sub>0</sub>
             <label>Land <input name="dwell_country" maxlength="2" value="NL" /></label>
           </fieldset>
           <fieldset>
-            <legend>Tekeningen (PDF, DWG)</legend>
-            <label class="block-label">
-              Bestanden uploaden
-              <input type="file" id="drawing-file-input" accept=".pdf,.dwg,application/pdf" multiple />
-            </label>
-            <p class="hint" id="drawing-upload-hint">Selecteer een of meer PDF- of DWG-bestanden voor dit project.</p>
-            <ul id="drawing-list" class="drawing-list" aria-label="Geüploade tekeningen"></ul>
-            <div class="actions">
-              <button type="button" id="submit-drawings-btn" class="secondary" disabled>Tekeningen indienen ter beoordeling</button>
-            </div>
-          </fieldset>
-          <fieldset>
             <legend>Projectgegevens</legend>
             <label>Projectnaam <input name="label" placeholder="bijv. Nieuwbouw Lot 12" /></label>
             <label>Uw kenmerk <input name="client_ref" maxlength="120" placeholder="optioneel, uw eigen referentie" title="Los van de projectnaam en los van het werknummer van de engineer" /></label>
@@ -229,9 +180,23 @@ GA;k = GA − 10·log<sub>10</sub>(max(V/S<sub>tot</sub>, 3) / (6·T<sub>0</sub>
             <button type="button" id="delete-project-btn" class="secondary" disabled>Project verwijderen</button>
           </div>
         </form>
+
+        <fieldset id="drawing-upload-fieldset">
+          <legend>Tekeningen (PDF, DWG)</legend>
+          <label class="block-label">
+            Bestanden uploaden
+            <input type="file" id="drawing-file-input" accept=".pdf,.dwg,application/pdf" multiple />
+          </label>
+          <p class="hint" id="drawing-picked" hidden></p>
+          <p class="hint" id="drawing-upload-hint">Selecteer een of meer PDF- of DWG-bestanden voor dit project.</p>
+          <ul id="drawing-list" class="drawing-list" aria-label="Geüploade tekeningen"></ul>
+          <div class="actions">
+            <button type="button" id="submit-drawings-btn" class="secondary" disabled>Tekeningen indienen ter beoordeling</button>
+          </div>
+        </fieldset>
       </section>
     </section>
   </main>
-  <script type="module" src="/app.js?v=status-uitvoering"></script>
+  <script type="module" src="/app.js?v=drawing-keep"></script>
 </body>
 </html>

@@ -9,7 +9,9 @@ REM         API_EngineerListProjects, API_RenameProject, API_EngineerDeleteProje
 REM         API_ListProjectDocuments, API_UploadDrawingChunk, API_DeleteDrawing,
 REM         API_CustomerSubmitDrawings,
 REM         API_EngineerListReviewQueue, API_EngineerGetProject, API_ReviewDrawings,
+REM         API_SetDocumentViewRotate,
 REM         API_ListDrawingRegions, API_SaveDrawingRegion, API_DeleteDrawingRegion,
+REM         API_ReorderDrawingRegions,
 REM         API_ListFloormapSections, API_SaveFloormapScale,
 REM         API_AdminListCustomers, API_AdminListCustomerProjects, API_AdminUpdateProjectStatus,
 REM         API_AdminListAccounts, API_AdminUpdateAccount, API_AdminResetAccountPassword, API_AdminDeleteAccount,
@@ -291,7 +293,7 @@ END PROCEDURE
 
 PROCEDURE API_AdminListCustomers(session_token$) AS STRING
     DIM sql$, rid%, n%, i%, out$, t$, username$
-    DIM c_id$, c_name$, project_count$, outstanding_count$, drawing_count$
+    DIM c_id$, c_name$, login_name$, project_count$, outstanding_count$, drawing_count$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -316,13 +318,20 @@ PROCEDURE API_AdminListCustomers(session_token$) AS STRING
     END IF
 
     sql$ = "SELECT c.id::text AS customer_id, c.name AS customer_name, " + _
+        "COALESCE(u.username, '') AS username, " + _
         "COUNT(b.id)::text AS project_count, " + _
         "COUNT(b.id) FILTER (WHERE b.project_status <> 'PROJECT_FINISHED'::app_gevelwering.project_status)::text AS outstanding_count, " + _
         "(SELECT COUNT(*)::text FROM app_gevelwering.document d JOIN app_gevelwering.building bx ON bx.id = d.building_id WHERE bx.customer_id = c.id) AS drawing_count " + _
         "FROM app_gevelwering.customer c " + _
+        "JOIN app_gevelwering.service_user u ON u.id = c.owner_user_id " + _
         "JOIN app_gevelwering.building b ON b.customer_id = c.id " + _
-        "GROUP BY c.id, c.name " + _
-        "ORDER BY c.name"
+        "WHERE u.is_active = true " + _
+        "AND COALESCE(u.is_engineer, false) = false " + _
+        "AND u.username <> 'admin' " + _
+        "GROUP BY c.id, c.name, u.username " + _
+        "ORDER BY " + _
+        "COUNT(b.id) FILTER (WHERE b.project_status <> 'PROJECT_FINISHED'::app_gevelwering.project_status) DESC, " + _
+        "lower(u.username), c.name"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
     n% = POSTGRES_NUM_ROWS(rid%)
 
@@ -334,11 +343,13 @@ PROCEDURE API_AdminListCustomers(session_token$) AS STRING
         END IF
         c_id$ = POSTGRES_GET_BY_NAME$(rid%, i%, "customer_id")
         c_name$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "customer_name"), CHR$(34), "")
+        login_name$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "username"), CHR$(34), "")
         project_count$ = POSTGRES_GET_BY_NAME$(rid%, i%, "project_count")
         outstanding_count$ = POSTGRES_GET_BY_NAME$(rid%, i%, "outstanding_count")
         drawing_count$ = POSTGRES_GET_BY_NAME$(rid%, i%, "drawing_count")
         out$ = out$ + "{" + CHR$(34) + "customer_id" + CHR$(34) + ":" + CHR$(34) + c_id$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "customer_name" + CHR$(34) + ":" + CHR$(34) + c_name$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "username" + CHR$(34) + ":" + CHR$(34) + login_name$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "project_count" + CHR$(34) + ":" + CHR$(34) + project_count$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "outstanding_count" + CHR$(34) + ":" + CHR$(34) + outstanding_count$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "drawing_count" + CHR$(34) + ":" + CHR$(34) + drawing_count$ + CHR$(34) + "}"
@@ -785,11 +796,11 @@ END PROCEDURE
 
 REM --- Admin material catalog (app_gevelwering.material / catalogusGG.pdf) ---
 
-PROCEDURE API_AdminListMaterials(session_token$, q$, category$, limit$, offset$, source_filter$) AS STRING
-    DIM sql$, rid%, n%, i%, out$, t$, username$, qq$, cat$, lim$, off$, total$, sfilt$
+PROCEDURE API_AdminListMaterials(session_token$, q$, category$, limit$, offset$, source_filter$, exposure_filter$) AS STRING
+    DIM sql$, rid%, n%, i%, out$, t$, username$, qq$, cat$, lim$, off$, total$, sfilt$, efilt$
     DIM mid$, cid$, mno$, mname$, mcat$, mmaster$, thick$, wt$, ra$
     DIM r63$, r125$, r250$, r500$, r1k$, r2k$, r4k$, rw$, c$, ctr$
-    DIM gt1$, gcav$, gt2$, bref$, src$, sok$
+    DIM gt1$, gcav$, gt2$, bref$, src$, sok$, mk$, exp$, dntak$
     DIM sep%, mm$, ss$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
@@ -819,6 +830,16 @@ PROCEDURE API_AdminListMaterials(session_token$, q$, category$, limit$, offset$,
     lim$ = SUBSTITUTE$(limit$, "'", "''")
     off$ = SUBSTITUTE$(offset$, "'", "''")
     sfilt$ = LCASE$(SUBSTITUTE$(source_filter$, "'", "''"))
+    efilt$ = UCASE$(SUBSTITUTE$(exposure_filter$, "'", "''"))
+    IF efilt$ = "EXTERIEUR" THEN
+        efilt$ = "EXTERIOR"
+    END IF
+    IF efilt$ = "INTERIEUR" THEN
+        efilt$ = "INTERIOR"
+    END IF
+    IF efilt$ <> "EXTERIOR" AND efilt$ <> "INTERIOR" THEN
+        efilt$ = ""
+    END IF
     IF lim$ = "" THEN
         lim$ = "10"
     END IF
@@ -859,58 +880,67 @@ PROCEDURE API_AdminListMaterials(session_token$, q$, category$, limit$, offset$,
             sql$ = sql$ + " AND COALESCE(source, '') NOT IN ('eigen', 'app')"
         END IF
     END IF
+    IF efilt$ <> "" THEN
+        sql$ = sql$ + " AND exposure = '" + efilt$ + "'"
+    END IF
     rid% = POSTGRES_QUERY(g_conn%, sql$)
     IF rid% = -1 THEN
         RETURN "ERROR: material count failed: " + POSTGRES_GET_ERROR$(g_conn%)
     END IF
     total$ = POSTGRES_GET_BY_NAME$(rid%, 0, "total")
 
-    sql$ = "SELECT id::text AS material_id, catalog_id, material_no::text AS material_no, " + _
-        "master_category, name, COALESCE(category,'') AS category, " + _
-        "COALESCE(thickness_mm::text,'') AS thickness_mm, " + _
-        "COALESCE(weight_kg_m2::text,'') AS weight_kg_m2, " + _
-        "COALESCE(ra_dba::text,'') AS ra_dba, " + _
-        "COALESCE(r_63_hz::text,'') AS r_63_hz, " + _
-        "COALESCE(r_125_hz::text,'') AS r_125_hz, " + _
-        "COALESCE(r_250_hz::text,'') AS r_250_hz, " + _
-        "COALESCE(r_500_hz::text,'') AS r_500_hz, " + _
-        "COALESCE(r_1000_hz::text,'') AS r_1000_hz, " + _
-        "COALESCE(r_2000_hz::text,'') AS r_2000_hz, " + _
-        "COALESCE(r_4000_hz::text,'') AS r_4000_hz, " + _
-        "COALESCE(rw_db::text,'') AS rw_db, " + _
-        "COALESCE(c_db::text,'') AS c_db, " + _
-        "COALESCE(ctr_db::text,'') AS ctr_db, " + _
-        "COALESCE(glass_t1_mm::text,'') AS glass_t1_mm, " + _
-        "COALESCE(glass_cavity_mm::text,'') AS glass_cavity_mm, " + _
-        "COALESCE(glass_t2_mm::text,'') AS glass_t2_mm, " + _
-        "COALESCE(source_ref,'') AS source_ref, " + _
-        "COALESCE(source,'') AS source, " + _
-        "spectrum_ok::text AS spectrum_ok " + _
-        "FROM app_gevelwering.material WHERE 1=1"
+    sql$ = "SELECT m.id::text AS material_id, m.catalog_id, m.material_no::text AS material_no, " + _
+        "m.master_category, m.name, COALESCE(m.category,'') AS category, " + _
+        "app_gevelwering.fw_material_opbouw(m) AS material_kind, " + _
+        "COALESCE(m.exposure,'EXTERIOR') AS exposure, " + _
+        "COALESCE(m.thickness_mm::text,'') AS thickness_mm, " + _
+        "COALESCE(m.weight_kg_m2::text,'') AS weight_kg_m2, " + _
+        "COALESCE(m.ra_dba::text,'') AS ra_dba, " + _
+        "COALESCE(m.r_63_hz::text,'') AS r_63_hz, " + _
+        "COALESCE(m.r_125_hz::text,'') AS r_125_hz, " + _
+        "COALESCE(m.r_250_hz::text,'') AS r_250_hz, " + _
+        "COALESCE(m.r_500_hz::text,'') AS r_500_hz, " + _
+        "COALESCE(m.r_1000_hz::text,'') AS r_1000_hz, " + _
+        "COALESCE(m.r_2000_hz::text,'') AS r_2000_hz, " + _
+        "COALESCE(m.r_4000_hz::text,'') AS r_4000_hz, " + _
+        "COALESCE(m.rw_db::text,'') AS rw_db, " + _
+        "COALESCE(m.c_db::text,'') AS c_db, " + _
+        "COALESCE(m.ctr_db::text,'') AS ctr_db, " + _
+        "COALESCE(m.dnt_a_k_db::text,'') AS dnt_a_k_db, " + _
+        "COALESCE(m.glass_t1_mm::text,'') AS glass_t1_mm, " + _
+        "COALESCE(m.glass_cavity_mm::text,'') AS glass_cavity_mm, " + _
+        "COALESCE(m.glass_t2_mm::text,'') AS glass_t2_mm, " + _
+        "COALESCE(m.source_ref,'') AS source_ref, " + _
+        "COALESCE(m.source,'') AS source, " + _
+        "m.spectrum_ok::text AS spectrum_ok " + _
+        "FROM app_gevelwering.material m WHERE 1=1"
     IF qq$ <> "" THEN
-        sql$ = sql$ + " AND (name ILIKE '%" + qq$ + "%' OR catalog_id ILIKE '%" + qq$ + "%')"
+        sql$ = sql$ + " AND (m.name ILIKE '%" + qq$ + "%' OR m.catalog_id ILIKE '%" + qq$ + "%')"
     END IF
     IF cat$ <> "" THEN
         sep% = INSTR(cat$, "::")
         IF sep% > 0 THEN
             mm$ = LEFT$(cat$, sep% - 1)
             ss$ = MID$(cat$, sep% + 2)
-            sql$ = sql$ + " AND master_category = '" + mm$ + "'"
+            sql$ = sql$ + " AND m.master_category = '" + mm$ + "'"
             IF ss$ <> "" THEN
-                sql$ = sql$ + " AND category = '" + ss$ + "'"
+                sql$ = sql$ + " AND m.category = '" + ss$ + "'"
             END IF
         ELSE
-            sql$ = sql$ + " AND master_category = '" + cat$ + "'"
+            sql$ = sql$ + " AND m.master_category = '" + cat$ + "'"
         END IF
     END IF
     IF sfilt$ = "eigen" OR sfilt$ = "app" THEN
-        sql$ = sql$ + " AND source IN ('eigen', 'app')"
+        sql$ = sql$ + " AND m.source IN ('eigen', 'app')"
     ELSE
         IF sfilt$ = "catalogus" OR sfilt$ = "catalog" THEN
-            sql$ = sql$ + " AND COALESCE(source, '') NOT IN ('eigen', 'app')"
+            sql$ = sql$ + " AND COALESCE(m.source, '') NOT IN ('eigen', 'app')"
         END IF
     END IF
-    sql$ = sql$ + " ORDER BY master_category, category, material_no ASC LIMIT " + lim$ + " OFFSET " + off$
+    IF efilt$ <> "" THEN
+        sql$ = sql$ + " AND m.exposure = '" + efilt$ + "'"
+    END IF
+    sql$ = sql$ + " ORDER BY m.master_category, m.category, m.material_no ASC LIMIT " + lim$ + " OFFSET " + off$
     rid% = POSTGRES_QUERY(g_conn%, sql$)
     IF rid% = -1 THEN
         RETURN "ERROR: material list failed: " + POSTGRES_GET_ERROR$(g_conn%)
@@ -952,12 +982,17 @@ PROCEDURE API_AdminListMaterials(session_token$, q$, category$, limit$, offset$,
         bref$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "source_ref"), CHR$(34), "")
         src$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "source"), CHR$(34), "")
         sok$ = POSTGRES_GET_BY_NAME$(rid%, i%, "spectrum_ok")
+        mk$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "material_kind"), CHR$(34), "")
+        exp$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "exposure"), CHR$(34), "")
+        dntak$ = POSTGRES_GET_BY_NAME$(rid%, i%, "dnt_a_k_db")
         out$ = out$ + "{" + CHR$(34) + "material_id" + CHR$(34) + ":" + CHR$(34) + mid$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "catalog_id" + CHR$(34) + ":" + CHR$(34) + cid$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "material_no" + CHR$(34) + ":" + mno$
         out$ = out$ + "," + CHR$(34) + "master_category" + CHR$(34) + ":" + CHR$(34) + mmaster$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "name" + CHR$(34) + ":" + CHR$(34) + mname$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "category" + CHR$(34) + ":" + CHR$(34) + mcat$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "material_kind" + CHR$(34) + ":" + CHR$(34) + mk$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "exposure" + CHR$(34) + ":" + CHR$(34) + exp$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "thickness_mm" + CHR$(34) + ":" + CHR$(34) + thick$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "weight_kg_m2" + CHR$(34) + ":" + CHR$(34) + wt$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "ra_dba" + CHR$(34) + ":" + CHR$(34) + ra$ + CHR$(34)
@@ -971,6 +1006,7 @@ PROCEDURE API_AdminListMaterials(session_token$, q$, category$, limit$, offset$,
         out$ = out$ + "," + CHR$(34) + "rw_db" + CHR$(34) + ":" + CHR$(34) + rw$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "c_db" + CHR$(34) + ":" + CHR$(34) + c$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "ctr_db" + CHR$(34) + ":" + CHR$(34) + ctr$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "dnt_a_k_db" + CHR$(34) + ":" + CHR$(34) + dntak$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "glass_t1_mm" + CHR$(34) + ":" + CHR$(34) + gt1$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "glass_cavity_mm" + CHR$(34) + ":" + CHR$(34) + gcav$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "glass_t2_mm" + CHR$(34) + ":" + CHR$(34) + gt2$ + CHR$(34)
@@ -986,8 +1022,8 @@ END PROCEDURE
 PROCEDURE API_AdminGetMaterial(session_token$, material_id$) AS STRING
     DIM sql$, rid%, t$, username$, mid$
     DIM cid$, mno$, mmaster$, mname$, mcat$, thick$, wt$, ra$, bref$, sok$, src$
-    DIM r63$, r125$, r250$, r500$, r1k$, r2k$, r4k$, rw$, c$, ctr$
-    DIM supp$, phone$, build$, cavf$, lam$
+    DIM r63$, r125$, r250$, r500$, r1k$, r2k$, r4k$, rw$, c$, ctr$, dntak$
+    DIM supp$, phone$, build$, cavf$, lam$, mk$, exp$
     DIM t1$, cav$, t2$, rqa$, cflow$, dna$, h$, d$, l$, sh$, door$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
@@ -1013,25 +1049,28 @@ PROCEDURE API_AdminGetMaterial(session_token$, material_id$) AS STRING
         RETURN "ERROR: admin access required"
     END IF
 
-    sql$ = "SELECT id::text AS material_id, catalog_id, material_no::text AS material_no, " + _
-        "master_category, name, COALESCE(category,'') AS category, " + _
-        "COALESCE(thickness_mm::text,'') AS thickness_mm, " + _
-        "COALESCE(weight_kg_m2::text,'') AS weight_kg_m2, " + _
-        "COALESCE(ra_dba::text,'') AS ra_dba, COALESCE(source_ref,'') AS source_ref, " + _
-        "COALESCE(r_63_hz::text,'') AS r_63_hz, COALESCE(r_125_hz::text,'') AS r_125_hz, " + _
-        "COALESCE(r_250_hz::text,'') AS r_250_hz, COALESCE(r_500_hz::text,'') AS r_500_hz, " + _
-        "COALESCE(r_1000_hz::text,'') AS r_1000_hz, COALESCE(r_2000_hz::text,'') AS r_2000_hz, " + _
-        "COALESCE(r_4000_hz::text,'') AS r_4000_hz, " + _
-        "COALESCE(rw_db::text,'') AS rw_db, COALESCE(c_db::text,'') AS c_db, COALESCE(ctr_db::text,'') AS ctr_db, " + _
-        "spectrum_ok::text AS spectrum_ok, COALESCE(supplier,'') AS supplier, COALESCE(phone,'') AS phone, " + _
-        "COALESCE(buildup,'') AS buildup, COALESCE(cavity_fill,'') AS cavity_fill, COALESCE(laminate,'') AS laminate, " + _
-        "COALESCE(glass_t1_mm::text,'') AS glass_t1_mm, COALESCE(glass_cavity_mm::text,'') AS glass_cavity_mm, " + _
-        "COALESCE(glass_t2_mm::text,'') AS glass_t2_mm, COALESCE(rqa_dba::text,'') AS rqa_dba, " + _
-        "COALESCE(c_dm3_s::text,'') AS c_dm3_s, COALESCE(dna_dba::text,'') AS dna_dba, " + _
-        "COALESCE(height_mm::text,'') AS height_mm, COALESCE(depth_mm::text,'') AS depth_mm, " + _
-        "COALESCE(length_mm::text,'') AS length_mm, COALESCE(sh_mm::text,'') AS sh_mm, " + _
-        "COALESCE(doorlaat_m2_m::text,'') AS doorlaat_m2_m, COALESCE(source,'') AS source " + _
-        "FROM app_gevelwering.material WHERE id = '" + mid$ + "'::uuid"
+    sql$ = "SELECT m.id::text AS material_id, m.catalog_id, m.material_no::text AS material_no, " + _
+        "m.master_category, m.name, COALESCE(m.category,'') AS category, " + _
+        "app_gevelwering.fw_material_opbouw(m) AS material_kind, " + _
+        "COALESCE(m.thickness_mm::text,'') AS thickness_mm, " + _
+        "COALESCE(m.weight_kg_m2::text,'') AS weight_kg_m2, " + _
+        "COALESCE(m.ra_dba::text,'') AS ra_dba, COALESCE(m.source_ref,'') AS source_ref, " + _
+        "COALESCE(m.r_63_hz::text,'') AS r_63_hz, COALESCE(m.r_125_hz::text,'') AS r_125_hz, " + _
+        "COALESCE(m.r_250_hz::text,'') AS r_250_hz, COALESCE(m.r_500_hz::text,'') AS r_500_hz, " + _
+        "COALESCE(m.r_1000_hz::text,'') AS r_1000_hz, COALESCE(m.r_2000_hz::text,'') AS r_2000_hz, " + _
+        "COALESCE(m.r_4000_hz::text,'') AS r_4000_hz, " + _
+        "COALESCE(m.rw_db::text,'') AS rw_db, COALESCE(m.c_db::text,'') AS c_db, COALESCE(m.ctr_db::text,'') AS ctr_db, " + _
+        "COALESCE(m.dnt_a_k_db::text,'') AS dnt_a_k_db, " + _
+        "m.spectrum_ok::text AS spectrum_ok, COALESCE(m.supplier,'') AS supplier, COALESCE(m.phone,'') AS phone, " + _
+        "COALESCE(m.buildup,'') AS buildup, COALESCE(m.cavity_fill,'') AS cavity_fill, COALESCE(m.laminate,'') AS laminate, " + _
+        "COALESCE(m.glass_t1_mm::text,'') AS glass_t1_mm, COALESCE(m.glass_cavity_mm::text,'') AS glass_cavity_mm, " + _
+        "COALESCE(m.glass_t2_mm::text,'') AS glass_t2_mm, COALESCE(m.rqa_dba::text,'') AS rqa_dba, " + _
+        "COALESCE(m.c_dm3_s::text,'') AS c_dm3_s, COALESCE(m.dna_dba::text,'') AS dna_dba, " + _
+        "COALESCE(m.height_mm::text,'') AS height_mm, COALESCE(m.depth_mm::text,'') AS depth_mm, " + _
+        "COALESCE(m.length_mm::text,'') AS length_mm, COALESCE(m.sh_mm::text,'') AS sh_mm, " + _
+        "COALESCE(m.doorlaat_m2_m::text,'') AS doorlaat_m2_m, COALESCE(m.source,'') AS source, " + _
+        "COALESCE(m.exposure,'EXTERIOR') AS exposure " + _
+        "FROM app_gevelwering.material m WHERE m.id = '" + mid$ + "'::uuid"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
     IF rid% = -1 THEN
         RETURN "ERROR: material get failed: " + POSTGRES_GET_ERROR$(g_conn%)
@@ -1078,6 +1117,9 @@ PROCEDURE API_AdminGetMaterial(session_token$, material_id$) AS STRING
     sh$ = POSTGRES_GET_BY_NAME$(rid%, 0, "sh_mm")
     door$ = POSTGRES_GET_BY_NAME$(rid%, 0, "doorlaat_m2_m")
     src$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "source"), CHR$(34), "")
+    mk$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "material_kind"), CHR$(34), "")
+    exp$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "exposure"), CHR$(34), "")
+    dntak$ = POSTGRES_GET_BY_NAME$(rid%, 0, "dnt_a_k_db")
 
     RETURN "{" + CHR$(34) + "ok" + CHR$(34) + ":true" + _
         "," + CHR$(34) + "material_id" + CHR$(34) + ":" + CHR$(34) + mid$ + CHR$(34) + _
@@ -1086,6 +1128,8 @@ PROCEDURE API_AdminGetMaterial(session_token$, material_id$) AS STRING
         "," + CHR$(34) + "master_category" + CHR$(34) + ":" + CHR$(34) + mmaster$ + CHR$(34) + _
         "," + CHR$(34) + "name" + CHR$(34) + ":" + CHR$(34) + mname$ + CHR$(34) + _
         "," + CHR$(34) + "category" + CHR$(34) + ":" + CHR$(34) + mcat$ + CHR$(34) + _
+        "," + CHR$(34) + "material_kind" + CHR$(34) + ":" + CHR$(34) + mk$ + CHR$(34) + _
+        "," + CHR$(34) + "exposure" + CHR$(34) + ":" + CHR$(34) + exp$ + CHR$(34) + _
         "," + CHR$(34) + "thickness_mm" + CHR$(34) + ":" + CHR$(34) + thick$ + CHR$(34) + _
         "," + CHR$(34) + "weight_kg_m2" + CHR$(34) + ":" + CHR$(34) + wt$ + CHR$(34) + _
         "," + CHR$(34) + "ra_dba" + CHR$(34) + ":" + CHR$(34) + ra$ + CHR$(34) + _
@@ -1100,6 +1144,7 @@ PROCEDURE API_AdminGetMaterial(session_token$, material_id$) AS STRING
         "," + CHR$(34) + "rw_db" + CHR$(34) + ":" + CHR$(34) + rw$ + CHR$(34) + _
         "," + CHR$(34) + "c_db" + CHR$(34) + ":" + CHR$(34) + c$ + CHR$(34) + _
         "," + CHR$(34) + "ctr_db" + CHR$(34) + ":" + CHR$(34) + ctr$ + CHR$(34) + _
+        "," + CHR$(34) + "dnt_a_k_db" + CHR$(34) + ":" + CHR$(34) + dntak$ + CHR$(34) + _
         "," + CHR$(34) + "spectrum_ok" + CHR$(34) + ":" + CHR$(34) + sok$ + CHR$(34) + _
         "," + CHR$(34) + "supplier" + CHR$(34) + ":" + CHR$(34) + supp$ + CHR$(34) + _
         "," + CHR$(34) + "phone" + CHR$(34) + ":" + CHR$(34) + phone$ + CHR$(34) + _
@@ -1120,10 +1165,10 @@ PROCEDURE API_AdminGetMaterial(session_token$, material_id$) AS STRING
         "," + CHR$(34) + "source" + CHR$(34) + ":" + CHR$(34) + src$ + CHR$(34) + "}"
 END PROCEDURE
 
-PROCEDURE API_AdminSaveMaterial(session_token$, material_id$, catalog_id$, master_category$, material_no$, name$, category$, thickness$, weight$, ra$, source_ref$, spectrum_ok$, r63$, r125$, r250$, r500$, r1000$, r2000$, r4000$, rw$, c$, ctr$, glass_t1$, glass_cavity$, glass_t2$, source$) AS STRING
-    DIM sql$, rid%, t$, username$, mid$, cid$, mmaster$, mno$, mname$, mcat$, thick$, wt$, ra$, bref$, sok$, src$
-    DIM a63$, a125$, a250$, a500$, a1k$, a2k$, a4k$, arw$, ac$, actr$, at1$, acav$, at2$, sok_sql$
-    DIM n_thick$, n_wt$, n_ra$, n63$, n125$, n250$, n500$, n1k$, n2k$, n4k$, n_rw$, n_c$, n_ctr$, n_t1$, n_cav$, n_t2$, cidx$, out_id$
+PROCEDURE API_AdminSaveMaterial(session_token$, material_id$, catalog_id$, master_category$, material_no$, name$, category$, thickness$, weight$, ra$, source_ref$, spectrum_ok$, r63$, r125$, r250$, r500$, r1000$, r2000$, r4000$, rw$, c$, ctr$, glass_t1$, glass_cavity$, glass_t2$, source$, exposure$, dntak$) AS STRING
+    DIM sql$, rid%, t$, username$, mid$, cid$, mmaster$, mno$, mname$, mcat$, thick$, wt$, ra$, bref$, sok$, src$, exp$
+    DIM a63$, a125$, a250$, a500$, a1k$, a2k$, a4k$, arw$, ac$, actr$, at1$, acav$, at2$, adnt$, sok_sql$
+    DIM n_thick$, n_wt$, n_ra$, n63$, n125$, n250$, n500$, n1k$, n2k$, n4k$, n_rw$, n_c$, n_ctr$, n_dnt$, n_t1$, n_cav$, n_t2$, cidx$, out_id$, next_no$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -1202,6 +1247,27 @@ PROCEDURE API_AdminSaveMaterial(session_token$, material_id$, catalog_id$, maste
     IF src$ = "eigen" THEN
         src$ = "app"
     END IF
+    exp$ = UCASE$(SUBSTITUTE$(exposure$, "'", "''"))
+    IF exp$ = "EXTERIEUR" THEN
+        exp$ = "EXTERIOR"
+    END IF
+    IF exp$ = "INTERIEUR" THEN
+        exp$ = "INTERIOR"
+    END IF
+    IF exp$ <> "INTERIOR" THEN
+        exp$ = "EXTERIOR"
+    END IF
+    REM Interior: RA/C/Ctr are façade corrections — clear; keep praktijkwaarde DnT,A,k.
+    IF exp$ = "INTERIOR" THEN
+        ra$ = ""
+        ac$ = ""
+        actr$ = ""
+    END IF
+    adnt$ = SUBSTITUTE$(dntak$, "'", "''")
+    adnt$ = SUBSTITUTE$(adnt$, ",", ".")
+    IF exp$ <> "INTERIOR" THEN
+        adnt$ = ""
+    END IF
     IF sok$ = "1" OR sok$ = "true" OR sok$ = "t" OR sok$ = "yes" THEN
         sok_sql$ = "true"
     ELSE
@@ -1273,6 +1339,11 @@ PROCEDURE API_AdminSaveMaterial(session_token$, material_id$, catalog_id$, maste
     ELSE
         n_ctr$ = STR$(VAL(actr$))
     END IF
+    IF adnt$ = "" THEN
+        n_dnt$ = "NULL"
+    ELSE
+        n_dnt$ = STR$(VAL(adnt$))
+    END IF
     IF at1$ = "" THEN
         n_t1$ = "NULL"
     ELSE
@@ -1290,16 +1361,39 @@ PROCEDURE API_AdminSaveMaterial(session_token$, material_id$, catalog_id$, maste
     END IF
 
     IF mid$ = "" THEN
-        IF cid$ = "" THEN
-            RETURN "ERROR: catalog_id is required when creating"
+        REM New rows always source=app. Uniqueness is (source, material_no) and
+        REM (source, catalog_id) — not global catalog_id. D##### is reserved for
+        REM DGMR seed (catalogusGG.pdf); app materials use A#####.
+        sql$ = "SELECT (COALESCE(MAX(material_no), 0) + 1)::text AS next_no FROM app_gevelwering.material WHERE source = '" + src$ + "'"
+        rid% = POSTGRES_QUERY(g_conn%, sql$)
+        IF rid% = -1 OR POSTGRES_NUM_ROWS(rid%) < 1 THEN
+            RETURN "ERROR: next material_no failed: " + POSTGRES_GET_ERROR$(g_conn%)
         END IF
+        next_no$ = POSTGRES_GET_BY_NAME$(rid%, 0, "next_no")
         IF mno$ = "" THEN
-            sql$ = "SELECT (COALESCE(MAX(material_no), 0) + 1)::text AS next_no FROM app_gevelwering.material WHERE source = '" + src$ + "'"
+            mno$ = next_no$
+        ELSE
+            sql$ = "SELECT 1 AS taken FROM app_gevelwering.material WHERE source = '" + src$ + "' AND material_no = " + mno$ + " LIMIT 1"
+            rid% = POSTGRES_QUERY(g_conn%, sql$)
+            IF rid% = -1 THEN
+                RETURN "ERROR: material_no check failed: " + POSTGRES_GET_ERROR$(g_conn%)
+            END IF
+            IF POSTGRES_NUM_ROWS(rid%) > 0 THEN
+                RETURN "ERROR: nummer " + mno$ + " bestaat al voor bron '" + src$ + "' (unique is source+material_no, niet alleen catalogus-id). Laat Nr leeg voor automatisch " + next_no$ + "."
+            END IF
+        END IF
+        IF cid$ = "" OR LEFT$(UCASE$(cid$), 1) = "D" THEN
+            sql$ = "SELECT ('A' || lpad(" + mno$ + "::text, 5, '0')) AS cid"
             rid% = POSTGRES_QUERY(g_conn%, sql$)
             IF rid% = -1 OR POSTGRES_NUM_ROWS(rid%) < 1 THEN
-                RETURN "ERROR: next material_no failed: " + POSTGRES_GET_ERROR$(g_conn%)
+                RETURN "ERROR: next catalog_id failed: " + POSTGRES_GET_ERROR$(g_conn%)
             END IF
-            mno$ = POSTGRES_GET_BY_NAME$(rid%, 0, "next_no")
+            cid$ = POSTGRES_GET_BY_NAME$(rid%, 0, "cid")
+        END IF
+        sql$ = "SELECT 1 AS taken FROM app_gevelwering.material WHERE source = '" + src$ + "' AND catalog_id = '" + cid$ + "' LIMIT 1"
+        rid% = POSTGRES_QUERY(g_conn%, sql$)
+        IF rid% <> -1 AND POSTGRES_NUM_ROWS(rid%) > 0 THEN
+            RETURN "ERROR: catalogus-id " + cid$ + " bestaat al voor bron '" + src$ + "'. Kies een andere code of laat leeg voor A#####."
         END IF
         sql$ = "SELECT (COALESCE(MAX(catalog_index), -1) + 1)::text AS next_idx FROM app_gevelwering.material WHERE source = '" + src$ + "'"
         rid% = POSTGRES_QUERY(g_conn%, sql$)
@@ -1312,7 +1406,7 @@ PROCEDURE API_AdminSaveMaterial(session_token$, material_id$, catalog_id$, maste
             "catalog_index, catalog_id, material_no, master_category, name, category, " + _
             "thickness_mm, weight_kg_m2, ra_dba, source_ref, " + _
             "r_63_hz, r_125_hz, r_250_hz, r_500_hz, r_1000_hz, r_2000_hz, r_4000_hz, " + _
-            "rw_db, c_db, ctr_db, glass_t1_mm, glass_cavity_mm, glass_t2_mm, r_db, spectrum_ok, source" + _
+            "rw_db, c_db, ctr_db, dnt_a_k_db, glass_t1_mm, glass_cavity_mm, glass_t2_mm, r_db, spectrum_ok, source, exposure" + _
             ") VALUES (" + cidx$ + ", '" + cid$ + "', " + mno$ + ", '" + mmaster$ + "', '" + mname$ + "', "
         IF mcat$ = "" THEN
             sql$ = sql$ + "NULL, "
@@ -1326,13 +1420,13 @@ PROCEDURE API_AdminSaveMaterial(session_token$, material_id$, catalog_id$, maste
             sql$ = sql$ + "'" + bref$ + "', "
         END IF
         sql$ = sql$ + n63$ + ", " + n125$ + ", " + n250$ + ", " + n500$ + ", " + n1k$ + ", " + n2k$ + ", " + n4k$ + ", "
-        sql$ = sql$ + n_rw$ + ", " + n_c$ + ", " + n_ctr$ + ", " + n_t1$ + ", " + n_cav$ + ", " + n_t2$ + ", "
+        sql$ = sql$ + n_rw$ + ", " + n_c$ + ", " + n_ctr$ + ", " + n_dnt$ + ", " + n_t1$ + ", " + n_cav$ + ", " + n_t2$ + ", "
         IF n63$ = "NULL" OR n125$ = "NULL" OR n250$ = "NULL" OR n500$ = "NULL" OR n1k$ = "NULL" OR n2k$ = "NULL" THEN
             sql$ = sql$ + "NULL, "
         ELSE
             sql$ = sql$ + "ARRAY[" + n63$ + "," + n125$ + "," + n250$ + "," + n500$ + "," + n1k$ + "," + n2k$ + "]::double precision[], "
         END IF
-        sql$ = sql$ + sok_sql$ + ", '" + src$ + "') RETURNING id::text AS material_id, material_no::text AS material_no"
+        sql$ = sql$ + sok_sql$ + ", '" + src$ + "', '" + exp$ + "') RETURNING id::text AS material_id, material_no::text AS material_no"
         rid% = POSTGRES_QUERY(g_conn%, sql$)
         IF rid% = -1 THEN
             RETURN "ERROR: material insert failed: " + POSTGRES_GET_ERROR$(g_conn%)
@@ -1349,7 +1443,7 @@ PROCEDURE API_AdminSaveMaterial(session_token$, material_id$, catalog_id$, maste
             " WHERE r.name = m.master_category AND s.name = m.category LIMIT 1) " + _
             "WHERE m.id = '" + out_id$ + "'::uuid"
         rid% = POSTGRES_QUERY(g_conn%, sql$)
-        RETURN "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "material_id" + CHR$(34) + ":" + CHR$(34) + out_id$ + CHR$(34) + "," + CHR$(34) + "material_no" + CHR$(34) + ":" + mno$ + "," + CHR$(34) + "created" + CHR$(34) + ":true}"
+        RETURN "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "material_id" + CHR$(34) + ":" + CHR$(34) + out_id$ + CHR$(34) + "," + CHR$(34) + "catalog_id" + CHR$(34) + ":" + CHR$(34) + cid$ + CHR$(34) + "," + CHR$(34) + "material_no" + CHR$(34) + ":" + mno$ + "," + CHR$(34) + "created" + CHR$(34) + ":true}"
     END IF
 
     IF mno$ = "" OR cid$ = "" THEN
@@ -1371,14 +1465,14 @@ PROCEDURE API_AdminSaveMaterial(session_token$, material_id$, catalog_id$, maste
     END IF
     sql$ = sql$ + "r_63_hz = " + n63$ + ", r_125_hz = " + n125$ + ", r_250_hz = " + n250$ + ", " + _
         "r_500_hz = " + n500$ + ", r_1000_hz = " + n1k$ + ", r_2000_hz = " + n2k$ + ", r_4000_hz = " + n4k$ + ", " + _
-        "rw_db = " + n_rw$ + ", c_db = " + n_c$ + ", ctr_db = " + n_ctr$ + ", " + _
+        "rw_db = " + n_rw$ + ", c_db = " + n_c$ + ", ctr_db = " + n_ctr$ + ", dnt_a_k_db = " + n_dnt$ + ", " + _
         "glass_t1_mm = " + n_t1$ + ", glass_cavity_mm = " + n_cav$ + ", glass_t2_mm = " + n_t2$ + ", "
     IF n63$ = "NULL" OR n125$ = "NULL" OR n250$ = "NULL" OR n500$ = "NULL" OR n1k$ = "NULL" OR n2k$ = "NULL" THEN
         sql$ = sql$ + "r_db = NULL, "
     ELSE
         sql$ = sql$ + "r_db = ARRAY[" + n63$ + "," + n125$ + "," + n250$ + "," + n500$ + "," + n1k$ + "," + n2k$ + "]::double precision[], "
     END IF
-    sql$ = sql$ + "spectrum_ok = " + sok_sql$ + ", source = '" + src$ + "', updated_at = now() " + _
+    sql$ = sql$ + "spectrum_ok = " + sok_sql$ + ", source = '" + src$ + "', exposure = '" + exp$ + "', updated_at = now() " + _
         "WHERE id = '" + mid$ + "'::uuid RETURNING id::text AS material_id, material_no::text AS material_no"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
     IF rid% = -1 THEN
@@ -1396,7 +1490,7 @@ PROCEDURE API_AdminSaveMaterial(session_token$, material_id$, catalog_id$, maste
         " WHERE r.name = m.master_category AND s.name = m.category LIMIT 1) " + _
         "WHERE m.id = '" + out_id$ + "'::uuid"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
-    RETURN "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "material_id" + CHR$(34) + ":" + CHR$(34) + out_id$ + CHR$(34) + "," + CHR$(34) + "material_no" + CHR$(34) + ":" + mno$ + "," + CHR$(34) + "created" + CHR$(34) + ":false}"
+    RETURN "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "material_id" + CHR$(34) + ":" + CHR$(34) + out_id$ + CHR$(34) + "," + CHR$(34) + "catalog_id" + CHR$(34) + ":" + CHR$(34) + cid$ + CHR$(34) + "," + CHR$(34) + "material_no" + CHR$(34) + ":" + mno$ + "," + CHR$(34) + "created" + CHR$(34) + ":false}"
 END PROCEDURE
 
 PROCEDURE API_AdminDeleteMaterial(session_token$, material_id$) AS STRING
@@ -2085,7 +2179,8 @@ PROCEDURE API_ListProjectDocuments(session_token$, building_id$) AS STRING
     END IF
     POSTGRES_CLOSE_RESULT(rid%)
 
-    sql$ = "SELECT d.id::text AS document_id, d.filename, d.file_ext, d.byte_size::text AS byte_size, d.created_at::text AS created_at "
+    sql$ = "SELECT d.id::text AS document_id, d.filename, d.file_ext, d.byte_size::text AS byte_size, d.created_at::text AS created_at, "
+    sql$ = sql$ + "COALESCE(d.view_rotate, 0)::text AS view_rotate "
     sql$ = sql$ + "FROM app_gevelwering.document d WHERE d.building_id = '" + b_id$ + "'::uuid ORDER BY d.created_at ASC"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
     n% = POSTGRES_NUM_ROWS(rid%)
@@ -2105,7 +2200,8 @@ PROCEDURE API_ListProjectDocuments(session_token$, building_id$) AS STRING
         out$ = out$ + "," + CHR$(34) + "filename" + CHR$(34) + ":" + CHR$(34) + d_name$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "file_ext" + CHR$(34) + ":" + CHR$(34) + d_ext$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "byte_size" + CHR$(34) + ":" + CHR$(34) + d_size$ + CHR$(34)
-        out$ = out$ + "," + CHR$(34) + "created_at" + CHR$(34) + ":" + CHR$(34) + d_created$ + CHR$(34) + "}"
+        out$ = out$ + "," + CHR$(34) + "created_at" + CHR$(34) + ":" + CHR$(34) + d_created$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "view_rotate" + CHR$(34) + ":" + POSTGRES_GET_BY_NAME$(rid%, i%, "view_rotate") + "}"
         i% = i% + 1
     WEND
     out$ = out$ + "]}"
@@ -2347,17 +2443,19 @@ PROCEDURE API_EngineerListReviewQueue(session_token$) AS STRING
 
     REM Active engineer work: status from admin/customer path; drawings optional (LEFT JOIN)
     sql$ = "SELECT b.id::text AS building_id, COALESCE(b.label,'') AS label, COALESCE(b.client_ref,'') AS client_ref, c.name AS customer_name, "
+    sql$ = sql$ + "COALESCE(u.username,'') AS username, "
     sql$ = sql$ + "b.project_status::text AS project_status, COUNT(d.id)::text AS drawing_count, "
     sql$ = sql$ + "COALESCE(MAX(dr.reviewed_at)::text,'') AS reviewed_at "
     sql$ = sql$ + "FROM app_gevelwering.building b "
     sql$ = sql$ + "JOIN app_gevelwering.customer c ON c.id = b.customer_id "
+    sql$ = sql$ + "LEFT JOIN app_gevelwering.service_user u ON u.id = COALESCE(b.owner_user_id, c.owner_user_id) "
     sql$ = sql$ + "LEFT JOIN app_gevelwering.document d ON d.building_id = b.id "
     sql$ = sql$ + "LEFT JOIN app_gevelwering.drawing_review dr ON dr.building_id = b.id "
     sql$ = sql$ + "WHERE b.project_status IN ("
     sql$ = sql$ + "'PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED'::app_gevelwering.project_status, "
     sql$ = sql$ + "'PROJECT_UNDERWAY'::app_gevelwering.project_status, "
     sql$ = sql$ + "'PROJECT_NEAR_FINAL'::app_gevelwering.project_status) "
-    sql$ = sql$ + "GROUP BY b.id, b.label, b.client_ref, c.name, b.project_status "
+    sql$ = sql$ + "GROUP BY b.id, b.label, b.client_ref, c.name, u.username, b.project_status "
     sql$ = sql$ + "ORDER BY b.updated_at DESC"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
     n% = POSTGRES_NUM_ROWS(rid%)
@@ -2372,6 +2470,7 @@ PROCEDURE API_EngineerListReviewQueue(session_token$) AS STRING
         b_label$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "label"), CHR$(34), "")
         b_client$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "client_ref"), CHR$(34), "")
         c_name$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "customer_name"), CHR$(34), "")
+        username$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "username"), CHR$(34), "")
         project_status$ = POSTGRES_GET_BY_NAME$(rid%, i%, "project_status")
         drawing_count$ = POSTGRES_GET_BY_NAME$(rid%, i%, "drawing_count")
         reviewed_at$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "reviewed_at"), CHR$(34), "")
@@ -2379,6 +2478,7 @@ PROCEDURE API_EngineerListReviewQueue(session_token$) AS STRING
         out$ = out$ + "," + CHR$(34) + "label" + CHR$(34) + ":" + CHR$(34) + b_label$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "client_ref" + CHR$(34) + ":" + CHR$(34) + b_client$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "customer_name" + CHR$(34) + ":" + CHR$(34) + c_name$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "username" + CHR$(34) + ":" + CHR$(34) + username$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "project_status" + CHR$(34) + ":" + CHR$(34) + project_status$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "drawing_count" + CHR$(34) + ":" + CHR$(34) + drawing_count$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "reviewed_at" + CHR$(34) + ":" + CHR$(34) + reviewed_at$ + CHR$(34) + "}"
@@ -2393,7 +2493,7 @@ PROCEDURE API_EngineerGetProject(session_token$, building_id$) AS STRING
     DIM b_label$, b_ref$, b_client$, project_status$, c_name$, d_id$, d_name$, d_ext$, d_size$, d_created$
     DIM rev_suff$, rev_leg$, rev_notes$, rev_at$
     DIM r_id$, r_doc$, r_page$, r_label$, r_kind$, r_xmin$, r_ymin$, r_xmax$, r_ymax$
-    DIM r_ratio$, r_mpu$, r_scale_src$, r_aspect$
+    DIM r_ratio$, r_mpu$, r_scale_src$, r_aspect$, r_sort$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -2448,7 +2548,8 @@ PROCEDURE API_EngineerGetProject(session_token$, building_id$) AS STRING
         rev_at$ = ""
     END IF
 
-    sql$ = "SELECT d.id::text AS document_id, d.filename, d.file_ext, d.byte_size::text AS byte_size, d.created_at::text AS created_at "
+    sql$ = "SELECT d.id::text AS document_id, d.filename, d.file_ext, d.byte_size::text AS byte_size, d.created_at::text AS created_at, "
+    sql$ = sql$ + "COALESCE(d.view_rotate, 0)::text AS view_rotate "
     sql$ = sql$ + "FROM app_gevelwering.document d WHERE d.building_id = '" + b_id$ + "'::uuid ORDER BY d.created_at ASC"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
     n% = POSTGRES_NUM_ROWS(rid%)
@@ -2481,7 +2582,8 @@ PROCEDURE API_EngineerGetProject(session_token$, building_id$) AS STRING
         out$ = out$ + "," + CHR$(34) + "filename" + CHR$(34) + ":" + CHR$(34) + d_name$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "file_ext" + CHR$(34) + ":" + CHR$(34) + d_ext$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "byte_size" + CHR$(34) + ":" + CHR$(34) + d_size$ + CHR$(34)
-        out$ = out$ + "," + CHR$(34) + "created_at" + CHR$(34) + ":" + CHR$(34) + d_created$ + CHR$(34) + "}"
+        out$ = out$ + "," + CHR$(34) + "created_at" + CHR$(34) + ":" + CHR$(34) + d_created$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "view_rotate" + CHR$(34) + ":" + POSTGRES_GET_BY_NAME$(rid%, i%, "view_rotate") + "}"
         i% = i% + 1
     WEND
     out$ = out$ + "]," + CHR$(34) + "regions" + CHR$(34) + ":["
@@ -2490,10 +2592,11 @@ PROCEDURE API_EngineerGetProject(session_token$, building_id$) AS STRING
     sql$ = sql$ + "COALESCE(r.scale_ratio::text,'') AS scale_ratio, "
     sql$ = sql$ + "COALESCE(r.metres_per_norm_unit::text,'') AS metres_per_norm_unit, "
     sql$ = sql$ + "COALESCE(r.scale_aspect_yx::text,'') AS scale_aspect_yx, "
-    sql$ = sql$ + "COALESCE(r.scale_source,'NONE') AS scale_source "
+    sql$ = sql$ + "COALESCE(r.scale_source,'NONE') AS scale_source, "
+    sql$ = sql$ + "COALESCE(r.sort_order, 0)::text AS sort_order "
     sql$ = sql$ + "FROM app_gevelwering.drawing_region r "
     sql$ = sql$ + "JOIN app_gevelwering.document d ON d.id = r.document_id "
-    sql$ = sql$ + "WHERE d.building_id = '" + b_id$ + "'::uuid ORDER BY r.created_at ASC"
+    sql$ = sql$ + "WHERE d.building_id = '" + b_id$ + "'::uuid ORDER BY r.sort_order ASC, r.created_at ASC"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
     n% = POSTGRES_NUM_ROWS(rid%)
     i% = 0
@@ -2514,6 +2617,7 @@ PROCEDURE API_EngineerGetProject(session_token$, building_id$) AS STRING
         r_mpu$ = POSTGRES_GET_BY_NAME$(rid%, i%, "metres_per_norm_unit")
         r_aspect$ = POSTGRES_GET_BY_NAME$(rid%, i%, "scale_aspect_yx")
         r_scale_src$ = POSTGRES_GET_BY_NAME$(rid%, i%, "scale_source")
+        r_sort$ = POSTGRES_GET_BY_NAME$(rid%, i%, "sort_order")
         out$ = out$ + "{" + CHR$(34) + "id" + CHR$(34) + ":" + CHR$(34) + r_id$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "document_id" + CHR$(34) + ":" + CHR$(34) + r_doc$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "page_index" + CHR$(34) + ":" + r_page$
@@ -2541,10 +2645,53 @@ PROCEDURE API_EngineerGetProject(session_token$, building_id$) AS STRING
         ELSE
             out$ = out$ + r_aspect$
         END IF
-        out$ = out$ + "," + CHR$(34) + "scale_source" + CHR$(34) + ":" + CHR$(34) + r_scale_src$ + CHR$(34) + "}"
+        out$ = out$ + "," + CHR$(34) + "scale_source" + CHR$(34) + ":" + CHR$(34) + r_scale_src$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "sort_order" + CHR$(34) + ":" + r_sort$ + "}"
         i% = i% + 1
     WEND
     out$ = out$ + "]}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_SetDocumentViewRotate(session_token$, document_id$, view_rotate$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, doc_id$, rot$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR document_id$ = "" OR view_rotate$ = "" THEN
+        RETURN "ERROR: session_token, document_id and view_rotate are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    doc_id$ = SUBSTITUTE$(document_id$, "'", "''")
+    rot$ = SUBSTITUTE$(view_rotate$, "'", "''")
+
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    IF rot$ <> "0" AND rot$ <> "90" AND rot$ <> "180" AND rot$ <> "270" THEN
+        RETURN "ERROR: view_rotate must be 0, 90, 180 or 270"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_set_document_view_rotate('" + doc_id$ + "'::uuid, " + rot$ + ")::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
     RETURN out$
 END PROCEDURE
 
@@ -2598,15 +2745,8 @@ PROCEDURE API_ReviewDrawings(session_token$, building_id$, sufficient$, legible$
         RETURN "ERROR: project is not in review queue"
     END IF
 
-    REM Identified sections must already exist in PG (accepted/saved before review)
-    sql$ = "SELECT COUNT(*)::text AS cnt FROM app_gevelwering.drawing_region r "
-    sql$ = sql$ + "JOIN app_gevelwering.document d ON d.id = r.document_id "
-    sql$ = sql$ + "WHERE d.building_id = '" + b_id$ + "'::uuid"
-    rid% = POSTGRES_QUERY(g_conn%, sql$)
-    section_count$ = POSTGRES_GET_BY_NAME$(rid%, 0, "cnt")
-    IF section_count$ = "0" THEN
-        RETURN "ERROR: save at least one identified section before saving the review"
-    END IF
+    REM Secties zijn optioneel: bij niet-bruikbare tekeningen mag review zonder markering.
+    LET section_count$ = "0"
 
     sql$ = "INSERT INTO app_gevelwering.drawing_review (building_id, reviewer_user_id, sufficient, legible, notes, reviewed_at) "
     sql$ = sql$ + "VALUES ('" + b_id$ + "'::uuid, '" + user_id$ + "'::uuid, "
@@ -2644,10 +2784,9 @@ PROCEDURE API_ReviewDrawings(session_token$, building_id$, sufficient$, legible$
     sql$ = sql$ + "perimeter_norm = 2.0 * ((r.x_max - r.x_min) + (r.y_max - r.y_min)), "
     sql$ = sql$ + "analysis_status = 'READY_FOR_ANALYSIS', "
     sql$ = sql$ + "committed_at = now(), "
-    sql$ = sql$ + "updated_at = now(), "
-    sql$ = sql$ + "sort_order = sub.ord "
+    sql$ = sql$ + "updated_at = now() "
     sql$ = sql$ + "FROM app_gevelwering.document d, "
-    sql$ = sql$ + "(SELECT r2.id, ROW_NUMBER() OVER (ORDER BY r2.created_at ASC, r2.id ASC) AS ord "
+    sql$ = sql$ + "(SELECT r2.id, ROW_NUMBER() OVER (ORDER BY r2.sort_order ASC, r2.created_at ASC, r2.id ASC) AS ord "
     sql$ = sql$ + " FROM app_gevelwering.drawing_region r2 "
     sql$ = sql$ + " JOIN app_gevelwering.document d2 ON d2.id = r2.document_id "
     sql$ = sql$ + " WHERE d2.building_id = '" + b_id$ + "'::uuid) AS sub "
@@ -2842,13 +2981,15 @@ PROCEDURE API_SaveDrawingRegion(session_token$, document_id$, page_index$, label
     ELSE
         sql$ = "INSERT INTO app_gevelwering.drawing_region "
         sql$ = sql$ + "(document_id, building_id, page_index, label, region_kind, x_min, y_min, x_max, y_max, "
-        sql$ = sql$ + "width_norm, height_norm, area_norm, perimeter_norm, analysis_status, created_by) "
+        sql$ = sql$ + "width_norm, height_norm, area_norm, perimeter_norm, analysis_status, sort_order, created_by) "
         sql$ = sql$ + "SELECT '" + doc_id$ + "'::uuid, d.building_id, " + STR$(page_idx%) + ", '" + lbl_esc$ + "', '" + kind_esc$ + "', "
         sql$ = sql$ + x_min$ + ", " + y_min$ + ", " + x_max$ + ", " + y_max$ + ", "
         sql$ = sql$ + "(" + x_max$ + " - " + x_min$ + "), (" + y_max$ + " - " + y_min$ + "), "
         sql$ = sql$ + "((" + x_max$ + " - " + x_min$ + ") * (" + y_max$ + " - " + y_min$ + ")), "
         sql$ = sql$ + "(2.0 * ((" + x_max$ + " - " + x_min$ + ") + (" + y_max$ + " - " + y_min$ + "))), "
-        sql$ = sql$ + "'DRAFT', '" + user_id$ + "'::uuid "
+        sql$ = sql$ + "'DRAFT', "
+        sql$ = sql$ + "COALESCE((SELECT MAX(r.sort_order) FROM app_gevelwering.drawing_region r WHERE r.document_id = '" + doc_id$ + "'::uuid), -1) + 1, "
+        sql$ = sql$ + "'" + user_id$ + "'::uuid "
         sql$ = sql$ + "FROM app_gevelwering.document d WHERE d.id = '" + doc_id$ + "'::uuid "
         sql$ = sql$ + "RETURNING id::text AS id"
         rid% = POSTGRES_QUERY(g_conn%, sql$)
@@ -2859,6 +3000,48 @@ PROCEDURE API_SaveDrawingRegion(session_token$, document_id$, page_index$, label
     END IF
 
     RETURN "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "region_id" + CHR$(34) + ":" + CHR$(34) + out_id$ + CHR$(34) + "," + CHR$(34) + "section_id" + CHR$(34) + ":" + CHR$(34) + out_id$ + CHR$(34) + "}"
+END PROCEDURE
+
+PROCEDURE API_ReorderDrawingRegions(session_token$, document_id$, ordered_ids_csv$) AS STRING
+    DIM sql$, rid%, t$, username$, is_eng$, doc_id$, ids$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" OR document_id$ = "" OR ordered_ids_csv$ = "" THEN
+        RETURN "ERROR: session_token, document_id, and ordered_ids_csv are required"
+    END IF
+
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    doc_id$ = SUBSTITUTE$(document_id$, "'", "''")
+    ids$ = SUBSTITUTE$(ordered_ids_csv$, "'", "''")
+
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    is_eng$ = POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer")
+    IF username$ <> "engineer" AND username$ <> "admin" AND is_eng$ <> "true" AND is_eng$ <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+
+    sql$ = "SELECT app_gevelwering.fw_reorder_drawing_regions('" + doc_id$ + "'::uuid, "
+    sql$ = sql$ + "string_to_array('" + ids$ + "', ',')::uuid[])::text AS j"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF rid% = -1 THEN
+        RETURN "ERROR: reorder regions failed: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: reorder regions failed"
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    RETURN out$
 END PROCEDURE
 
 PROCEDURE API_DeleteDrawingRegion(session_token$, region_id$) AS STRING
@@ -2900,7 +3083,7 @@ END PROCEDURE
 
 PROCEDURE API_ListFloormapSections(session_token$, building_id$) AS STRING
     DIM sql$, rid%, n%, i%, out$, t$, username$, is_eng$, b_id$
-    DIM s_id$, d_id$, label$, kind$, page_idx$, xmin$, ymin$, xmax$, ymax$, scale_src$, mpu$, ratio$, rooms$, aspect$
+    DIM s_id$, d_id$, label$, kind$, page_idx$, xmin$, ymin$, xmax$, ymax$, scale_src$, mpu$, ratio$, rooms$, aspect$, view_rot$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -2934,8 +3117,10 @@ PROCEDURE API_ListFloormapSections(session_token$, building_id$) AS STRING
     sql$ = sql$ + "COALESCE(r.metres_per_norm_unit::text,'') AS metres_per_norm_unit, "
     sql$ = sql$ + "COALESCE(r.scale_aspect_yx::text,'') AS scale_aspect_yx, "
     sql$ = sql$ + "r.scale_source, "
+    sql$ = sql$ + "COALESCE(d.view_rotate, 0)::text AS view_rotate, "
     sql$ = sql$ + "(SELECT COUNT(*)::text FROM app_gevelwering.drawing_subsection s WHERE s.section_id = r.id) AS room_count "
     sql$ = sql$ + "FROM app_gevelwering.drawing_region r "
+    sql$ = sql$ + "JOIN app_gevelwering.document d ON d.id = r.document_id "
     sql$ = sql$ + "WHERE r.building_id = '" + b_id$ + "'::uuid "
     sql$ = sql$ + "AND r.region_kind IN ('FLOORMAP','FACADE','SECTION','CROSS_SECTION') "
     sql$ = sql$ + "ORDER BY r.sort_order ASC, r.created_at ASC"
@@ -2961,6 +3146,7 @@ PROCEDURE API_ListFloormapSections(session_token$, building_id$) AS STRING
         mpu$ = POSTGRES_GET_BY_NAME$(rid%, i%, "metres_per_norm_unit")
         aspect$ = POSTGRES_GET_BY_NAME$(rid%, i%, "scale_aspect_yx")
         scale_src$ = POSTGRES_GET_BY_NAME$(rid%, i%, "scale_source")
+        view_rot$ = POSTGRES_GET_BY_NAME$(rid%, i%, "view_rotate")
         rooms$ = POSTGRES_GET_BY_NAME$(rid%, i%, "room_count")
         out$ = out$ + "{" + CHR$(34) + "id" + CHR$(34) + ":" + CHR$(34) + s_id$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "document_id" + CHR$(34) + ":" + CHR$(34) + d_id$ + CHR$(34)
@@ -2990,6 +3176,7 @@ PROCEDURE API_ListFloormapSections(session_token$, building_id$) AS STRING
             out$ = out$ + aspect$
         END IF
         out$ = out$ + "," + CHR$(34) + "scale_source" + CHR$(34) + ":" + CHR$(34) + scale_src$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "view_rotate" + CHR$(34) + ":" + view_rot$
         out$ = out$ + "," + CHR$(34) + "room_count" + CHR$(34) + ":" + rooms$ + "}"
         i% = i% + 1
     WEND
@@ -2998,7 +3185,7 @@ PROCEDURE API_ListFloormapSections(session_token$, building_id$) AS STRING
 END PROCEDURE
 
 PROCEDURE API_SaveFloormapScale(session_token$, section_id$, metres_per_norm_unit$, scale_ratio$, scale_source$, scale_aspect_yx$) AS STRING
-    DIM sql$, rid%, t$, username$, is_eng$, sec_id$, mpu$, ratio$, src$, aspect$, aspect_sql$
+    DIM sql$, rid%, t$, username$, is_eng$, sec_id$, mpu$, ratio$, src$, aspect$, aspect_sql$, out$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -3059,17 +3246,21 @@ PROCEDURE API_SaveFloormapScale(session_token$, section_id$, metres_per_norm_uni
         aspect$ = "1"
     END IF
 
-    REM area_m2 = area_norm * mpu^2 * aspect; perimeter approx from norm (client recomputes precisely)
-    sql$ = "UPDATE app_gevelwering.drawing_subsection SET area_m2 = ROUND((area_norm * (" + mpu$ + ") * (" + mpu$ + ") * (" + aspect$ + "))::numeric, 2), "
-    sql$ = sql$ + "perimeter_m = ROUND((perimeter_norm * (" + mpu$ + "))::numeric, 2), "
-    sql$ = sql$ + "metres_per_norm_unit = " + mpu$ + ", updated_at = now() "
-    sql$ = sql$ + "WHERE section_id = '" + sec_id$ + "'::uuid"
+    REM Volledige metrische herberekening (area/lengte/seal/VR/vlak + GA wissen)
+    sql$ = "SELECT app_gevelwering.fw_recompute_section_metrics('" + sec_id$ + "'::uuid)::text AS j"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
     IF rid% = -1 THEN
-        RETURN "ERROR: subsection recompute failed: " + POSTGRES_GET_ERROR$(g_conn%)
+        RETURN "ERROR: metrics recompute failed: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: metrics recompute failed"
+    END IF
+    out$ = POSTGRES_GET_BY_NAME$(rid%, 0, "j")
+    IF out$ = "" THEN
+        RETURN "ERROR: metrics recompute returned empty"
     END IF
 
-    RETURN "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "section_id" + CHR$(34) + ":" + CHR$(34) + sec_id$ + CHR$(34) + "," + CHR$(34) + "metres_per_norm_unit" + CHR$(34) + ":" + mpu$ + "," + CHR$(34) + "scale_aspect_yx" + CHR$(34) + ":" + aspect$ + "," + CHR$(34) + "scale_source" + CHR$(34) + ":" + CHR$(34) + src$ + CHR$(34) + "}"
+    RETURN out$
 END PROCEDURE
 
 ' ---------------------------------------------------------------------------

@@ -46,7 +46,7 @@ const DEFAULT_PROJECTS_ROOT = path.join(APP_ROOT, "data", "projecten");
 const LOGO_PATH = path.join(__dirname, "..", "public", "assets", "stilte-logo.jpg");
 const FIRM_NAME = "Stilte advies en meten";
 /** Bump when report HTML template changes — forces a new content hash vs old files. */
-const REPORT_TEMPLATE_VERSION = "2026-08-16-spectrum2-geluidbelasting";
+const REPORT_TEMPLATE_VERSION = "2026-08-24-kier-vr-sort";
 
 let cachedLogoDataUri = null;
 
@@ -107,6 +107,35 @@ function esc(s) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+/** VR 1, 2, 3A, 3B, 4 — numeric prefix first, then the rest of vr_nr. */
+function compareVrNr(a, b) {
+  const sa = String(a?.vr_nr || "").trim();
+  const sb = String(b?.vr_nr || "").trim();
+  const na = sa.match(/^(\d+)/);
+  const nb = sb.match(/^(\d+)/);
+  const ia = na ? Number(na[1]) : Number.POSITIVE_INFINITY;
+  const ib = nb ? Number(nb[1]) : Number.POSITIVE_INFINITY;
+  if (ia !== ib) return ia - ib;
+  return sa.localeCompare(sb, "nl", { numeric: true, sensitivity: "base" });
+}
+
+function isLengthVlak(v) {
+  return String(v?.quantity_kind || "") === "length";
+}
+
+function vlakOmschrijving(v) {
+  let name = String(v?.omschrijving || "").trim() || "Vlak";
+  if (isLengthVlak(v) && !/kier/i.test(name)) name += " · kierdichting";
+  return name;
+}
+
+function vlakQtyCell(v) {
+  if (isLengthVlak(v)) {
+    return `<td class="num">${esc(fmtNum(v.length_m, 2))} m</td>`;
+  }
+  return `<td class="num">${esc(fmtNum(v.area_m2, 2))}</td>`;
 }
 
 /** Strip volatile timestamp line so identical report data yields the same hash. */
@@ -298,6 +327,26 @@ async function loadReportModel(client, buildingId, variantId) {
         `SELECT v.id::text AS vlak_id,
                 v.omschrijving,
                 v.area_m2,
+                COALESCE(v.analysis->>'quantity_kind', 'area') AS quantity_kind,
+                CASE
+                  WHEN COALESCE(v.analysis->>'length_m', '') ~ '^-?\\d'
+                  THEN (v.analysis->>'length_m')::double precision
+                  WHEN COALESCE(v.analysis->>'quantity_kind', 'area') = 'length'
+                       AND (s.analysis->'seal'->>'length_m') ~ '^-?\\d'
+                  THEN ROUND(
+                    (s.analysis->'seal'->>'length_m')::numeric
+                    * GREATEST(
+                        1,
+                        CASE
+                          WHEN (s.analysis->>'repeat_count') ~ '^[0-9]+$'
+                          THEN (s.analysis->>'repeat_count')::int
+                          ELSE 1
+                        END
+                      ),
+                    2
+                  )::double precision
+                  ELSE NULL
+                END AS length_m,
                 COALESCE(v.orientatie, '') AS orientatie,
                 v.cl_db,
                 v.cg_db,
@@ -318,27 +367,36 @@ async function loadReportModel(client, buildingId, variantId) {
                 m.r_500_hz,
                 m.r_1000_hz,
                 m.r_2000_hz,
-                m.r_4000_hz,
-                COALESCE(m.spectrum_ok, false) AS spectrum_ok
+                m.r_4000_hz
          FROM app_gevelwering.vlak v
          LEFT JOIN app_gevelwering.drawing_subsection s
            ON s.id = v.facade_subsection_id
          LEFT JOIN LATERAL (
+           SELECT CASE
+             WHEN COALESCE(v.analysis->>'quantity_kind', 'area') = 'length'
+                  AND COALESCE(s.analysis->>'quantity_kind', '') IS DISTINCT FROM 'length'
+                  AND jsonb_typeof(s.analysis->'seal') = 'object'
+                  AND COALESCE(s.analysis->'seal'->>'enabled', '') IN ('true', 't', '1')
+             THEN s.analysis->'seal'
+             ELSE COALESCE(s.analysis, '{}'::jsonb)
+           END AS src
+         ) matsrc ON true
+         LEFT JOIN LATERAL (
            SELECT m.*
            FROM app_gevelwering.material m
            WHERE (
-             COALESCE(TRIM(s.analysis->>'material_id'), '')
+             COALESCE(TRIM(matsrc.src->>'material_id'), '')
                ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
-             AND m.id = TRIM(s.analysis->>'material_id')::uuid
+             AND m.id = TRIM(matsrc.src->>'material_id')::uuid
            )
            OR (
-             COALESCE(TRIM(s.analysis->>'catalog_id'), '') <> ''
-             AND m.catalog_id = TRIM(s.analysis->>'catalog_id')
+             COALESCE(TRIM(matsrc.src->>'catalog_id'), '') <> ''
+             AND m.catalog_id = TRIM(matsrc.src->>'catalog_id')
            )
            ORDER BY CASE
-             WHEN COALESCE(TRIM(s.analysis->>'material_id'), '')
+             WHEN COALESCE(TRIM(matsrc.src->>'material_id'), '')
                ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
-              AND m.id = TRIM(s.analysis->>'material_id')::uuid THEN 0
+              AND m.id = TRIM(matsrc.src->>'material_id')::uuid THEN 0
              ELSE 1
            END
            LIMIT 1
@@ -378,6 +436,8 @@ async function loadReportModel(client, buildingId, variantId) {
       });
     }
   }
+
+  vrs.sort(compareVrNr);
 
   return {
     building,
@@ -471,6 +531,7 @@ function dominantClCg(vlakken) {
   let best = null;
   let bestArea = -1;
   for (const v of vlakken || []) {
+    if (isLengthVlak(v)) continue;
     const a = Number(v.area_m2);
     if (!(a > bestArea)) continue;
     bestArea = a;
@@ -535,11 +596,13 @@ function renderReportHtml(model, opts) {
             : '<span class="missing">geen materiaal</span>';
           const cat = v.master_category
             ? `<div class="muted">${esc(v.master_category)}</div>`
-            : "";
+            : isLengthVlak(v)
+              ? `<div class="muted">kierdichting</div>`
+              : "";
           return `<tr>
-          <td>${esc(v.omschrijving)}${cat}</td>
+          <td>${esc(vlakOmschrijving(v))}${cat}</td>
           <td>${matLabel}</td>
-          <td class="num">${esc(fmtNum(v.area_m2, 2))}</td>
+          ${vlakQtyCell(v)}
           <td class="num">${esc(fmtNum(v.ra_dba, 1))}</td>
           <td class="num">${esc(fmtNum(v.rw_db, 0))}</td>
           ${spectrumBandCells(v)}
@@ -576,7 +639,7 @@ function renderReportHtml(model, opts) {
         <thead><tr>
           <th>Omschrijving</th>
           <th>Materiaal</th>
-          <th class="num">S [m²]</th>
+          <th class="num">S / l</th>
           <th class="num">RA</th>
           <th class="num">Rw</th>
           <th class="num">63</th>

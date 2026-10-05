@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Engineer-gebruikershandleiding — Geluidwering Gevels</title>
-  <link rel="stylesheet" href="/styles.css?v=manual" />
+  <title>Stilte advies en meten — Engineer-handleiding</title>
+  <link rel="stylesheet" href="/styles.css?v=logo-wordmark" />
 </head>
 <body class="manual-body">
   <a class="manual-skip" href="#manual-main">Ga naar inhoud</a>
@@ -12,9 +12,9 @@
   <div class="manual-shell">
     <aside class="manual-aside" aria-label="Navigatie handleiding">
       <div class="manual-aside-brand">
-        <img class="brand-logo" src="/assets/stilte-logo.jpg" alt="" width="44" height="44" />
+        <img class="brand-logo" src="/assets/stilte-logo.png" alt="Stilte advies en meten" width="200" height="76" />
         <div>
-          <p class="brand-name">Geluidwering Gevels</p>
+          <p class="brand-name">Stilte advies en meten</p>
           <p class="manual-aside-title">Engineer-handleiding</p>
         </div>
       </div>
@@ -39,7 +39,7 @@
           <li><a href="#tekeningen">4. Tekeningen beoordelen</a></li>
           <li><a href="#plattegrond">5. Plattegrond (VG / VR)</a></li>
           <li><a href="#gevel">6. Gevelcomponenten</a></li>
-          <li><a href="#materialen">7. Materialen</a></li>
+          <li><a href="#materialen">7. Materialen en Studio</a></li>
           <li><a href="#compositie">8. Compositie (+/−)</a></li>
           <li><a href="#ga">9. Berekening gevelwering (GA)</a></li>
           <li><a href="#varianten">10. Varianten vergelijken</a></li>
@@ -52,6 +52,7 @@
         <a href="/engineer.html">Engineer-review</a>
         · <a href="/floormap.html">Plattegrond</a>
         · <a href="/ga.html">GA-berekening</a>
+        · <a href="/materials.html">Materialen</a>
       </p>
     </aside>
 
@@ -59,8 +60,8 @@
       <header class="manual-header">
         <h1>Gebruikershandleiding voor engineers</h1>
         <p class="lede">
-          Praktische online handleiding voor tekeningreview, plattegrond, gevelmaterialen en
-          gevelweringberekening. Gebruik de inhoudsopgave of zoekbalk links.
+          Praktische online handleiding voor tekeningreview, plattegrond, materialen/Studio,
+          gevelcomponenten en gevelweringberekening. Gebruik de inhoudsopgave of zoekbalk links.
         </p>
       </header>
 
@@ -75,9 +76,13 @@
         <ul>
           <li><strong>Engineer-review</strong> — tekeningen beoordelen en secties markeren</li>
           <li><strong>Plattegrond / gevel</strong> — ruimten en gevelvlakken tekenen, schaal, materialen</li>
+          <li><strong>Materialen / Studio</strong> — gedeelde catalogus, opbouwtemplates, samengestelde concepten (admin)</li>
           <li><strong>GA-model</strong> — variant, VG/VR, vlakken, herberekenen en vergelijken</li>
         </ul>
-        <p class="hint">Demo-login: gebruiker <code>engineer</code>, wachtwoord <code>demo</code>.</p>
+        <p class="hint">
+          Demo: engineer <code>engineer</code>/<code>demo</code>; catalogusbeheer
+          <code>admin</code>/<code>demo</code>.
+        </p>
       </article>
 
       <article class="manual-section" id="inloggen" data-manual-section>
@@ -111,7 +116,9 @@
         <p class="hint">
           GA;k die je hebt berekend blijft na herstart zichtbaar (opgeslagen in de database). Na
           geometrie- of schaalwijziging op de plattegrond worden resultaten gewist — dan opnieuw
-          <strong>Herberekenen</strong> of <strong>Project opslaan</strong>.
+          <strong>Herberekenen</strong> of <strong>Project opslaan</strong>. Bij
+          <strong>Toepassen &amp; maten herberekenen</strong> (schaalpaneel) worden alle m²/m en
+          kierlengtes op die tekening opnieuw berekend.
         </p>
       </article>
 
@@ -119,15 +126,17 @@
         <h2>3. Werkvolgorde</h2>
         <ol>
           <li><strong>Tekeningen</strong> — reviewwachtrij, secties markeren, review afronden</li>
-          <li><strong>Plattegrond</strong> — FLOORMAP-sectie: VG/VR-ruimten tekenen, schaal zetten</li>
-          <li><strong>Gevel</strong> — componenten tekenen, materiaal toekennen, eventueel compositie</li>
-          <li><strong>Geluidsbelasting (Lb)</strong> — handmatig of later via NoiseLoad van de wegverkeer-app</li>
-          <li><strong>GA</strong> — variant instellen, VG/VR koppelen, vlakken, herberekenen</li>
+          <li><strong>Plattegrond</strong> — FLOORMAP: VG/VR-ruimten, schaal, <strong>geveloriëntaties + CL/Cg</strong> per windrichting</li>
+          <li><strong>Gevel</strong> — componenten tekenen, <strong>materiaal én oriëntatie</strong>, eventueel ×N / compositie / kierdichting</li>
+          <li><strong>Materialen / Studio</strong> (admin) — catalogus bijhouden, opbouwtemplates, samengestelde concepten publiceren</li>
+          <li><strong>Geluidsbelasting (Lb)</strong> — handmatig op de variant (of later via NoiseLoad van de wegverkeer-app)</li>
+          <li><strong>GA</strong> — variant, VG/VR koppelen, per oriëntatie materialen als vlakken tot 100% Stotaal, herberekenen</li>
           <li><strong>Vergelijken</strong> — optioneel: variant kopiëren en scenario’s naast elkaar zetten</li>
         </ol>
         <p class="hint">
-          Materiaal hoort bij de <em>gevelcomponent</em> op de plattegrond/geveltekening — niet bij
-          de GA-vlakstap. In GA zie je het materiaal alleen ter controle.
+          Materiaal en RA horen bij de <em>gevelcomponent</em> (geveltekening). In GA kies je
+          alleen nog welke complete componenten als vlak meetellen; CL/Cg komen uit de plattegrond
+          (read-only per oriëntatie).
         </p>
       </article>
 
@@ -158,16 +167,19 @@
         <ul>
           <li><strong>VG (verblijfsgebied)</strong> — groepering van ruimten (vaak zelfde VG-nummer op één vloer)</li>
           <li><strong>VR (verblijfsruimte)</strong> — één plattegrondruimte, later gekoppeld in GA</li>
+          <li><strong>Geveloriëntaties</strong> — welke windrichtingen (N…NW) deze VR heeft; verplicht bij opslaan</li>
+          <li><strong>CL / Cg</strong> — correcties per oriëntatie (dB); gaan mee naar GA;k en zijn daar niet meer te wijzigen</li>
         </ul>
         <h3>Werkwijze</h3>
         <ol>
           <li>Stel de <strong>schaal</strong> in (bekende lengte of meters per norm-eenheid).</li>
           <li>Teken gesloten ruimten; geef VG-nummer en VR-identificatie (bijv. <code>3A</code>).</li>
-          <li>Sla elke ruimte op. Orden de lijst met de pijltjes ▲ / ▼ indien nodig.</li>
+          <li>Open de opgeslagen ruimte in de lijst en vink de <strong>geveloriëntaties</strong> aan; vul per ori <strong>CL</strong> en <strong>Cg</strong> in.</li>
+          <li>Sla op. Orden de lijst met ▲ / ▼ indien nodig.</li>
         </ol>
         <p>
           Het vloeroppervlak volgt uit de geometrie. In GA vul je later hoogte (en dus volume) en
-          nagalmtijd T₀ in.
+          nagalmtijd T₀ in. Zonder oriëntaties op de plattegrond kun je in GA geen materialen kiezen.
         </p>
       </article>
 
@@ -175,48 +187,117 @@
         <h2>6. Gevelcomponenten</h2>
         <p>Op dezelfde floormap-omgeving, maar op een <strong>gevel-/doorsnede-sectie</strong>.</p>
         <ol>
-          <li>Teken gesloten contouren (oppervlak in m²) of lengte-elementen (m), afhankelijk van het type.</li>
-          <li>Koppel een <strong>VR-nummer</strong> zodat GA de juiste componenten vindt.</li>
-          <li>Herhaalde delen (bijv. meerdere glaspartijen): teken één contour, kies materiaal, daarna <strong>Kopie</strong> in de lijst of <strong>Dupliceer…</strong> / <kbd>Ctrl</kbd>+<kbd>D</kbd>. Kopieën komen rond het origineel; verplaats en pas aan. <kbd>Shift</kbd>+klik of Shift+Ctrl+D vraagt het aantal.</li>
-          <li>Ken een <strong>materiaal</strong> toe (zie volgende hoofdstuk).</li>
+          <li>Optioneel: <strong>Detailgebied</strong> (sleep een rechthoek, zoom 2×–4×) voor kleine onderdelen; de rechterlijst blijft zichtbaar.</li>
+          <li>Teken gesloten contouren (oppervlak in m²) of lengte-elementen (m).</li>
+          <li>Koppel <strong>VG/VR</strong> zodat GA de juiste componenten vindt.</li>
+          <li>Kies een <strong>geveloriëntatie</strong> op het component (N…NW) — verplicht om in GA kiesbaar te zijn.</li>
+          <li>Ken een <strong>materiaal</strong> toe (zie volgende hoofdstuk). Led: oranje = nog materiaal of ori ontbreekt; groen = klaar voor GA.</li>
+          <li>Optioneel <strong>×N</strong> (− / N× / + in de lijst): telt het component N keer mee in GA zonder N fysieke kopieën. Staat ×N op een samengesteld kozijn, dan geldt dat ook voor het glas in dat kozijn.</li>
+          <li>Herhaalde <em>fysieke</em> delen: <strong>Kopie</strong> of <strong>Dupliceer…</strong> / <kbd>Ctrl</kbd>+<kbd>D</kbd> (Shift vraagt het aantal). Gebruik óf fysieke kopieën óf ×N — niet beide voor hetzelfde.</li>
+          <li>Optioneel <strong>kierdichting</strong> op het (samengestelde) component — lengte uit de omtrek; hoort bij het ±-resultaat, niet bij vervangen broncontouren.</li>
           <li>Sla op met <strong>Component opslaan</strong> (actieve contour).</li>
         </ol>
         <p>
-          Componenten met hetzelfde materiaal kunnen later worden samengevoegd of via compositie
-          tot één netto vlak worden gemaakt.
+          Voor netto metselwerk e.d.: eerst compositie (±) — zie hoofdstuk 8. Glas blijft een
+          apart materiaal en blijft apart kiesbaar in GA.
         </p>
       </article>
 
       <article class="manual-section" id="materialen" data-manual-section>
-        <h2>7. Materialen</h2>
-        <h3>Catalogus</h3>
+        <h2>7. Materialen en Studio</h2>
         <p>
-          Alle materialen staan in één gedeelde catalogus (eenmalig gevuld vanuit DGMR catalogusGG,
-          daarna te onderhouden in de app). Beheer/zoeken via
-          <a href="/materials.html">Materiaalcatalogus</a> (admin) of via de link op de geveltekening.
+          Scherm: <a href="/materials.html">Materiaalcatalogus</a> (alleen <code>admin</code>).
+          Engineers kiezen gepubliceerde materialen op de <em>geveltekening</em>; beheer, templates
+          en samengestelde opbouwen gebeuren hier in twee tabbladen: <strong>Catalogus</strong> en
+          <strong>Studio</strong>.
         </p>
+
+        <h3>Gedeelde catalogus</h3>
+        <p>
+          Er is één runtime-catalogus (<code>app_gevelwering.material</code>), eenmalig gevuld uit
+          DGMR <em>catalogusGG</em> (id’s <code>D#####</code>) en daarna uitgebreid in de app
+          (<code>A#####</code>, bron <code>app</code>). GA en floormap lezen alleen deze tabel —
+          niet het interne <code>acoustic_catalog</code>-schema.
+        </p>
+        <ul>
+          <li><strong>Rubrieken 1–9</strong> — DGMR-indeling (steen, glas, daken, panelen, ventilatie, …).</li>
+          <li><strong>Rubriek 10 — Losse materialen</strong> — bouwstenen voor Studio-templates
+            (bekleding, isolatie, folie, …), los van een compleet DGMR-element.</li>
+          <li><strong>Opbouw</strong> in de lijst: <em>Enkellaags</em> (homogeen) of
+            <em>Samengesteld</em> (stapeling buiten→binnen).</li>
+        </ul>
+        <p class="hint">
+          Sommige DGMR-namen staan afgekapt in de database (PDF-tekstlaag, bijv.
+          <code>Unidek Aero met dak…</code>). Dat is geen UI-afkapping; in Studio/catalogus zie je
+          precies de opgeslagen <code>name</code>. Corrigeer desgewenst in de editor.
+        </p>
+
+        <h3>Tab Catalogus</h3>
+        <ol>
+          <li>Zoek op naam of catalogus-id; filter op rubriek / subrubriek.</li>
+          <li>Selecteer een rij (dubbelklik) om te bewerken: dikte, gewicht, R63–R4000, RA, Rw, C, Ctr, bron.</li>
+          <li><strong>Nieuw materiaal</strong> — catalogus-id en nr worden automatisch toegewezen
+            (<code>A#####</code>); filter-rubriek/subrubriek worden overgenomen als startwaarde.</li>
+          <li>Optioneel: toevoegen aan een <strong>favorieten-preset</strong> (projectsets voor snelle keuze op de gevel).</li>
+        </ol>
+        <p>
+          Vanuit de geveltekening: <strong>Materiaalcatalogus…</strong> / <strong>Nieuw materiaal…</strong>,
+          daarna <strong>Neem dit materiaal over in component</strong> om terug te keren met behoud
+          van het gevelteken-concept.
+        </p>
+
         <h3>Toekennen op de gevel</h3>
         <ol>
-          <li>Optioneel: kies snel uit <strong>Meest gebruikt</strong> (favorieten van dit project).</li>
-          <li>Of kies rubriek → subrubriek → materiaal uit de volle catalogus.</li>
+          <li>Optioneel: snelkiezer <strong>Meest gebruikt</strong> (favorieten van dit project).</li>
+          <li>Of rubriek → subrubriek → materiaal uit de volle catalogus.</li>
           <li>Sla het component op zodat RA en materiaal-id op de contour blijven staan.</li>
         </ol>
-        <h3>Favorieten en presets</h3>
         <p>
-          Met <strong>+ Meest gebruikt</strong> voeg je het geselecteerde materiaal toe aan dit project.
-          <strong>Preset opslaan…</strong> bewaart de huidige set onder een naam;
-          <strong>Preset laden…</strong> vervangt de favorieten van het project (na bevestiging).
+          <strong>+ Meest gebruikt</strong> voegt toe aan dit project.
+          Presets bewaren/laden een benoemde favorieten-set (laden vervangt de projectset na bevestiging).
         </p>
-        <h3>Nieuw materiaal</h3>
+
+        <h3>Tab Studio</h3>
         <p>
-          Via <strong>Nieuw materiaal…</strong> of <strong>Materiaalcatalogus…</strong> op de gevel
-          open je de volledige catalogus-editor (rubriek, subrubriek, dikte, spectra R63–4000, RA, Rw, …).
-          Na opslaan kun je het materiaal met <strong>Neem dit materiaal over in component</strong>
-          terugzetten op de geveltekening.
+          Studio is voor <em>samengestelde</em> constructies: overzicht, opbouwtemplates en een
+          assistent die per laag een spectrum/Rw previewt en als template of concept kan opslaan.
         </p>
+        <ul>
+          <li><strong>Overzicht</strong> — aantallen concepten, templates, koppelingen; vernieuwen laadt opnieuw.</li>
+          <li><strong>Homogeen vs samengesteld</strong> — telling over de runtime-catalogus
+            (opbouwfunctie, niet alleen acoustic_catalog-labels).</li>
+          <li><strong>Laatst toegevoegd</strong> — snelle link terug naar de catalogusregel.</li>
+          <li><strong>Opbouwtemplates</strong> — startsets per familie <em>dak</em> / <em>buitengevel</em> / <em>overig</em>,
+            altijd laag 1 = buitenzijde.</li>
+        </ul>
+
+        <h4>Belangrijke templates (dak)</h4>
+        <ul>
+          <li><strong>Hellend dak (pannen + regelwerk)</strong> — pannen, panlatten, tengels, spouw,
+            folie, dakbeschot, sporen + isolatie, damprem, binnenafwerking. Regelwerk: breedte / hoogte /
+            h.o.h.; φ en m″eq zijn <em>rekenwaarden</em> (read-only).</li>
+          <li><strong>Hellend dak (sandwichpaneel)</strong> — zelfde buitenschil, daarna één
+            <em>zelfdragend sandwichpaneel</em> (bijv. Unidek Aero-achtig). Geen aparte
+            sporen-isolatie / damprem / lining: die zitten in het paneel. Koppel een catalogusmateriaal
+            met <strong>fabrieks-R</strong> (niet massawet op wol alleen).</li>
+        </ul>
+
+        <h4>Assistent — lagen</h4>
+        <ol>
+          <li>Kies <strong>Bestaande template</strong> of <strong>Nieuwe template</strong>; zet familie en naam.</li>
+          <li>Per laag: soort + label. Zoek enkellaags materiaal op catalogus-id of naam (min. 2 tekens);
+            klik een treffer om te koppelen.</li>
+          <li><strong>Ventilerende spouw</strong> = lucht: alleen hoogte/dikte, geen materiaal of ρ.</li>
+          <li><strong>Regelwerk (framing)</strong> — geometrie; φ = b/a en m″eq volgen automatisch.</li>
+          <li><strong>Bereken spectrum / Rw</strong> — per laag methode (catalogus of massawet) + MSM-totaal.</li>
+          <li>Opslaan als template en/of concept. Vink <strong>Direct goedkeuren &amp; naar catalogus</strong>
+            aan om meteen een <code>A#####</code>-rij te maken (anders: Studio → Voorstellen → catalogus).</li>
+          <li>Daarna zoekbaar in de Catalogus-tab en op de geveltekening.</li>
+        </ol>
         <p class="hint">
-          Vanuit de catalogus kun je met <strong>Neem dit materiaal over in component</strong>
-          terugkeren naar de floormap met het gekozen materiaal (concept blijft bewaard).
+          QC-rapport en publicatie staan onderaan Studio. Engineers en GA gebruiken alleen gepubliceerde
+          <code>material</code>-rijen. Interne vlaggen (zoals «spectrum in orde») horen bij beheer —
+          niet in opdrachtgever-rapportage.
         </p>
       </article>
 
@@ -224,20 +305,22 @@
         <h2>8. Compositie (+/−)</h2>
         <p>
           Doel: meerdere contouren combineren tot één netto geveloppervlak met één materiaal
-          (bijv. gevelvlak minus kozijnen = metselwerk).
+          (bijv. gevelvlak minus kozijnen = metselwerk; kozijn minus glas = hout).
         </p>
         <ol>
-          <li>Teken en sla de broncomponenten op.</li>
-          <li>Selecteer minstens twee gesloten componenten.</li>
+          <li>Teken en sla de broncomponenten op (materiaal op bronnen mag later).</li>
+          <li>Selecteer minstens twee gesloten componenten in de lijst (checkbox).</li>
           <li>Het grootste oppervlak is de <strong>buitencontour (+)</strong>; overige moeten daar volledig binnen liggen.</li>
           <li>Zet per deel <strong>+</strong> (meenemen) of <strong>−</strong> (aftrekken).</li>
-          <li>Kies het materiaal voor het <em>resultaat</em>.</li>
+          <li>Kies oriëntatie en materiaal voor het <em>resultaat</em>.</li>
           <li>Klik <strong>Toepassen &amp; opslaan</strong> (niet «Component opslaan»).</li>
         </ol>
         <p>
-          Feedback staat onder de compositieknoppen. Bronnen met hetzelfde materiaal kunnen worden
-          vervangen door het compositieresultaat; andere materialen blijven beschikbaar voor een
-          volgende compositie op dezelfde buitencontour.
+          Feedback staat onder de compositieknoppen. Bronnen met hetzelfde materiaal (of zonder
+          materiaal) verdwijnen uit de GA-keuze; <strong>ander materiaal</strong> (bijv. glas)
+          blijft kiesbaar. Zet kierdichting en ×N op het <em>resultaat</em>, niet op vervangen
+          buitencontouren. Tip: snijd openingen ook uit de muur (<em>gevel − kozijn</em>), anders
+          tellen muur en openingen dubbel in Stotaal.
         </p>
       </article>
 
@@ -247,25 +330,35 @@
         <h3>Structuur</h3>
         <p>
           <strong>Variant</strong> → <strong>VG</strong> → <strong>VR</strong> (plattegrondruimte) →
-          <strong>vlak</strong> (gevelcomponent).
+          <strong>vlakken</strong> (gevelcomponenten met materiaal, per oriëntatie).
         </p>
         <h3>Stappen</h3>
         <ol>
-          <li>Open het project via <strong>Bestand → Openen…</strong> / Recent geopend (of project-id / wachtrij).</li>
+          <li>Open het project via <strong>Bestand → Openen…</strong> / Recent (of project-id / wachtrij).</li>
           <li>Maak of selecteer een <strong>variant</strong>: omschrijving, gebruiksfunctie, Lb [dB], spectrum.</li>
           <li>Koppel een vrije plattegrondruimte als nieuw VG (+ eerste VR), of voeg een VR toe aan een bestaand VG.</li>
-          <li>Selecteer de VR; voeg <strong>vlakken</strong> toe door gevelcomponenten te kiezen.</li>
-          <li>Stel op het vlak <strong>oriëntatie</strong>, <strong>CL</strong> en <strong>Cg</strong> in
-            (niet op het catalogusmateriaal); klik <strong>Opslaan &amp; herberekenen</strong> of
-            <strong>Herberekenen GA / GA;k</strong>.</li>
-          <li>Aan het eind van een werksessie: <strong>Bestand → Project opslaan</strong> om alle VR-resultaten te checkpointen.</li>
+          <li>Selecteer de VR; vul hoogte en T₀ bij de VR-gegevens.</li>
+          <li>
+            Bij <strong>Vlakken</strong>:
+            <ul>
+              <li><strong>Geveloriëntatie</strong> — listbox met alleen windrichtingen van de plattegrond.
+                Zonder gekoppeld materiaal: «nog niet gespecificeerd».</li>
+              <li><strong>2. Gevelcomponent materiaal</strong> — nog niet gekoppelde complete componenten
+                voor die oriëntatie (materiaal + ori op de geveltekening vereist). Zijn ze allemaal
+                toebedeeld: lege lijst met die status.</li>
+              <li><strong>Toegevoegde vlakken</strong> — scrollbox met vastgelegde vlakken (per ori);
+                klik een regel om te bewerken of te verwijderen.</li>
+            </ul>
+          </li>
+          <li>Vul Stotaal tot <strong>100%</strong> (som deeloppervlakten = geveloppervlak). Zonder 100% geen berekening.</li>
+          <li>Klik <strong>Herberekenen GA / GA;k</strong> of sla een bewerkt vlak op.</li>
+          <li>Aan het eind van een sessie: <strong>Bestand → Project opslaan</strong> om alle VR-resultaten te checkpointen.</li>
         </ol>
         <p>
-          <strong>Materiaal / RA</strong> horen bij de gevelcomponent (geveltekening).
-          <strong>Oriëntatie, CL en Cg</strong> horen bij het vlak. CL en Cg van het grootste
-          geveloppervlak worden alleen opgeteld bij de berekende <strong>GA;k</strong>
-          (niet in R′ / D<sub>2m,nT</sub> / GA). Tijdens typen zie je een live preview; permanente
-          resultaten worden bij herberekenen opgeslagen.
+          <strong>Materiaal / RA</strong> staan op de geveltekening (niet te wijzigen in GA).
+          <strong>Oriëntatie, CL en Cg</strong> komen uit de plattegrond en zijn in GA read-only.
+          CL/Cg van het grootste geveloppervlak tellen alleen mee bij <strong>GA;k</strong>
+          (niet in R′ / D<sub>2m,nT</sub> / GA).
         </p>
         <p class="hint">
           Spectrum op de variant is vooralsnog vooral ter weergave/export; de rekenkern gebruikt
@@ -276,15 +369,16 @@
       <article class="manual-section" id="varianten" data-manual-section>
         <h2>10. Varianten vergelijken</h2>
         <p>
-          Een <strong>variant</strong> is een scenario (Lb, functie, eventueel andere CL/constructie).
+          Een <strong>variant</strong> is een scenario (Lb, functie, eventueel andere constructie).
           VG/VR zijn de geometrie; die wordt bij <strong>Kopieer variant</strong> meegekopieerd
-          (deep clone).
+          (deep clone). CL/Cg wijzigen doe je op de <em>plattegrond</em> (per oriëntatie), niet
+          per variant in GA.
         </p>
         <h3>Kopieëren</h3>
         <ol>
           <li>Selecteer de bronvariant.</li>
           <li>Klik <strong>Kopieer variant</strong>.</li>
-          <li>De kopie opent met dezelfde ruimten en vlakken; wijzig daarna Lb of CL onafhankelijk.</li>
+          <li>De kopie opent met dezelfde ruimten en vlakken; wijzig daarna Lb of materialen/ori’s onafhankelijk.</li>
         </ol>
         <h3>Vergelijken</h3>
         <ol>
@@ -314,7 +408,8 @@
           <li>Onderwijs / kinderopvang (en Wgh-onderwijs): <strong>28 dB</strong></li>
         </ul>
         <p>
-          Vereiste GA;k ≈ Lb − grens. Pas Lb of de constructie (materiaal/CL) aan tot de toets groen is.
+          Vereiste GA;k ≈ Lb − grens. Pas Lb of de constructie (materiaal op de gevel / CL–Cg op de
+          plattegrond) aan tot de toets groen is.
         </p>
       </article>
 
@@ -327,19 +422,52 @@
             gebruik een gekopieerde variant. Ruimten die alleen in een andere variant zitten, blijven
             “vrij” voor deze variant.
           </dd>
+          <dt>Geen materialen in «2. Gevelcomponent»</dt>
+          <dd>
+            Kies eerst een oriëntatie in de listbox. Op de geveltekening moeten componenten
+            <em>materiaal én oriëntatie</em> hebben (groene led). Zonder ori blijven ze oranje en
+            niet kiesbaar. Zijn alle materialen voor die ori al toebedeeld: zie de scrollbox
+            «Toegevoegde vlakken».
+          </dd>
+          <dt>Stotaal komt niet op 100% / te hoog</dt>
+          <dd>
+            Deeloppervlakten moeten optellen tot het geveloppervlak. Openingen (kozijn/glas) die
+            nog in de muurcontour zitten zonder ± (<em>gevel − kozijn</em>) tellen dubbel — snijd
+            die eerst uit op de geveltekening. Bij ×N op een kozijn: zorg dat de muur evenveel
+            openingen aftrekt (of gebruik ×N consequent).
+          </dd>
           <dt>Berekening lukt niet / geen RA</dt>
           <dd>
-            Koppel op de geveltekening een materiaal met RA aan elk vlak. Compositieresultaten
-            moeten een materiaal op het resultaat hebben.
+            Koppel op de geveltekening een materiaal met RA. Compositieresultaten moeten een
+            materiaal op het resultaat hebben. Zonder 100% Stotaal start de berekening niet.
           </dd>
           <dt>Vergelijking toont streepjes</dt>
           <dd>
             Herbereken de VR’s in elke variant zodat GA/GA;k zijn opgeslagen, of kopieer een variant
             die al resultaten had.
           </dd>
-          <dt>Materiaal wijzigen in GA lukt niet</dt>
+          <dt>Materiaal of CL wijzigen in GA lukt niet</dt>
           <dd>
-            Dat is bewust: pas materiaal op de floormap/gevel aan, daarna opnieuw vlakken laden in GA.
+            Bewust: pas materiaal op de geveltekening aan; pas CL/Cg en oriëntaties op de
+            <em>plattegrondruimte</em> aan. Herlaad daarna de VR in GA.
+          </dd>
+          <dt>Naam in catalogus eindigt op «…» (bijv. Unidek Aero met dak…)</dt>
+          <dd>
+            Staat zo in de database (afgekorte DGMR-PDF-tekst), niet door het scherm. Corrigeer de
+            naam in <a href="/materials.html">Materiaalcatalogus</a> (admin) indien nodig. Vollediger
+            varianten staan soms ook onder andere bronregels (legacy GL.cat).
+          </dd>
+          <dt>Studio: lege zoekregels bij materiaal</dt>
+          <dd>
+            Trefferlijst moet catalogus-id + naam tonen. Hard refresh na een UI-update. Zoek
+            enkellaags materialen; samengestelde elementen verschijnen niet in de laag-zoeker.
+          </dd>
+          <dt>Schaal bleek onjuist / maten kloppen niet</dt>
+          <dd>
+            Op de plattegrond of gevel: <strong>Schaal opnieuw kalibreren</strong>, twee punten,
+            lengte in mm, daarna <strong>Toepassen &amp; maten herberekenen</strong>. Alle m²/m en
+            kierlengtes op die tekening worden bijgewerkt; GA moet opnieuw
+            <strong>Herberekenen</strong>.
           </dd>
           <dt>Sessie verlopen</dt>
           <dd>Log opnieuw in. Niet-opgeslagen tekenwerk kan verloren gaan — sla regelmatig op.</dd>
@@ -356,6 +484,6 @@
     </main>
   </div>
 
-  <script type="module" src="/handleiding.js?v=ui-nl"></script>
+  <script type="module" src="/handleiding.js?v=materials-studio"></script>
 </body>
 </html>

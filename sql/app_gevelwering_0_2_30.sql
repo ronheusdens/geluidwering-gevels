@@ -547,7 +547,7 @@ BEGIN
 
   v_label := left(coalesce(nullif(btrim(p_payload ->> 'label'), ''), 'Room'), 200);
   v_level_hint := upper(coalesce(nullif(btrim(p_payload ->> 'level_hint'), ''), 'OTHER'));
-  IF v_level_hint NOT IN ('GROUND', 'FIRST', 'SECOND', 'THIRD', 'ROOF', 'OTHER') THEN
+  IF v_level_hint NOT IN ('SOUTERRAIN', 'GROUND', 'BEL_ETAGE', 'FIRST', 'SECOND', 'THIRD', 'ROOF', 'OTHER') THEN
     v_level_hint := 'OTHER';
   END IF;
 
@@ -634,19 +634,22 @@ BEGIN
     RAISE EXCEPTION 'VG and VR numbers are required for floormap rooms';
   END IF;
 
-  IF v_sec.region_kind = 'FLOORMAP' AND v_vr_nr IS NOT NULL THEN
+  -- Uniek is de combinatie VG+VR (zelfde VR in een andere VG mag).
+  IF v_sec.region_kind = 'FLOORMAP' AND v_vg_nr IS NOT NULL AND v_vr_nr IS NOT NULL THEN
     SELECT s.id::text
     INTO v_dup_id
     FROM app_gevelwering.drawing_subsection s
     JOIN app_gevelwering.drawing_region r ON r.id = s.section_id
     WHERE s.building_id = v_sec.building_id
+      AND s.vg_nr IS NOT NULL
       AND s.vr_nr IS NOT NULL
+      AND s.vg_nr = v_vg_nr
       AND lower(s.vr_nr) = lower(v_vr_nr)
       AND r.region_kind = 'FLOORMAP'
       AND (v_subsection_id IS NULL OR s.id <> v_subsection_id)
     LIMIT 1;
     IF v_dup_id IS NOT NULL THEN
-      RAISE EXCEPTION 'VR number already used on another room in this project'
+      RAISE EXCEPTION 'VG/VR combination already used on another room in this project'
         USING ERRCODE = '23505';
     END IF;
   END IF;
@@ -881,6 +884,6 @@ BEGIN
   );
 EXCEPTION
   WHEN unique_violation THEN
-    RAISE EXCEPTION 'VR number already used on another room in this project';
+    RAISE EXCEPTION 'VG/VR combination already used on another room in this project';
 END;
 $$;

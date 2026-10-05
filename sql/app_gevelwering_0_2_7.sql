@@ -2,8 +2,18 @@
 -- Engineer role, drawing review metadata, façade/section region crops
 -- Requires 0.2.6 applied first. See app-gevelwering-postgres-schema.md
 
-ALTER TABLE app_gevelwering.service_user
-  ADD COLUMN IF NOT EXISTS is_engineer boolean NOT NULL DEFAULT false;
+-- Skipped once service_user is the Stilte identity view.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'app_gevelwering' AND c.relname = 'service_user' AND c.relkind = 'r'
+  ) THEN
+    ALTER TABLE app_gevelwering.service_user
+      ADD COLUMN IF NOT EXISTS is_engineer boolean NOT NULL DEFAULT false;
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS app_gevelwering.drawing_review (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),

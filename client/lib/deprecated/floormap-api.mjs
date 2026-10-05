@@ -840,25 +840,27 @@ export async function handleFloormapSubsectionSave(req, res) {
       return;
     }
 
-    // VR must be unique among floormap rooms in a building; façade/section
-    // components may share a VR (same verblijfsruimte) for later GA insulation.
-    if (sec.region_kind === "FLOORMAP" && vrNr != null) {
+    // VG+VR must be unique among floormap rooms; same VR in another VG is OK.
+    // Façade/section components may share a VR for later GA insulation.
+    if (sec.region_kind === "FLOORMAP" && vgNr != null && vrNr != null) {
       const { rows: dupRows } = await client.query(
         `SELECT s.id::text AS id
          FROM app_gevelwering.drawing_subsection s
          JOIN app_gevelwering.drawing_region r ON r.id = s.section_id
          WHERE s.building_id = $1::uuid
+           AND s.vg_nr IS NOT NULL
            AND s.vr_nr IS NOT NULL
-           AND lower(s.vr_nr) = lower($2)
+           AND s.vg_nr = $2::int
+           AND lower(s.vr_nr) = lower($3)
            AND r.region_kind = 'FLOORMAP'
-           AND ($3::uuid IS NULL OR s.id <> $3::uuid)
+           AND ($4::uuid IS NULL OR s.id <> $4::uuid)
          LIMIT 1`,
-        [sec.building_id, vrNr, subsectionId || null],
+        [sec.building_id, vgNr, vrNr, subsectionId || null],
       );
       if (dupRows.length > 0) {
         json(req, res, 409, {
           ok: false,
-          error: "VR number already used on another room in this project",
+          error: "VG/VR combination already used on another room in this project",
         });
         return;
       }
@@ -1117,7 +1119,7 @@ export async function handleFloormapSubsectionSave(req, res) {
     });
   } catch (err) {
     if (err && typeof err === "object" && err.code === "23505") {
-      json(req, res, 409, { ok: false, error: "VR number already used on another room in this project" });
+      json(req, res, 409, { ok: false, error: "VG/VR combination already used on another room in this project" });
       return;
     }
     console.error("floormap subsection save failed:", err);
@@ -1282,7 +1284,7 @@ export async function handleFloormapSubsectionsReorder(req, res) {
   }
 }
 
-/** GET /api/floormap/material-categories — GG rubrieken 1–9 (+ optional subrubrieken) */
+/** GET /api/floormap/material-categories — GG rubrieken 1–10 (+ optional subrubrieken) */
 /** @deprecated Phase 4 — prefer API_ListMaterialCategories via WSS (client/src/bpp-api.ts). */
 export async function handleFloormapMaterialCategoriesGet(req, res, url) {
   if (requireHttpsOrReject(req, res)) return;
@@ -1518,8 +1520,8 @@ export async function handleFloormapMaterialCreate(req, res) {
     json(req, res, 400, { ok: false, error: "ra_dba must be between 0 and 100" });
     return;
   }
-  if (!Number.isInteger(rubriekNr) || rubriekNr < 1 || rubriekNr > 9) {
-    json(req, res, 400, { ok: false, error: "rubriek_nr must be 1–9" });
+  if (!Number.isInteger(rubriekNr) || rubriekNr < 1 || rubriekNr > 10) {
+    json(req, res, 400, { ok: false, error: "rubriek_nr must be 1–10" });
     return;
   }
   if (subsectionId && !UUID_RE.test(subsectionId)) {
@@ -1985,79 +1987,12 @@ export async function handleFloormapScaleSave(req, res) {
     }
     const storedAspect = normalizeAspectYx(rows[0].scale_aspect_yx ?? aspect ?? 1);
 
-    const { rows: subs } = await client.query(
-      `SELECT id::text AS id, points, analysis,
-              COALESCE((analysis->>'quantity_kind'), '') AS quantity_kind,
-              COALESCE((analysis->>'open_path'), 'false') AS open_path
-       FROM app_gevelwering.drawing_subsection
-       WHERE section_id = $1::uuid`,
+    const { rows: recomputed } = await client.query(
+      `SELECT app_gevelwering.fw_recompute_section_metrics($1::uuid) AS j`,
       [sectionId],
     );
-
-    for (const sub of subs) {
-      const pts = Array.isArray(sub.points) ? sub.points : [];
-      const analysis =
-        sub.analysis && typeof sub.analysis === "object" && !Array.isArray(sub.analysis)
-          ? sub.analysis
-          : {};
-      const holes = normalizeHoles(analysis.holes);
-      const openPath =
-        String(sub.open_path).toLowerCase() === "true" ||
-        analysis.open_path === true ||
-        (sub.quantity_kind === "length" &&
-          pts.length >= 2 &&
-          Math.hypot(
-            Number(pts[0].x) - Number(pts[pts.length - 1].x),
-            Number(pts[0].y) - Number(pts[pts.length - 1].y),
-          ) > 1e-6);
-      const areaNorm = openPath || sub.quantity_kind === "length" ? 0 : netAreaNorm(pts, holes);
-      const periNorm = openPath ? openPolylineLength(pts) : polylinePerimeter(pts);
-      const areaM2 =
-        areaNorm > 0 ? Math.round(scaledAreaM2(areaNorm, mpu, storedAspect) * 100) / 100 : null;
-      const periM =
-        pts.length >= 2
-          ? Math.round(scaledPathLength(pts, mpu, storedAspect, !openPath) * 100) / 100
-          : Math.round(periNorm * mpu * 100) / 100;
-      let nextAnalysis = analysis;
-      if (sub.quantity_kind === "length" || analysis.quantity_kind === "length") {
-        nextAnalysis = { ...analysis, length_m: periM, length_norm: periNorm };
-      }
-      await client.query(
-        `UPDATE app_gevelwering.drawing_subsection SET
-           metres_per_norm_unit = $2,
-           area_norm = $3,
-           perimeter_norm = $4,
-           area_m2 = $5,
-           perimeter_m = $6,
-           analysis = $7::jsonb,
-           updated_at = now()
-         WHERE id = $1::uuid`,
-        [
-          sub.id,
-          mpu,
-          areaNorm,
-          periNorm,
-          areaM2,
-          periM,
-          JSON.stringify(nextAnalysis),
-        ],
-      );
-    }
-
-    // Geometry/scale changed → invalidate stored GA results for linked VRs.
-    await client.query(
-      `UPDATE app_gevelwering.verblijfsruimte vr
-       SET ga_dba = NULL, lbi_dba = NULL, gak_dba = NULL, updated_at = now()
-       WHERE vr.subsection_id IN (
-         SELECT id FROM app_gevelwering.drawing_subsection WHERE section_id = $1::uuid
-       )
-       OR vr.id IN (
-         SELECT v.verblijfsruimte_id FROM app_gevelwering.vlak v
-         JOIN app_gevelwering.drawing_subsection s ON s.id = v.facade_subsection_id
-         WHERE s.section_id = $1::uuid
-       )`,
-      [sectionId],
-    );
+    const stats =
+      recomputed[0]?.j && typeof recomputed[0].j === "object" ? recomputed[0].j : {};
 
     await client.query("COMMIT");
     json(req, res, 200, {
@@ -2067,6 +2002,10 @@ export async function handleFloormapScaleSave(req, res) {
       scale_ratio: scaleRatio,
       scale_source: source,
       scale_aspect_yx: storedAspect,
+      subsections: Number(stats.subsections) || 0,
+      verblijfsruimten_vloer: Number(stats.verblijfsruimten_vloer) || 0,
+      vlakken: Number(stats.vlakken) || 0,
+      ga_cleared: Number(stats.ga_cleared) || 0,
     });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});

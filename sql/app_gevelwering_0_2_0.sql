@@ -25,8 +25,18 @@ CREATE TABLE IF NOT EXISTS app_gevelwering.login_session (
   CONSTRAINT login_session_token_unique UNIQUE (token)
 );
 
-CREATE INDEX IF NOT EXISTS login_session_user_idx ON app_gevelwering.login_session (user_id);
-CREATE INDEX IF NOT EXISTS login_session_token_idx ON app_gevelwering.login_session (token);
+-- Skipped once login_session is the Stilte identity view (indexes live in database stilte).
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'app_gevelwering' AND c.relname = 'login_session' AND c.relkind = 'r'
+  ) THEN
+    CREATE INDEX IF NOT EXISTS login_session_user_idx ON app_gevelwering.login_session (user_id);
+    CREATE INDEX IF NOT EXISTS login_session_token_idx ON app_gevelwering.login_session (token);
+  END IF;
+END $$;
 
 -- Link shared building records to the logged-in service user (nullable for pre-0.2 rows)
 ALTER TABLE app_gevelwering.customer

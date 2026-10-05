@@ -4,13 +4,22 @@
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-ALTER TABLE app_gevelwering.service_user
-  ADD COLUMN IF NOT EXISTS email text,
-  ADD COLUMN IF NOT EXISTS must_change_password boolean NOT NULL DEFAULT false;
-
-CREATE UNIQUE INDEX IF NOT EXISTS service_user_email_unique
-  ON app_gevelwering.service_user (lower(email))
-  WHERE email IS NOT NULL AND email <> '';
+-- Skipped once service_user is the Stilte identity view (columns and email uniqueness live in database stilte).
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'app_gevelwering' AND c.relname = 'service_user' AND c.relkind = 'r'
+  ) THEN
+    ALTER TABLE app_gevelwering.service_user
+      ADD COLUMN IF NOT EXISTS email text,
+      ADD COLUMN IF NOT EXISTS must_change_password boolean NOT NULL DEFAULT false;
+    CREATE UNIQUE INDEX IF NOT EXISTS service_user_email_unique
+      ON app_gevelwering.service_user (lower(email))
+      WHERE email IS NOT NULL AND email <> '';
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS app_gevelwering.access_request (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
