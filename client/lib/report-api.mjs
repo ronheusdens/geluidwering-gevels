@@ -34,6 +34,7 @@ import {
 } from "./http-security.mjs";
 import {
   resolveGeluidbelastingSpectrum,
+  resolveSpectrumForReport,
   spectrumDisplayLabel,
 } from "./geluidbelasting-spectra.mjs";
 
@@ -472,10 +473,10 @@ function spectrumBandCells(m) {
   return bands.map((b) => `<td class="num">${esc(fmtNum(b, 0))}</td>`).join("");
 }
 
-/** Tabel «Geluidbelasting» — voor Spectrum 2 (Atr) vaste octaafbanden + totaal. */
+/** Tabel «Geluidbelasting» — Spectrum 2 (Atr) geschaald naar project-Lb. */
 function renderGeluidbelastingSection(variant, lb) {
   const kind = variant.spectrum_kind;
-  const spec = resolveGeluidbelastingSpectrum(kind);
+  const spec = resolveSpectrumForReport(kind, lb);
   const label = spectrumDisplayLabel(kind);
   const fmt1 = (n) =>
     n == null || !Number.isFinite(Number(n))
@@ -492,12 +493,13 @@ function renderGeluidbelastingSection(variant, lb) {
   let note;
   if (spec) {
     bandCells = spec.levels_db.map((v) => `<td class="num">${esc(fmt1(v))}</td>`).join("");
-    // Toon vaste Atr-totaal; Lb van de variant staat in de variantbalk (kan gelijk zijn).
     totalCell = `<td class="num"><strong>${esc(fmt1(spec.total_db))}</strong></td>`;
-    note =
-      Number.isFinite(lb) && Math.abs(lb - spec.total_db) > 0.05
-        ? `<p class="note">Index-totaal Spectrum 2 (wegverkeer, Atr) = ${esc(fmt1(spec.total_db))} dB. Project-Lb op deze variant = ${esc(fmt1(lb))} dB.</p>`
-        : `<p class="note">Spectrum 2 — wegverkeer, index Atr: octaafbanden 63–2000 Hz + totaal ${esc(fmt1(spec.total_db))} dB.</p>`;
+    const base = resolveGeluidbelastingSpectrum(kind);
+    const shifted =
+      base && Number.isFinite(lb) && Math.abs(Number(lb) - Number(base.total_db)) > 0.05;
+    note = shifted
+      ? `<p class="note">Spectrum 2 (vorm Atr, referentie ${esc(fmt1(base.total_db))} dB) geschaald naar maximale gevelbelasting Lb = ${esc(fmt1(lb))} dB — octaafbanden +${esc(fmt1(Number(lb) - Number(base.total_db)))} dB.</p>`
+      : `<p class="note">Spectrum 2 — wegverkeer, index Atr: octaafbanden 63–2000 Hz + totaal ${esc(fmt1(spec.total_db))} dB.</p>`;
   } else {
     bandCells = [63, 125, 250, 500, 1000, 2000]
       .map(() => `<td class="num missing">—</td>`)
@@ -525,22 +527,6 @@ function renderGeluidbelastingSection(variant, lb) {
       </tbody>
     </table>
     ${note}`;
-}
-
-function dominantClCg(vlakken) {
-  let best = null;
-  let bestArea = -1;
-  for (const v of vlakken || []) {
-    if (isLengthVlak(v)) continue;
-    const a = Number(v.area_m2);
-    if (!(a > bestArea)) continue;
-    bestArea = a;
-    best = v;
-  }
-  return {
-    cl: best ? best.cl_db : null,
-    cg: best ? best.cg_db : null,
-  };
 }
 
 function renderReportHtml(model, opts) {
@@ -586,7 +572,6 @@ function renderReportHtml(model, opts) {
       const label = r.vr_nr ? `VR ${esc(r.vr_nr)} · ${esc(r.omschrijving)}` : esc(r.omschrijving);
       const oris = Array.isArray(r.expected_orientaties) ? r.expected_orientaties : [];
       const oriTxt = oris.length ? oris.join(", ") : "—";
-      const corr = dominantClCg(r.vlakken);
       const vlakRows = (r.vlakken || [])
         .map((v) => {
           const matLabel = v.material_name || v.catalog_id
@@ -634,7 +619,7 @@ function renderReportHtml(model, opts) {
         </div>
       </div>
       <p class="vlak-head">Vlakken / materialen</p>
-      <p class="corr">CL = ${esc(fmtNum(corr.cl, 1))} dB · Cg = ${esc(fmtNum(corr.cg, 1))} dB (maatgevend via grootste geveloppervlak → GA;k) · oriëntaties op VR-niveau</p>
+      <p class="corr">CL/Cg per geveloriëntatie (in D2m,nT) · oriëntaties op VR-niveau</p>
       <table class="spectrum">
         <thead><tr>
           <th>Omschrijving</th>
@@ -1219,6 +1204,65 @@ export async function handleReportPublish(req, res) {
       ...rows[0],
       building_label: access.label || "",
     });
+
+    // Mirror naar gedeelde Stilte-inbox (portaal + isolatie).
+    try {
+      const sharedExisting = await client.query(
+        `SELECT id::text AS inbox_id
+         FROM identity.customer_report_inbox
+         WHERE service = 'gevelwering' AND building_id = $1::uuid AND filename = $2`,
+        [buildingId, inboxFilename],
+      );
+      if (sharedExisting.rows[0]) {
+        await client.query(
+          `UPDATE identity.customer_report_inbox
+           SET owner_user_id = $2::uuid,
+               building_label = $3,
+               report_kind = $4,
+               version_label = $5,
+               content_hash = $6,
+               message = $7,
+               published_by = $8::uuid,
+               published_at = now(),
+               read_at = NULL,
+               downloaded_at = NULL,
+               email_requested_at = NULL
+           WHERE id = $1::uuid`,
+          [
+            sharedExisting.rows[0].inbox_id,
+            access.owner_user_id || null,
+            access.label || "",
+            reportKind,
+            versionLabel,
+            contentHash,
+            message,
+            session.user_id,
+          ],
+        );
+      } else {
+        await client.query(
+          `INSERT INTO identity.customer_report_inbox
+             (id, service, building_id, owner_user_id, building_label, filename,
+              report_kind, version_label, content_hash, message, published_by)
+           VALUES ($1::uuid, 'gevelwering', $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10::uuid)`,
+          [
+            rows[0].inbox_id,
+            buildingId,
+            access.owner_user_id || null,
+            access.label || "",
+            inboxFilename,
+            reportKind,
+            versionLabel,
+            contentHash,
+            message,
+            session.user_id,
+          ],
+        );
+      }
+    } catch (syncErr) {
+      console.warn("shared inbox sync failed:", syncErr);
+    }
+
     json(req, res, 201, {
       ok: true,
       inbox: item,

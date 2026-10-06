@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Stilte advies en meten — Tekeninganalyse</title>
-  <link rel="stylesheet" href="/styles.css?v=souterrain" />
+  <link rel="stylesheet" href="/styles.css?v=0.72-tools-sidebar" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body class="engineer-body">
@@ -171,35 +171,6 @@
               </div>
             </section>
 
-            <details class="tools-panel panel-inset" id="fm-tools-bar" open>
-              <summary class="tools-panel-toggle">
-                <strong>Gereedschap</strong>
-                <span class="tools-panel-chevron" aria-hidden="true"></span>
-              </summary>
-              <div class="tools-panel-main" id="fm-tools-main">
-                <div class="tools-panel-head">
-                  <div class="tools-mode-btns" role="group" aria-label="Tekengereedschap">
-                    <button type="button" class="secondary tool-mode-btn active" data-tool="off">Uit</button>
-                    <button type="button" class="secondary tool-mode-btn" data-tool="length">Lengte (m)</button>
-                    <button type="button" class="secondary tool-mode-btn" data-tool="room">Teken ruimte</button>
-                  </div>
-                  <button type="button" id="fm-tool-clear-btn" class="secondary">Wissen</button>
-                </div>
-                <div class="tools-readouts">
-                  <label class="discovery-inline">Lengte (m)
-                    <input id="fm-tool-length-mm" type="text" readonly value="—" />
-                  </label>
-                  <label class="discovery-inline">Omtrek (m)
-                    <input id="fm-tool-circ-mm" type="text" readonly value="—" />
-                  </label>
-                  <label class="discovery-inline">Oppervlakte (m²)
-                    <input id="fm-tool-area-mm2" type="text" readonly value="—" />
-                  </label>
-                </div>
-                <p class="hint" id="fm-tool-hint">Zet eerst de schaal, meet daarna een lengte of teken een ruimte — omtrek/oppervlakte volgen uit de polygoon.</p>
-              </div>
-            </details>
-
             <section class="discovery-dock hidden" id="fm-detail-dock">
               <div class="discovery-dock-top">
                 <strong>Detailgebied</strong>
@@ -317,6 +288,24 @@
                 </label>
                 <p class="hint" id="fm-component-ori-hint">Verplicht bij opslaan. De listbox onthoudt je laatste keuze — handig bij meerdere componenten achter elkaar.</p>
               </div>
+              <section class="copy-layout-bar panel-inset hidden" id="fm-copy-gevel-bar" aria-label="Gevelstack kopiëren">
+                <label class="inline-check">
+                  <input type="checkbox" id="fm-copy-gevel-cb" />
+                  Kopieer gevelstack van VR · ori
+                </label>
+                <div class="copy-layout-controls hidden" id="fm-copy-gevel-controls">
+                  <label class="block-label">Bron (tekening · VR · ori)
+                    <select id="fm-copy-gevel-source" aria-label="Bron VR en oriëntatie">
+                      <option value="">— kies bron —</option>
+                    </select>
+                  </label>
+                  <button type="button" id="fm-copy-gevel-btn" disabled>Stack naar open gevel</button>
+                  <p class="hint">
+                    Geen tekenen nodig. Neemt vormen + materialen + ± over en plaatst ze gecentreerd.
+                    Doel = VG/VR/ori hierboven. Daarna hoekpunten sleepbaar.
+                  </p>
+                </div>
+              </section>
               <div id="fm-expected-ori-block" class="fm-expected-ori-block hidden">
                 <p class="fm-expected-ori-label">Geveloriëntaties (VR) *</p>
                 <div class="fm-expected-ori-row" id="fm-expected-ori-row" role="group" aria-label="Verplichte geveloriëntaties van deze VR">
@@ -366,6 +355,29 @@
                   <button type="button" id="fm-open-mat-btn" class="secondary" title="Opent de volledige materiaalcatalogus">Materiaalcatalogus…</button>
                   <button type="button" id="fm-custom-mat-toggle" class="secondary" title="Nieuw materiaal toevoegen via de volledige catalogus">Nieuw materiaal…</button>
                 </div>
+                <section class="fm-replace-mat panel-inset" id="fm-replace-mat" aria-label="Materiaal vervangen in project">
+                  <label class="inline-check">
+                    <input type="checkbox" id="fm-replace-mat-cb" />
+                    Vervang materiaal in project
+                  </label>
+                  <div class="copy-layout-controls hidden" id="fm-replace-mat-controls">
+                    <label class="block-label">Van (nu in gebruik)
+                      <select id="fm-replace-mat-from" aria-label="Te vervangen materiaal">
+                        <option value="">— laden… —</option>
+                      </select>
+                    </label>
+                    <label class="block-label">Naar (vervanging)
+                      <select id="fm-replace-mat-to" aria-label="Nieuw materiaal">
+                        <option value="">— kies nieuw materiaal —</option>
+                      </select>
+                    </label>
+                    <p class="hint" id="fm-replace-mat-hint">
+                      Alle gevelcomponenten in dit project met «Van» krijgen «Naar».
+                      De Naar-lijst volgt dezelfde subrubriek als Van (bijv. Kozijnen → A00015 alu).
+                    </p>
+                    <button type="button" id="fm-replace-mat-btn" disabled>Vervangen…</button>
+                  </div>
+                </section>
                 <div id="fm-material-spectrum" class="fm-material-spectrum hidden" aria-live="polite">
                   <p class="fm-material-spectrum-title">R-spectrum (dB) · 125–2000&nbsp;Hz + totaal</p>
                   <div class="fm-spectrum-grid" role="group" aria-label="R-spectrum 125 tot 2000 Hz en totaal RA">
@@ -433,6 +445,35 @@
               </div>
             </fieldset>
 
+            <details class="tools-panel panel-inset fm-sidebar-tools" id="fm-tools-bar" open>
+              <summary class="tools-panel-toggle">
+                <strong>Gereedschap</strong>
+                <span class="tools-panel-chevron" aria-hidden="true"></span>
+              </summary>
+              <div class="tools-panel-main" id="fm-tools-main">
+                <div class="tools-panel-head">
+                  <div class="tools-mode-btns" role="group" aria-label="Tekengereedschap">
+                    <button type="button" class="secondary tool-mode-btn active" data-tool="off">Uit</button>
+                    <button type="button" class="secondary tool-mode-btn" data-tool="length">Lengte (m)</button>
+                    <button type="button" class="secondary tool-mode-btn" data-tool="room">Teken ruimte</button>
+                  </div>
+                  <button type="button" id="fm-tool-clear-btn" class="secondary">Wissen</button>
+                </div>
+                <div class="tools-readouts">
+                  <label class="discovery-inline">Lengte (m)
+                    <input id="fm-tool-length-mm" type="text" readonly value="—" />
+                  </label>
+                  <label class="discovery-inline">Omtrek (m)
+                    <input id="fm-tool-circ-mm" type="text" readonly value="—" />
+                  </label>
+                  <label class="discovery-inline">Oppervlakte (m²)
+                    <input id="fm-tool-area-mm2" type="text" readonly value="—" />
+                  </label>
+                </div>
+                <p class="hint" id="fm-tool-hint">Zet eerst de schaal, meet daarna een lengte of teken een ruimte — omtrek/oppervlakte volgen uit de polygoon.</p>
+              </div>
+            </details>
+
             <details id="fm-set-ops-fieldset" class="compose-panel tools-panel panel-inset hidden">
               <summary class="tools-panel-toggle">
                 <strong>Compositie (+/−)</strong>
@@ -457,7 +498,7 @@
                 </span>
                 <label class="saved-vr-filter hidden" for="fm-room-vr-filter">
                   <span class="saved-vr-filter-label">VR</span>
-                  <select id="fm-room-vr-filter" aria-label="Filter op verblijfsruimte">
+                  <select id="fm-room-vr-filter" aria-label="Filter op verblijfsruimte (alle plattegrond-VR’s)">
                     <option value="">Alle VR's</option>
                   </select>
                 </label>
@@ -470,6 +511,6 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/floormap.js?v=souterrain2"></script>
+  <script type="module" src="/floormap.js?v=0.72-tools-sidebar"></script>
 </body>
 </html>

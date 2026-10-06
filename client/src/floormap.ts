@@ -359,6 +359,24 @@ const copyLayoutRemapVgCb = document.getElementById(
   "fm-copy-layout-remap-vg",
 ) as HTMLInputElement | null;
 const copyLayoutBtn = document.getElementById("fm-copy-layout-btn") as HTMLButtonElement | null;
+const copyGevelBarEl = document.getElementById("fm-copy-gevel-bar") as HTMLElement | null;
+const copyGevelCb = document.getElementById("fm-copy-gevel-cb") as HTMLInputElement | null;
+const copyGevelControlsEl = document.getElementById("fm-copy-gevel-controls") as HTMLElement | null;
+const copyGevelSourceEl = document.getElementById("fm-copy-gevel-source") as HTMLSelectElement | null;
+const copyGevelBtn = document.getElementById("fm-copy-gevel-btn") as HTMLButtonElement | null;
+
+type GevelCopySource = {
+  key: string;
+  sectionId: string;
+  sectionLabel: string;
+  vr: string;
+  ori: string;
+  count: number;
+};
+
+/** Cached VR·ori stacks on façade drawings (for copy-bar). */
+let gevelCopySources: GevelCopySource[] | null = null;
+let gevelCopySourcesLoading = false;
 const toolClearBtn = document.getElementById("fm-tool-clear-btn") as HTMLButtonElement | null;
 const toolHintEl = document.getElementById("fm-tool-hint") as HTMLElement;
 const toolLengthMmEl = document.getElementById("fm-tool-length-mm") as HTMLInputElement;
@@ -406,6 +424,13 @@ const presetApplyBtn = document.getElementById("fm-preset-apply-btn") as HTMLBut
 const materialIdEl = document.getElementById("fm-material-id") as HTMLSelectElement | null;
 const openMatCatalogBtn = document.getElementById("fm-open-mat-btn") as HTMLButtonElement | null;
 const customMatToggleBtn = document.getElementById("fm-custom-mat-toggle") as HTMLButtonElement | null;
+const replaceMatEl = document.getElementById("fm-replace-mat") as HTMLElement | null;
+const replaceMatCb = document.getElementById("fm-replace-mat-cb") as HTMLInputElement | null;
+const replaceMatControlsEl = document.getElementById("fm-replace-mat-controls") as HTMLElement | null;
+const replaceMatFromEl = document.getElementById("fm-replace-mat-from") as HTMLSelectElement | null;
+const replaceMatToEl = document.getElementById("fm-replace-mat-to") as HTMLSelectElement | null;
+const replaceMatHintEl = document.getElementById("fm-replace-mat-hint") as HTMLElement | null;
+const replaceMatBtn = document.getElementById("fm-replace-mat-btn") as HTMLButtonElement | null;
 const materialSpectrumEl = document.getElementById("fm-material-spectrum") as HTMLElement | null;
 const materialR125El = document.getElementById("fm-r125") as HTMLElement | null;
 const materialR250El = document.getElementById("fm-r250") as HTMLElement | null;
@@ -516,7 +541,7 @@ function syncOriCorrRows(
   expectedOriCorrEl.classList.remove("hidden");
   const head = document.createElement("p");
   head.className = "fm-ori-corr-label";
-  head.textContent = "CL / Cg per oriëntatie (dB) — vast voor GA;k";
+  head.textContent = "CL / Cg per geveloriëntatie (dB) — gevelcorrectie in D2m,nT";
   expectedOriCorrEl.appendChild(head);
   for (const code of codes) {
     const fromPreserve = preserve?.[code];
@@ -756,6 +781,8 @@ function suggestVgNr(): number {
   for (let i = rooms.length - 1; i >= 0; i--) {
     if (rooms[i].vg_nr != null) return rooms[i].vg_nr as number;
   }
+  const filterVr = normalizeVrNr(roomListVrFilter) || normalizeVrNr(roomVrInput.value);
+  if (filterVr && buildingVrToVg.has(filterVr)) return buildingVrToVg.get(filterVr)!;
   return 1;
 }
 
@@ -881,6 +908,468 @@ async function collectProjectVgVrPairs(excludeSectionId?: string): Promise<{
     }
   }
   return { pairs, maxVg };
+}
+
+function invalidateGevelCopySources(): void {
+  gevelCopySources = null;
+}
+
+function parseGevelCopySourceKey(
+  raw: string,
+): { sectionId: string; vr: string; ori: string } | null {
+  const parts = (raw || "").split("|");
+  if (parts.length < 3) return null;
+  const sectionId = parts[0].trim();
+  const vr = normalizeVrNr(parts[1]);
+  const ori = normalizeOrientatieCode(parts[2]);
+  if (!sectionId || !vr || !ori) return null;
+  return { sectionId, vr, ori };
+}
+
+async function refreshGevelCopySources(): Promise<void> {
+  if (!auth()?.token || gevelCopySourcesLoading) return;
+  gevelCopySourcesLoading = true;
+  try {
+    const out: GevelCopySource[] = [];
+    for (const s of sections) {
+      if (isFloormapKind(s.region_kind)) continue;
+      if ((s.room_count || 0) < 1 && s.id !== activeSection?.id) continue;
+      let list: RoomSubsection[];
+      try {
+        list = s.id === activeSection?.id ? rooms : await fetchSectionRooms(s.id);
+      } catch {
+        continue;
+      }
+      const groups = new Map<string, number>();
+      for (const r of list) {
+        if (isLegacySealSibling(r.analysis)) continue;
+        const vr = normalizeVrNr(r.vr_nr);
+        const ori = normalizeOrientatieCode(r.analysis?.orientatie || "");
+        if (!vr || !ori || !(ORIENTATIE_CODES as readonly string[]).includes(ori)) continue;
+        const k = `${vr}|${ori}`;
+        groups.set(k, (groups.get(k) || 0) + 1);
+      }
+      for (const [k, count] of groups) {
+        const [vr, ori] = k.split("|");
+        out.push({
+          key: `${s.id}|${vr}|${ori}`,
+          sectionId: s.id,
+          sectionLabel: (s.label || "Gevel").trim() || "Gevel",
+          vr,
+          ori,
+          count,
+        });
+      }
+    }
+    out.sort((a, b) => {
+      const la = `${a.sectionLabel} · VR ${a.vr} · ${a.ori}`;
+      const lb = `${b.sectionLabel} · VR ${b.vr} · ${b.ori}`;
+      return la.localeCompare(lb, "nl");
+    });
+    gevelCopySources = out;
+  } finally {
+    gevelCopySourcesLoading = false;
+  }
+  syncCopyGevelUi();
+}
+
+function syncCopyGevelUi(): void {
+  if (!copyGevelBarEl) return;
+  const show = Boolean(activeSection && !isFloormapKind());
+  copyGevelBarEl.classList.toggle("hidden", !show);
+  if (!show) {
+    if (copyGevelCb) copyGevelCb.checked = false;
+    copyGevelControlsEl?.classList.add("hidden");
+    if (copyGevelBtn) copyGevelBtn.disabled = true;
+    return;
+  }
+  const enabled = Boolean(copyGevelCb?.checked);
+  copyGevelControlsEl?.classList.toggle("hidden", !enabled);
+  if (!copyGevelSourceEl) return;
+
+  if (enabled && gevelCopySources == null && !gevelCopySourcesLoading) {
+    void refreshGevelCopySources();
+  }
+
+  const prev = copyGevelSourceEl.value;
+  const sources = gevelCopySources || [];
+  copyGevelSourceEl.innerHTML = "";
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = gevelCopySourcesLoading
+    ? "— bronnen laden… —"
+    : sources.length
+      ? "— kies bron (VR · ori) —"
+      : "— geen VR · ori-stack gevonden —";
+  copyGevelSourceEl.appendChild(ph);
+  for (const s of sources) {
+    const opt = document.createElement("option");
+    opt.value = s.key;
+    opt.textContent = `${s.sectionLabel} · VR ${s.vr} · ${s.ori} · ${s.count} component${s.count === 1 ? "" : "en"}`;
+    copyGevelSourceEl.appendChild(opt);
+  }
+  if (prev && sources.some((s) => s.key === prev)) copyGevelSourceEl.value = prev;
+  if (copyGevelBtn) {
+    copyGevelBtn.disabled = !(enabled && copyGevelSourceEl.value);
+  }
+}
+
+function unionStackBBox(stack: RoomSubsection[]): {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+} {
+  let minX = 1;
+  let minY = 1;
+  let maxX = 0;
+  let maxY = 0;
+  let any = false;
+  const consider = (pts: Pt[]) => {
+    for (const p of pts) {
+      if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
+      any = true;
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+  };
+  for (const r of stack) {
+    consider(r.points || []);
+    if (Array.isArray(r.analysis?.holes)) {
+      for (const h of r.analysis!.holes!) consider(coerceRingPoints(h));
+    }
+  }
+  if (!any) return { minX: 0, minY: 0, maxX: 1, maxY: 1 };
+  return { minX, minY, maxX, maxY };
+}
+
+/** Topological order: compose-sources before ±-results. */
+function topoSortFacadeStack(items: RoomSubsection[]): RoomSubsection[] {
+  const byId = new Map(items.map((r) => [r.id, r]));
+  const remaining = new Set(items.map((r) => r.id));
+  const out: RoomSubsection[] = [];
+  while (remaining.size) {
+    let progress = false;
+    for (const id of [...remaining]) {
+      const r = byId.get(id)!;
+      const deps = isComposeResultRoom(r)
+        ? (r.analysis?.source_subsection_ids || []).filter((d) => byId.has(d))
+        : [];
+      if (deps.every((d) => !remaining.has(d))) {
+        out.push(r);
+        remaining.delete(id);
+        progress = true;
+      }
+    }
+    if (progress) continue;
+    for (const id of [...remaining]) {
+      const r = byId.get(id)!;
+      if (!isComposeResultRoom(r)) {
+        out.push(r);
+        remaining.delete(id);
+        progress = true;
+      }
+    }
+    if (progress) continue;
+    for (const id of [...remaining]) {
+      out.push(byId.get(id)!);
+      remaining.delete(id);
+    }
+  }
+  return out;
+}
+
+/**
+ * Collect VR·ori stack from a façade section, including compose sources
+ * referenced by ±-results even if they somehow lack ori.
+ */
+async function collectFacadeStackForCopy(
+  sectionId: string,
+  vr: string,
+  ori: string,
+): Promise<RoomSubsection[]> {
+  const list =
+    sectionId === activeSection?.id ? rooms.slice() : await fetchSectionRooms(sectionId);
+  const wantVr = normalizeVrNr(vr);
+  const wantOri = normalizeOrientatieCode(ori);
+  const primary = list.filter((r) => {
+    if (isLegacySealSibling(r.analysis)) return false;
+    if (normalizeVrNr(r.vr_nr) !== wantVr) return false;
+    return normalizeOrientatieCode(r.analysis?.orientatie || "") === wantOri;
+  });
+  if (!primary.length) return [];
+  const byId = new Map(list.map((r) => [r.id, r]));
+  const stack = new Map<string, RoomSubsection>();
+  for (const r of primary) stack.set(r.id, r);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const r of [...stack.values()]) {
+      if (!isComposeResultRoom(r)) continue;
+      for (const sid of r.analysis?.source_subsection_ids || []) {
+        if (!sid || stack.has(sid)) continue;
+        const src = byId.get(sid);
+        if (!src || isLegacySealSibling(src.analysis)) continue;
+        stack.set(sid, src);
+        grew = true;
+      }
+    }
+  }
+  return topoSortFacadeStack([...stack.values()]);
+}
+
+function analysisForFacadeStackClone(
+  src: SubsectionAnalysis | null | undefined,
+  idMap: Map<string, string>,
+  targetOri: string,
+  translatedHoles: Pt[][],
+): Record<string, unknown> {
+  const analysis: Record<string, unknown> = {};
+  if (src?.material_id) analysis.material_id = src.material_id;
+  if (src?.master_category) analysis.master_category = src.master_category;
+  if (src?.material_name) analysis.material_name = src.material_name;
+  if (src?.catalog_id) analysis.catalog_id = src.catalog_id;
+  if (src?.category) analysis.category = src.category;
+  if (src?.rubriek_nr != null) analysis.rubriek_nr = src.rubriek_nr;
+  if (src?.material_kind) analysis.material_kind = src.material_kind;
+  if (src?.repeat_count != null && Number(src.repeat_count) > 1) {
+    analysis.repeat_count = Math.max(1, Math.min(99, Math.round(Number(src.repeat_count))));
+  }
+  if (src?.quantity_kind === "length") {
+    analysis.quantity_kind = "length";
+    if (src.length_m != null) analysis.length_m = src.length_m;
+    if (src.length_norm != null) analysis.length_norm = src.length_norm;
+    if (src.open_path) analysis.open_path = true;
+  }
+  analysis.orientatie = targetOri;
+
+  const seal = readComponentSeal(src);
+  if (seal?.enabled) {
+    analysis.seal = {
+      enabled: true,
+      material_id: seal.material_id,
+      catalog_id: seal.catalog_id,
+      material_name: seal.material_name,
+      master_category: seal.master_category,
+      category: seal.category,
+      rubriek_nr: seal.rubriek_nr,
+      length_m: seal.length_m,
+    };
+  }
+
+  const op = parseBooleanOp(src?.boolean_op);
+  if (op === "compose" || op === "difference") {
+    analysis.boolean_op = op;
+    const srcIds = (src?.source_subsection_ids || [])
+      .map((id) => idMap.get(id) || "")
+      .filter(Boolean);
+    if (srcIds.length) analysis.source_subsection_ids = srcIds;
+    if (src?.outer_subsection_id) {
+      const mapped = idMap.get(src.outer_subsection_id);
+      if (mapped) analysis.outer_subsection_id = mapped;
+    }
+    if (src?.constituent_signs && typeof src.constituent_signs === "object") {
+      const signs: Record<string, string> = {};
+      for (const [oldId, sign] of Object.entries(src.constituent_signs)) {
+        const nid = idMap.get(oldId);
+        if (nid && (sign === "+" || sign === "-")) signs[nid] = sign;
+      }
+      if (Object.keys(signs).length) analysis.constituent_signs = signs;
+    }
+    if (Array.isArray(src?.source_labels) && src!.source_labels!.length) {
+      analysis.source_labels = src!.source_labels!.slice();
+    }
+  }
+  if (translatedHoles.length) analysis.holes = translatedHoles;
+  return analysis;
+}
+
+/**
+ * Exacte gevelstack (vormen + materialen + ±) van bron VR·ori → open gevel,
+ * gecentreerd in het crop. Doel-VG/VR/ori uit het formulier.
+ */
+async function copyGevelStackFromSource(sourceKey: string): Promise<void> {
+  if (!activeSection || !auth()?.token) {
+    setStatus("Geen geveltekening actief", "err");
+    return;
+  }
+  if (isFloormapKind()) {
+    setStatus("Gevelstack kopiëren kan alleen op een open geveltekening", "err");
+    return;
+  }
+  const parsed = parseGevelCopySourceKey(sourceKey);
+  if (!parsed) {
+    setStatus("Kies een bron VR · ori", "err");
+    return;
+  }
+
+  const targetVgRaw = roomVgInput.value.trim();
+  const targetVr = normalizeVrNr(roomVrInput.value);
+  const targetVg = targetVgRaw ? Number(targetVgRaw) : NaN;
+  const targetOri = readComponentOrientatie();
+  if (!Number.isFinite(targetVg) || targetVg <= 0 || !targetVr) {
+    setStatus("Vul rechts VG en VR in voor de doelstack", "err");
+    return;
+  }
+  if (!targetOri || !(ORIENTATIE_CODES as readonly string[]).includes(targetOri)) {
+    setStatus("Kies rechts de geveloriëntatie voor de doelstack", "err");
+    return;
+  }
+
+  if (
+    parsed.sectionId === activeSection.id &&
+    parsed.vr === targetVr &&
+    parsed.ori === targetOri
+  ) {
+    setStatus("Bron en doel zijn dezelfde VR · ori op deze gevel — kies een andere bron of ori", "err");
+    return;
+  }
+
+  setStatus("Bronstack laden…", "busy");
+  const stack = await collectFacadeStackForCopy(parsed.sectionId, parsed.vr, parsed.ori);
+  if (!stack.length) {
+    setStatus(`Geen componenten voor VR ${parsed.vr} · ${parsed.ori}`, "err");
+    return;
+  }
+
+  const conflict = rooms.filter((r) => {
+    if (isLegacySealSibling(r.analysis)) return false;
+    if (normalizeVrNr(r.vr_nr) !== targetVr) return false;
+    return normalizeOrientatieCode(r.analysis?.orientatie || "") === targetOri;
+  });
+  if (conflict.length) {
+    const ok = window.confirm(
+      `Op deze gevel staan al ${conflict.length} component(en) voor VR ${targetVr} · ${targetOri}.\n\n` +
+        `Toch ${stack.length} component(en) van VR ${parsed.vr} · ${parsed.ori} toevoegen (gecentreerd)?`,
+    );
+    if (!ok) {
+      setStatus("Kopiëren geannuleerd", "err");
+      return;
+    }
+  } else {
+    const srcSec = sections.find((s) => s.id === parsed.sectionId);
+    const ok = window.confirm(
+      `${stack.length} component(en) kopiëren van VR ${parsed.vr} · ${parsed.ori}` +
+        `${srcSec ? ` («${srcSec.label || "bron"}»)` : ""} ` +
+        `naar VG ${targetVg} · VR ${targetVr} · ${targetOri} op deze gevel (gecentreerd)?`,
+    );
+    if (!ok) {
+      setStatus("Kopiëren geannuleerd", "err");
+      return;
+    }
+  }
+
+  const box = unionStackBBox(stack);
+  const dx = 0.5 - (box.minX + box.maxX) / 2;
+  const dy = 0.5 - (box.minY + box.maxY) / 2;
+  const mpu = activeScaleMpu();
+  const idMap = new Map<string, string>();
+  let savedN = 0;
+  if (copyGevelBtn) copyGevelBtn.disabled = true;
+
+  try {
+    for (let i = 0; i < stack.length; i++) {
+      const r = stack[i];
+      setStatus(`Component ${i + 1}/${stack.length} kopiëren…`, "busy");
+      const asLength =
+        componentIsLengthQuantity(r) ||
+        r.analysis?.quantity_kind === "length" ||
+        isLengthQuantityRubriek(r.analysis?.rubriek_nr ?? r.analysis?.master_category);
+      const openPath = Boolean(asLength && r.analysis?.open_path);
+      const srcPoints = (r.points || []).map((p) => ({ ...p }));
+      const copyPoints = openPath
+        ? clampPath(srcPoints.map((p) => ({ x: p.x + dx, y: p.y + dy })))
+        : translateRing(srcPoints, dx, dy);
+      if (openPath) {
+        if (copyPoints.length < 2) {
+          throw new Error(`«${r.label}»: kierdichting heeft te weinig punten`);
+        }
+      } else if (copyPoints.length < 4) {
+        throw new Error(`«${r.label}»: polygon heeft te weinig punten`);
+      }
+
+      const holesSrc = asLength
+        ? []
+        : (Array.isArray(r.analysis?.holes) ? r.analysis!.holes! : [])
+            .map((h) => coerceRingPoints(h))
+            .filter((h) => h.length >= 3)
+            .map((h) => translateRing(h, dx, dy));
+
+      const analysis = analysisForFacadeStackClone(
+        r.analysis,
+        idMap,
+        targetOri,
+        holesSrc,
+      );
+      const body: Record<string, unknown> = {
+        section_id: activeSection.id,
+        label: r.label,
+        level_hint: r.level_hint || "OTHER",
+        vg_nr: targetVg,
+        vr_nr: targetVr,
+        points: copyPoints,
+        holes: holesSrc,
+        metres_per_norm_unit: mpu ?? undefined,
+        scale_aspect_yx: activeScaleAspect(),
+      };
+      if (openPath) body.open_path = true;
+      if (Object.keys(analysis).length) body.analysis = analysis;
+
+      const saved = await saveDrawingSubsection(body);
+      idMap.set(r.id, saved.subsection_id);
+      upsertOptimisticRoom({
+        id: saved.subsection_id,
+        section_id: activeSection.id,
+        label: r.label,
+        level_hint: r.level_hint || "OTHER",
+        vg_nr: targetVg,
+        vr_nr: targetVr,
+        points: copyPoints.map((p) => ({ ...p })),
+        area_m2: saved.area_m2 != null ? Number(saved.area_m2) : r.area_m2,
+        area_norm: saved.area_norm != null ? Number(saved.area_norm) : r.area_norm,
+        perimeter_m: saved.perimeter_m != null ? Number(saved.perimeter_m) : r.perimeter_m,
+        perimeter_norm: null,
+        metres_per_norm_unit: mpu,
+        analysis_status: "ok",
+        sort_order: rooms.length,
+        analysis: (body.analysis as SubsectionAnalysis | undefined) ?? null,
+      });
+      savedN += 1;
+    }
+
+    await loadRooms({ preserveOrder: true });
+    invalidateGevelCopySources();
+    try {
+      const fresh = await fetchFloormapSections(buildingId);
+      sections = fresh;
+    } catch {
+      if (activeSection) {
+        activeSection.room_count = rooms.length;
+        const idx = sections.findIndex((s) => s.id === activeSection!.id);
+        if (idx >= 0) sections[idx] = activeSection;
+      }
+    }
+    renderRoomList();
+    drawOverlay();
+    if (copyGevelCb) copyGevelCb.checked = false;
+    syncCopyGevelUi();
+    setStatus(
+      `${savedN} component(en) gekopieerd (VR ${parsed.vr} · ${parsed.ori} → VR ${targetVr} · ${targetOri}, gecentreerd). Sleep hoekpunten om bij te stellen.`,
+      "ok",
+    );
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+    try {
+      await loadRooms();
+    } catch {
+      /* keep partial */
+    }
+    renderRoomList();
+    drawOverlay();
+    syncCopyGevelUi();
+  }
 }
 
 function isSimpleLayoutRoom(r: RoomSubsection): boolean {
@@ -1129,6 +1618,7 @@ function syncWorkspaceLabels(kind?: string | null): void {
       : "Gevel: selecteer buitencontour (VR), stel filtergrootte in (grof → fijn), daarna Ontdek openingen — hi-res H/V-lijnen via server, fallback lokaal.";
   }
   syncCopyLayoutUi();
+  syncCopyGevelUi();
   if (markRoomLegendEl) markRoomLegendEl.textContent = cap;
   roomDrawBtn.textContent = `Teken ${n.singular}`;
   roomSaveBtn.textContent = "Opslaan";
@@ -1182,18 +1672,66 @@ function syncWorkspaceLabels(kind?: string | null): void {
     selectedSetIds.clear();
     constituentSigns.clear();
     booleanPreview = null;
+    projectMaterialUsages = null;
   } else {
     materialCategoriesLoaded = false;
     void ensureMaterialCategories();
   }
+  syncReplaceMaterialUi();
   renderComposeParts();
 }
 
 let roomListVrFilter = "";
+/** VR-nrs from plattegrond (and other gevels) so the filter lists all project VRs, not only this section. */
+let buildingVrCatalog: string[] = [];
+const buildingVrToVg = new Map<string, number>();
+
+async function refreshBuildingVrCatalog(): Promise<void> {
+  if (!auth()?.token || !buildingId) {
+    buildingVrCatalog = [];
+    buildingVrToVg.clear();
+    return;
+  }
+  const set = new Set<string>();
+  buildingVrToVg.clear();
+  const floormapSecs = sections.filter((s) => isFloormapKind(s.region_kind));
+  // Prefer plattegrond rooms as the canonical VG/VR list; fall back to all sections.
+  const targets = floormapSecs.length ? floormapSecs : sections;
+  for (const sec of targets) {
+    try {
+      const raw = bppPhase1Enabled()
+        ? (await bppListDrawingSubsections(invokeString, auth()!.token, sec.id)).subsections
+        : (
+            await apiGet<{
+              subsections: Array<{ vr_nr?: string | null; vg_nr?: number | null }>;
+            }>(`/api/floormap/subsections?section_id=${encodeURIComponent(sec.id)}`)
+          ).subsections;
+      for (const row of raw || []) {
+        const vr = normalizeVrNr(row.vr_nr);
+        if (!vr) continue;
+        set.add(vr);
+        if (row.vg_nr != null && Number.isFinite(Number(row.vg_nr)) && !buildingVrToVg.has(vr)) {
+          buildingVrToVg.set(vr, Number(row.vg_nr));
+        }
+      }
+    } catch (err) {
+      console.warn("building VR catalog: section failed", sec.id, err);
+    }
+  }
+  buildingVrCatalog = [...set].sort(compareVrNr);
+}
 
 function syncRoomListVrFilterOptions(items: RoomSubsection[]): void {
   if (!roomVrFilterEl) return;
-  const vrs = collectAvailableVrNrs(items);
+  const onSection = collectAvailableVrNrs(items);
+  const merged = new Set<string>([...buildingVrCatalog, ...onSection]);
+  // Also pick up VG hints from components on this section.
+  for (const r of items) {
+    const vr = normalizeVrNr(r.vr_nr);
+    if (!vr || r.vg_nr == null) continue;
+    if (!buildingVrToVg.has(vr)) buildingVrToVg.set(vr, Number(r.vg_nr));
+  }
+  const vrs = [...merged].sort(compareVrNr);
   const prev = roomListVrFilter;
   roomVrFilterEl.replaceChildren();
   const allOpt = document.createElement("option");
@@ -1203,7 +1741,10 @@ function syncRoomListVrFilterOptions(items: RoomSubsection[]): void {
   for (const vr of vrs) {
     const opt = document.createElement("option");
     opt.value = vr;
-    opt.textContent = `VR ${vr}`;
+    const onThis = onSection.includes(vr);
+    const vg = buildingVrToVg.get(vr);
+    const vgBit = vg != null ? ` · VG ${vg}` : "";
+    opt.textContent = onThis ? `VR ${vr}${vgBit}` : `VR ${vr}${vgBit} (nog niet op deze gevel)`;
     roomVrFilterEl.appendChild(opt);
   }
   roomListVrFilter = prev && vrs.includes(prev) ? prev : "";
@@ -1493,7 +2034,17 @@ function mergeAnalysisPreferPatch(
 ): SubsectionAnalysis | null | undefined {
   if (!patch) return server;
   const merged: SubsectionAnalysis = { ...(server || {}), ...patch };
-  if (!componentSealEnabled(patch)) delete merged.seal;
+  // Only drop seal when the patch explicitly clears it. A geometry/label patch that
+  // simply omits `seal` must keep the server (or prior) seal — otherwise the dock
+  // checkbox looks off and «Opslaan» wrongly removes kierdichting.
+  if (Object.prototype.hasOwnProperty.call(patch, "seal") && !componentSealEnabled(patch)) {
+    delete merged.seal;
+  } else if (
+    !Object.prototype.hasOwnProperty.call(patch, "seal") &&
+    componentSealEnabled(server)
+  ) {
+    merged.seal = server!.seal;
+  }
   if (Array.isArray(patch.holes)) merged.holes = patch.holes;
   else if (server?.holes) merged.holes = server.holes;
   return merged;
@@ -2166,7 +2717,23 @@ function measureDisplayPoints(): Pt[] {
   return pts;
 }
 
+/** Live polyline while drawing a component (committed corners + rubber-band cursor). */
+function pendingDrawDisplayPoints(): Pt[] | null {
+  if (!pendingRoom?.drawing || pendingRoom.closed) return null;
+  if (!pendingRoom.points.length) return null;
+  const pts = pendingRoom.points.map((p) => ({ ...p }));
+  if (pendingRoom.drawCursor) pts.push({ ...pendingRoom.drawCursor });
+  return pts;
+}
+
 function ringForMetrics(): { pts: Pt[]; closed: boolean } | null {
+  if (pendingRoom?.closed && pendingRoom.points.length >= 2) {
+    return { pts: pendingRoom.points, closed: true };
+  }
+  const drawing = pendingDrawDisplayPoints();
+  if (drawing && drawing.length >= 2) {
+    return { pts: drawing, closed: false };
+  }
   if (pendingRoom && pendingRoom.points.length >= 2) {
     return { pts: pendingRoom.points, closed: pendingRoom.closed };
   }
@@ -2189,6 +2756,16 @@ function updateMeasureReadouts(): void {
     const display = measureDisplayPoints();
     toolLengthMmEl.value =
       display.length >= 2 ? fmtMeasure(pathLengthM(display.slice(0, 2), mpu, false), 2) : "—";
+  } else if (pendingRoom?.drawing && !pendingRoom.closed) {
+    // Live segment length: last corner → cursor (helps place the next point accurately).
+    const pts = pendingDrawDisplayPoints();
+    if (pts && pts.length >= 2) {
+      const a = pts[pts.length - 2]!;
+      const b = pts[pts.length - 1]!;
+      toolLengthMmEl.value = fmtMeasure(pathLengthM([a, b], mpu, false), 2);
+    } else {
+      toolLengthMmEl.value = "—";
+    }
   } else {
     toolLengthMmEl.value = "—";
   }
@@ -2196,9 +2773,9 @@ function updateMeasureReadouts(): void {
   const ring = ringForMetrics();
   if (ring) {
     toolCircMmEl.value = fmtMeasure(pathLengthM(ring.pts, mpu, ring.closed), 2);
-    // Area for closed rooms, or provisional (as-if-closed) while drawing ≥3 vertices
+    // Area only when the polygon is closed (provisional open area is confusing while placing edges).
     toolAreaMm2El.value =
-      ring.pts.length >= 3 ? fmtMeasure(pathAreaM2(ring.pts, mpu), 2) : "—";
+      ring.closed && ring.pts.length >= 3 ? fmtMeasure(pathAreaM2(ring.pts, mpu), 2) : "—";
   } else {
     toolCircMmEl.value = "—";
     toolAreaMm2El.value = "—";
@@ -2215,8 +2792,8 @@ function updateToolHint(): void {
   if (pendingRoom?.drawing && !pendingRoom.closed) {
     toolHintEl.textContent =
       pendingRoom.points.length === 0
-        ? `Klik hoeken van de ${n.singular}. Omtrek wordt onderweg bijgewerkt; oppervlakte vanaf 3 punten.`
-        : `${pendingRoom.points.length} hoekpunt(en). Beweeg naar het startkruis (groen) en klik om te sluiten.`;
+        ? `Klik hoeken van de ${n.singular}. Lengte toont het actieve segment; omtrek loopt mee.`
+        : `${pendingRoom.points.length} hoekpunt(en). Lengte = huidig segment; sluit bij het startkruis (groen) voor oppervlakte.`;
     return;
   }
   if (pendingRoom?.closed) {
@@ -2832,16 +3409,26 @@ function syncKierSuggestUi(): void {
   const hasSeal = editing ? componentHasSeal(editing) : false;
   const sealAttr = editing ? readComponentSeal(editing.analysis) : null;
   const setSelected = Boolean(editing && selectedSetIds.has(editing.id));
-  const canToggle = Boolean(editing && (setSelected || pendingRoom?.editingId === editing.id));
+  // Saved component open for edit, OR a new closed polygon (intent applied on Opslaan).
+  const canToggle = Boolean(
+    (editing && (setSelected || pendingRoom?.editingId === editing.id)) ||
+      (!editing && pendingRoom?.closed && (pendingRoom.points.length || 0) >= 3),
+  );
+  const pendingIntent =
+    Boolean(kierSuggestCb?.dataset.userTouched === "1" && !editing && kierSuggestCb?.checked);
   if (kierSuggestCb && !kierToggleInFlight) {
-    kierSuggestCb.checked = hasSeal;
-    kierSuggestCb.disabled = !canToggle && !hasSeal;
+    if (!pendingIntent) {
+      kierSuggestCb.checked = hasSeal;
+      delete kierSuggestCb.dataset.userTouched;
+    }
+    kierSuggestCb.disabled = !canToggle && !hasSeal && !pendingIntent;
     kierSuggestCb.title = canToggle
-      ? "Kierdichting (omtrek) voor dit component — meestal op een samengesteld ±-resultaat"
+      ? editing
+        ? "Kierdichting (omtrek) voor dit component — meestal op een samengesteld ±-resultaat"
+        : "Kierdichting (omtrek) — wordt bij Opslaan op dit nieuwe vlak gezet"
       : hasSeal
         ? "Uitvinken zet kierdichting uit"
         : "Open of selecteer het component om kierdichting aan/uit te zetten";
-    delete kierSuggestCb.dataset.userTouched;
     const mid = sealAttr?.material_id || existingSealFor(editing?.id || "")?.analysis?.material_id;
     if (mid) renderKierMaterialOptions(mid);
   }
@@ -2866,9 +3453,15 @@ function syncKierSuggestUi(): void {
     if (hasSeal) {
       kierSuggestHintEl.textContent =
         `Kierdichting aan — vink uit om uit te zetten. Opslaan werkt de omtreklengte bij.${periBit}${typeBit}${composeHint}`;
+    } else if (pendingIntent) {
+      kierSuggestHintEl.textContent =
+        `Kierdichting aangevinkt — wordt bij Opslaan toegevoegd.${periBit}${typeBit}`;
     } else if (!canToggle) {
       kierSuggestHintEl.textContent =
         `Open of selecteer het component om kierdichting (omtrek) aan te zetten.${periBit}${composeHint}`;
+    } else if (!editing) {
+      kierSuggestHintEl.textContent =
+        `Optioneel. Vink aan vóór Opslaan om omtrek als kierdichting te koppelen (standaard ${DEFAULT_KIER_CATALOG_ID}).${periBit}${typeBit}`;
     } else {
       kierSuggestHintEl.textContent =
         `Optioneel kenmerk. Standaard ${DEFAULT_KIER_CATALOG_ID}. Lengtes van hetzelfde type worden opgeteld.${periBit}${typeBit}${composeHint}`;
@@ -3826,12 +4419,12 @@ async function savePendingRoom(): Promise<void> {
     setStatus("Kies een kierdichtingsmateriaal (rubriek 9)", "err");
     return;
   }
+  // New or existing closed area: dock checkbox (same as list «Kier» on saved rows).
   const wantSeal =
     !isFloormapKind() &&
     !kier &&
     Boolean(pendingRoom.closed) &&
-    Boolean(kierSuggestCb?.checked) &&
-    Boolean(pendingRoom.editingId);
+    Boolean(kierSuggestCb?.checked);
   if (wantSeal) {
     await ensureKierMaterials();
     if (!resolveKierSuggestMaterial()) {
@@ -3986,10 +4579,18 @@ async function savePendingRoom(): Promise<void> {
         : ` · kierdichting bijgewerkt${lenTxt}`;
       const afterSeal = rooms.find((r) => r.id === savedId);
       if (afterSeal) patched = { ...patched, analysis: afterSeal.analysis };
+      if (kierSuggestCb) delete kierSuggestCb.dataset.userTouched;
     } else if (
       editingId &&
-      (componentSealEnabled(savedRoomForSeal?.analysis) || existingSealFor(editingId))
+      !wantSeal &&
+      (componentSealEnabled(savedRoomForSeal?.analysis) ||
+        componentSealEnabled(
+          rooms.find((r) => r.id === editingId)?.analysis,
+        ) ||
+        existingSealFor(editingId))
     ) {
+      // Only strip seal when the dock checkbox is off (explicit). Do not treat a
+      // missing/stale local analysis as “user unchecked”.
       const removed = await removeSealForParent(editingId);
       if (removed) sealBit = " · kierdichting uit";
       const afterSeal = rooms.find((r) => r.id === savedId);
@@ -4702,6 +5303,15 @@ function updateBooleanPreview(): void {
     drawOverlay();
     return;
   }
+  // Open compose panel when multi-select is ready (panel defaults collapsed).
+  if (setOpsFieldset instanceof HTMLDetailsElement && !setOpsFieldset.open) {
+    setOpsFieldset.open = true;
+    try {
+      localStorage.setItem("app-gevelwering-compose-collapsed", "0");
+    } catch {
+      /* ignore */
+    }
+  }
   try {
     const selected = rooms.filter((r) => selectedSetIds.has(r.id));
     const { parts } = buildComposeParts(selected);
@@ -4980,7 +5590,513 @@ async function selectMaterialById(materialId: string, fromFavorite = false): Pro
   syncFavoriteButtons();
   syncPendingRoomButtons();
   updateMaterialQuantityHint();
+  fillReplaceToSelect(mat.material_id);
+  updateReplaceMaterialBtn();
   await applyMaterialToEditingComponent(mat);
+}
+
+type ProjectMaterialUsage = {
+  material_id: string;
+  catalog_id: string;
+  material_name: string;
+  master_category: string;
+  /** Subrubriek (bijv. «Kozijnen») — stuurt Naar-filter bij substitutie. */
+  category: string;
+  count: number;
+  subsection_ids: string[];
+};
+
+let projectMaterialUsages: ProjectMaterialUsage[] | null = null;
+let projectMaterialUsagesLoading = false;
+
+function materialUsageLabel(u: ProjectMaterialUsage): string {
+  const code = (u.catalog_id || "").trim();
+  const name = (u.material_name || "").trim();
+  const base = code && name ? `${code} · ${name}` : name || code || u.material_id.slice(0, 8);
+  return `${base} · ${u.count}×`;
+}
+
+/** Scan alle geveltekeningen: welk materiaal zit waar (top-level analysis.material_id). */
+async function collectProjectMaterialUsages(): Promise<ProjectMaterialUsage[]> {
+  if (!auth()?.token || !buildingId) return [];
+  const byId = new Map<string, ProjectMaterialUsage>();
+  for (const s of sections) {
+    if (isFloormapKind(s.region_kind)) continue;
+    if ((s.room_count || 0) < 1 && s.id !== activeSection?.id) continue;
+    let list: RoomSubsection[];
+    try {
+      list = s.id === activeSection?.id ? rooms : await fetchSectionRooms(s.id);
+    } catch {
+      continue;
+    }
+    for (const r of list) {
+      if (isLegacySealSibling(r.analysis)) continue;
+      const mid = String(r.analysis?.material_id || "").trim();
+      if (!mid) continue;
+      const cur = byId.get(mid);
+      if (cur) {
+        cur.count += 1;
+        cur.subsection_ids.push(r.id);
+        continue;
+      }
+      byId.set(mid, {
+        material_id: mid,
+        catalog_id: String(r.analysis?.catalog_id || "").trim(),
+        material_name: String(r.analysis?.material_name || "").trim(),
+        master_category: String(r.analysis?.master_category || "").trim(),
+        category: String(r.analysis?.category || "").trim(),
+        count: 1,
+        subsection_ids: [r.id],
+      });
+    }
+  }
+  return [...byId.values()].sort((a, b) => {
+    const la = `${a.catalog_id} ${a.material_name}`.trim();
+    const lb = `${b.catalog_id} ${b.material_name}`.trim();
+    return la.localeCompare(lb, "nl") || b.count - a.count;
+  });
+}
+
+async function refreshProjectMaterialUsages(force = false): Promise<void> {
+  if (!auth()?.token || !buildingId || projectMaterialUsagesLoading) return;
+  if (!force && projectMaterialUsages) {
+    syncReplaceMaterialUi();
+    return;
+  }
+  projectMaterialUsagesLoading = true;
+  try {
+    projectMaterialUsages = await collectProjectMaterialUsages();
+  } finally {
+    projectMaterialUsagesLoading = false;
+  }
+  syncReplaceMaterialUi();
+}
+
+function replaceToCandidateMaterials(): CatalogMaterial[] {
+  const byId = new Map<string, CatalogMaterial>();
+  for (const m of favoriteMaterials) byId.set(m.material_id, m);
+  for (const m of catalogMaterials) byId.set(m.material_id, m);
+  // Also include currently selected catalog material if missing from lists.
+  const sel = selectedCatalogMaterial();
+  if (sel) byId.set(sel.material_id, sel);
+  const fromId = (replaceMatFromEl?.value || "").trim();
+  const fromUsage = projectMaterialUsages?.find((u) => u.material_id === fromId);
+  const fromCat = (fromUsage?.category || materialSubcategoryEl?.value || "").trim().toLowerCase();
+  return [...byId.values()].sort((a, b) => {
+    // Zelfde subrubriek eerst; app-materialen (A#####) daarna vooraan — makkelijk als Naar-target.
+    const aSame = fromCat && (a.category || "").trim().toLowerCase() === fromCat ? 0 : 1;
+    const bSame = fromCat && (b.category || "").trim().toLowerCase() === fromCat ? 0 : 1;
+    if (aSame !== bSame) return aSame - bSame;
+    const aApp = (a.source || "") === "app" || (a.catalog_id || "").startsWith("A") ? 0 : 1;
+    const bApp = (b.source || "") === "app" || (b.catalog_id || "").startsWith("A") ? 0 : 1;
+    if (aApp !== bApp) return aApp - bApp;
+    const la = `${a.catalog_id || ""} ${a.name || ""}`.trim();
+    const lb = `${b.catalog_id || ""} ${b.name || ""}`.trim();
+    return la.localeCompare(lb, "nl");
+  });
+}
+
+function formatReplaceToOption(m: CatalogMaterial): string {
+  const code = (m.catalog_id || "").trim();
+  const name = (m.name || "").trim();
+  const ra = m.ra_dba != null && Number.isFinite(Number(m.ra_dba)) ? ` · RA ${m.ra_dba}` : "";
+  return (code && name ? `${code} · ${name}` : name || code || m.material_id.slice(0, 8)) + ra;
+}
+
+function resolveReplaceToMaterial(): CatalogMaterial | null {
+  const id = (replaceMatToEl?.value || "").trim();
+  if (!id) return null;
+  return (
+    catalogMaterials.find((m) => m.material_id === id) ||
+    favoriteMaterials.find((m) => m.material_id === id) ||
+    null
+  );
+}
+
+function fillReplaceToSelect(preferId?: string | null): void {
+  if (!replaceMatToEl) return;
+  const prev = (preferId || replaceMatToEl.value || selectedCatalogMaterial()?.material_id || "").trim();
+  const fromId = (replaceMatFromEl?.value || "").trim();
+  const list = replaceToCandidateMaterials().filter((m) => m.material_id !== fromId);
+  replaceMatToEl.innerHTML = "";
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = list.length ? "— kies nieuw materiaal —" : "— kies eerst een rubriek hierboven —";
+  replaceMatToEl.appendChild(ph);
+  for (const m of list) {
+    const opt = document.createElement("option");
+    opt.value = m.material_id;
+    opt.textContent = formatReplaceToOption(m);
+    replaceMatToEl.appendChild(opt);
+  }
+  if (prev && list.some((m) => m.material_id === prev)) {
+    replaceMatToEl.value = prev;
+  }
+}
+
+/** When «Van» is gekozen: laad zelfde rubriek (+ subrubriek) zodat «Naar» vergelijkbare targets toont. */
+async function ensureReplaceToCatalogForFrom(): Promise<void> {
+  const fromId = (replaceMatFromEl?.value || "").trim();
+  const usage = projectMaterialUsages?.find((u) => u.material_id === fromId);
+  const master = (usage?.master_category || materialCategoryEl?.value || "").trim();
+  let sub = (usage?.category || "").trim();
+  if (!master || !auth()?.token) {
+    fillReplaceToSelect();
+    updateReplaceMaterialBtn();
+    return;
+  }
+  try {
+    await ensureMaterialCategories();
+    if (materialCategoryEl && materialCategoryEl.value !== master) {
+      if (![...materialCategoryEl.options].some((o) => o.value === master)) {
+        const opt = document.createElement("option");
+        opt.value = master;
+        opt.textContent = master;
+        materialCategoryEl.appendChild(opt);
+      }
+      materialCategoryEl.value = master;
+      renderMaterialSubcategoryOptions();
+    } else {
+      renderMaterialSubcategoryOptions();
+    }
+    // Ontbrekende subrubriek: probeer via catalogus-id / naam (bijv. kozijn → Kozijnen).
+    if (!sub && usage) {
+      const q = (usage.catalog_id || usage.material_name || "").trim();
+      if (q) {
+        const probe = bppPhase1Enabled()
+          ? await bppListMaterials(invokeString, auth()!.token, {
+              master_category: master,
+              q,
+              limit: 20,
+            })
+          : await apiGet<{ materials: CatalogMaterial[] }>(
+              `/api/floormap/materials?${new URLSearchParams({
+                limit: "20",
+                master_category: master,
+                q,
+              }).toString()}`,
+            );
+        const hit =
+          (probe.materials || []).find((m) => m.material_id === fromId) ||
+          (probe.materials || []).find(
+            (m) => (m.catalog_id || "").trim() === (usage.catalog_id || "").trim(),
+          );
+        if (hit?.category) {
+          sub = hit.category.trim();
+          usage.category = sub;
+        }
+      }
+    }
+    if (materialSubcategoryEl) {
+      if (sub) {
+        if (![...materialSubcategoryEl.options].some((o) => o.value === sub)) {
+          const opt = document.createElement("option");
+          opt.value = sub;
+          opt.textContent = sub;
+          materialSubcategoryEl.appendChild(opt);
+        }
+        materialSubcategoryEl.value = sub;
+      } else {
+        materialSubcategoryEl.value = "";
+      }
+    }
+    await loadMaterialsForCategory(master, "");
+  } catch {
+    /* keep whatever catalogMaterials we have */
+  }
+  fillReplaceToSelect();
+  updateReplaceMaterialBtn();
+}
+
+function syncReplaceMaterialUi(): void {
+  if (!replaceMatEl) return;
+  const show = Boolean(activeSection && !isFloormapKind() && buildingId);
+  replaceMatEl.classList.toggle("hidden", !show);
+  if (!show) {
+    if (replaceMatCb) replaceMatCb.checked = false;
+    replaceMatControlsEl?.classList.add("hidden");
+    if (replaceMatBtn) replaceMatBtn.disabled = true;
+    return;
+  }
+  const open = Boolean(replaceMatCb?.checked);
+  replaceMatControlsEl?.classList.toggle("hidden", !open);
+  if (open && !projectMaterialUsages && !projectMaterialUsagesLoading) {
+    void refreshProjectMaterialUsages(true);
+  }
+  if (!replaceMatFromEl) return;
+  const prev = replaceMatFromEl.value;
+  const usages = projectMaterialUsages || [];
+  replaceMatFromEl.innerHTML = "";
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = projectMaterialUsagesLoading
+    ? "— laden… —"
+    : usages.length
+      ? "— kies te vervangen materiaal —"
+      : "— nog geen materialen op gevels —";
+  replaceMatFromEl.appendChild(ph);
+  for (const u of usages) {
+    const opt = document.createElement("option");
+    opt.value = u.material_id;
+    opt.textContent = materialUsageLabel(u);
+    replaceMatFromEl.appendChild(opt);
+  }
+  if (prev && usages.some((u) => u.material_id === prev)) {
+    replaceMatFromEl.value = prev;
+  }
+  fillReplaceToSelect();
+  updateReplaceMaterialBtn();
+}
+
+function updateReplaceMaterialBtn(): void {
+  if (!replaceMatBtn) return;
+  const fromId = (replaceMatFromEl?.value || "").trim();
+  const to = resolveReplaceToMaterial();
+  const usage = projectMaterialUsages?.find((u) => u.material_id === fromId);
+  const ok =
+    Boolean(replaceMatCb?.checked) &&
+    Boolean(fromId) &&
+    Boolean(to?.material_id) &&
+    Boolean(usage?.count) &&
+    to!.material_id !== fromId;
+  replaceMatBtn.disabled = !ok;
+  if (replaceMatHintEl) {
+    if (!fromId) {
+      replaceMatHintEl.textContent =
+        "Kies «Van» (huidig op gevels) en «Naar» (vervanging). Alle componenten met Van worden omgezet.";
+    } else if (!to) {
+      replaceMatHintEl.textContent = `«Van» geselecteerd (${usage?.count || 0}×). Kies hieronder «Naar».`;
+    } else if (to.material_id === fromId) {
+      replaceMatHintEl.textContent = "Van en Naar moeten verschillen.";
+    } else {
+      const fromLabel =
+        [usage?.catalog_id, usage?.material_name].filter(Boolean).join(" · ") || fromId.slice(0, 8);
+      const toLabel = [to.catalog_id, to.name].filter(Boolean).join(" · ") || to.name;
+      replaceMatHintEl.textContent = `Vervangt ${usage?.count || 0}× «${fromLabel}» door «${toLabel}» op alle gevels in dit project.`;
+    }
+  }
+  if (ok && usage) {
+    replaceMatBtn.textContent = `Vervang ${usage.count}× in project`;
+  } else {
+    replaceMatBtn.textContent = "Vervangen…";
+  }
+}
+
+function patchRoomMaterialLocal(roomId: string, mat: CatalogMaterial): void {
+  const room = rooms.find((r) => r.id === roomId);
+  if (!room) return;
+  const prev =
+    room.analysis && typeof room.analysis === "object"
+      ? ({ ...room.analysis } as SubsectionAnalysis & { ra_dba?: number | null })
+      : ({} as SubsectionAnalysis & { ra_dba?: number | null });
+  room.analysis = {
+    ...prev,
+    material_id: mat.material_id,
+    catalog_id: mat.catalog_id || prev.catalog_id,
+    material_name: mat.name,
+    master_category: mat.master_category || prev.master_category,
+    category: mat.category || prev.category,
+    rubriek_nr: mat.rubriek_nr ?? prev.rubriek_nr,
+    ra_dba: mat.ra_dba ?? prev.ra_dba,
+  } as SubsectionAnalysis;
+  markRoomTouched(roomId);
+}
+
+function clearLocalRoomPatch(id: string): void {
+  const sid = normRoomId(id);
+  if (!sid) return;
+  localRoomPatches.delete(sid);
+  localRoomPatches.delete(id);
+}
+
+/** Update omschrijving als die nog de oude catalogusnaam/code bevat. */
+function labelAfterMaterialSwap(
+  label: string,
+  fromCatalogId: string,
+  fromName: string,
+  to: CatalogMaterial,
+): string {
+  let out = (label || "").trim();
+  if (!out) return out;
+  const toCat = (to.catalog_id || "").trim();
+  const toName = (to.name || "").trim();
+  const fromCat = (fromCatalogId || "").trim();
+  const fromMat = (fromName || "").trim();
+  if (fromCat && toCat && out.includes(fromCat)) out = out.split(fromCat).join(toCat);
+  if (fromMat && toName && out.includes(fromMat)) out = out.split(fromMat).join(toName);
+  return out;
+}
+
+function applyMaterialSwapToRoom(
+  room: RoomSubsection,
+  to: CatalogMaterial,
+  fromCatalogId: string,
+  fromName: string,
+): { room: RoomSubsection; labelChanged: boolean } {
+  const prev =
+    room.analysis && typeof room.analysis === "object"
+      ? ({ ...room.analysis } as SubsectionAnalysis & { ra_dba?: number | null })
+      : ({} as SubsectionAnalysis & { ra_dba?: number | null });
+  const nextLabel = labelAfterMaterialSwap(room.label || "", fromCatalogId, fromName, to);
+  const labelChanged = nextLabel !== (room.label || "").trim();
+  const next: RoomSubsection = {
+    ...room,
+    label: labelChanged ? nextLabel : room.label,
+    analysis: {
+      ...prev,
+      material_id: to.material_id,
+      catalog_id: to.catalog_id || prev.catalog_id,
+      material_name: to.name,
+      master_category: to.master_category || prev.master_category,
+      category: to.category || prev.category,
+      rubriek_nr: to.rubriek_nr ?? prev.rubriek_nr,
+      ra_dba: to.ra_dba ?? prev.ra_dba,
+    } as SubsectionAnalysis,
+  };
+  return { room: next, labelChanged };
+}
+
+/**
+ * Projectbreed: alle gevelcomponenten met materiaal A → materiaal B
+ * (top-level analysis; kier-seal blijft onaangeroerd).
+ */
+async function replaceMaterialInProject(): Promise<void> {
+  if (!auth()?.token || !buildingId) {
+    setStatus("Geen project geladen", "err");
+    return;
+  }
+  const fromId = (replaceMatFromEl?.value || "").trim();
+  const to = resolveReplaceToMaterial();
+  if (!fromId || !to) {
+    setStatus("Kies «Van» en «Naar»", "err");
+    return;
+  }
+  if (to.material_id === fromId) {
+    setStatus("Van en Naar moeten verschillen", "err");
+    return;
+  }
+  const usage = projectMaterialUsages?.find((u) => u.material_id === fromId);
+  if (!usage?.subsection_ids.length) {
+    setStatus("Geen componenten met dat materiaal gevonden", "err");
+    return;
+  }
+  const fromLabel =
+    [usage.catalog_id, usage.material_name].filter(Boolean).join(" · ") || fromId.slice(0, 8);
+  const toLabel = [to.catalog_id, to.name].filter(Boolean).join(" · ") || to.name;
+  const ok = window.confirm(
+    `${usage.count} gevelcomponent(en) in dit project:\n\n` +
+      `«${fromLabel}» → «${toLabel}»\n\n` +
+      `Doorgaan? (kierdichting-kenmerk blijft ongewijzigd)`,
+  );
+  if (!ok) {
+    setStatus("Vervangen geannuleerd", "err");
+    return;
+  }
+
+  if (replaceMatBtn) replaceMatBtn.disabled = true;
+  let done = 0;
+  const failed: string[] = [];
+  const replacedIds = new Set(usage.subsection_ids.map((id) => normRoomId(id)));
+  try {
+    for (let i = 0; i < usage.subsection_ids.length; i++) {
+      const sid = usage.subsection_ids[i];
+      setStatus(`Materiaal vervangen ${i + 1}/${usage.count}…`, "busy");
+      try {
+        if (bppPhase1Enabled()) {
+          await bppSaveSubsectionMaterial(invokeString, auth()!.token, sid, to.material_id);
+        } else {
+          await apiPost("/api/floormap/subsection-material", {
+            subsection_id: sid,
+            material_id: to.material_id,
+          });
+        }
+        clearLocalRoomPatch(sid);
+        done += 1;
+      } catch (err) {
+        failed.push(`${sid.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    // Drop stale snapshot/patches so loadRooms niet het oude materiaal terugzet.
+    if (activeSection) sectionRoomsSnapshot.delete(activeSection.id);
+    for (const sid of usage.subsection_ids) clearLocalRoomPatch(sid);
+
+    projectMaterialUsages = null;
+    if (activeSection && !isFloormapKind()) {
+      try {
+        await loadRooms({ preserveOrder: true });
+      } catch {
+        /* apply in-memory below */
+      }
+    }
+
+    // Forceer verse analysis + label in de huidige lijst (ook bij trage serverlijst).
+    const mpu = activeScaleMpu();
+    const aspect = activeScaleAspect();
+    const labelChangedIds = new Set<string>();
+    rooms = rooms.map((r) => {
+      if (!replacedIds.has(normRoomId(r.id))) return r;
+      const { room: next, labelChanged } = applyMaterialSwapToRoom(
+        r,
+        to,
+        usage.catalog_id,
+        usage.material_name,
+      );
+      if (labelChanged) labelChangedIds.add(normRoomId(next.id));
+      noteLocalRoomPatch(next);
+      markRoomTouched(next.id);
+      return next;
+    });
+
+    // Persist labels die de oude materiaalnaam droegen (anders komt die terug bij herladen).
+    if (labelChangedIds.size > 0 && activeSection && auth()?.token) {
+      setStatus(`Labels bijwerken (${labelChangedIds.size})…`, "busy");
+      for (const r of rooms) {
+        if (!labelChangedIds.has(normRoomId(r.id))) continue;
+        const holes = Array.isArray(r.analysis?.holes)
+          ? r.analysis!.holes!.map((h) => coerceRingPoints(h)).filter((h) => h.length >= 3)
+          : [];
+        try {
+          await saveDrawingSubsection({
+            section_id: activeSection.id,
+            subsection_id: r.id,
+            label: r.label,
+            level_hint: r.level_hint || "OTHER",
+            vg_nr: r.vg_nr,
+            vr_nr: r.vr_nr,
+            points: r.points,
+            holes,
+            metres_per_norm_unit: mpu ?? undefined,
+            scale_aspect_yx: aspect,
+            analysis: r.analysis || undefined,
+          });
+        } catch {
+          /* analysis al gezet via SaveSubsectionMaterial */
+        }
+      }
+    }
+
+    renderRoomList();
+    drawOverlay();
+    await refreshProjectMaterialUsages(true);
+    if (replaceMatCb) replaceMatCb.checked = false;
+    syncReplaceMaterialUi();
+    if (failed.length) {
+      setStatus(
+        `${done} vervangen, ${failed.length} mislukt (${failed.slice(0, 2).join("; ")}${failed.length > 2 ? "…" : ""})`,
+        "err",
+      );
+    } else {
+      setStatus(
+        `${done} component(en): «${fromLabel}» → «${toLabel}»` +
+          (labelChangedIds.size ? ` · ${labelChangedIds.size} label(s) bijgewerkt` : ""),
+        "ok",
+      );
+    }
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+    syncReplaceMaterialUi();
+  }
 }
 
 /** Favorite/cataloguskeuze tijdens bewerken: materiaal direct op het component zetten. */
@@ -5079,6 +6195,10 @@ async function loadMaterialsForCategory(category: string, q = ""): Promise<void>
     catalogMaterials = (data.materials || []) as CatalogMaterial[];
     renderMaterialNameOptions(catalogMaterials, keep);
     updateMaterialSpectrumPreview();
+    if (replaceMatCb?.checked) {
+      fillReplaceToSelect();
+      updateReplaceMaterialBtn();
+    }
   } catch (err) {
     catalogMaterials = [];
     renderMaterialNameOptions([]);
@@ -6340,6 +7460,8 @@ async function loadRooms(opts?: { preserveOrder?: boolean }): Promise<void> {
   }
   if (epoch === roomsLoadEpoch) {
     syncCopyLayoutUi();
+    invalidateGevelCopySources();
+    syncCopyGevelUi();
     requestAnimationFrame(() => {
       if (epoch === roomsLoadEpoch) drawOverlay();
     });
@@ -6477,6 +7599,13 @@ async function openSection(sectionId: string): Promise<void> {
     await loadRooms();
   } catch (err) {
     roomsErr = err;
+  }
+  // Fill VR-filter with all plattegrond VRs (not only those already on this gevel).
+  try {
+    await refreshBuildingVrCatalog();
+    syncRoomListVrFilterOptions(rooms);
+  } catch (err) {
+    console.warn("building VR catalog refresh failed", err);
   }
   // Guard against a late openSection race (user switched again).
   if (activeSection?.id !== sec.id) return;
@@ -8447,6 +9576,7 @@ overlayCanvas.addEventListener("mousemove", (ev) => {
   if (pendingRoom?.drawing && !pendingRoom.closed) {
     pendingRoom.drawCursor = effectivePendingDrawCursor(norm);
     overlayCanvas.style.cursor = pendingDrawCanClose() ? "pointer" : "crosshair";
+    updateMeasureReadouts();
     drawOverlay();
     return;
   }
@@ -8624,6 +9754,12 @@ setClearSelBtn?.addEventListener("click", () => {
 });
 roomVrFilterEl?.addEventListener("change", () => {
   roomListVrFilter = roomVrFilterEl.value;
+  // Sticky VG/VR for new components when filtering to a plattegrond-VR on this gevel.
+  if (!isFloormapKind() && roomListVrFilter) {
+    roomVrInput.value = roomListVrFilter;
+    const vg = buildingVrToVg.get(roomListVrFilter);
+    if (vg != null) roomVgInput.value = String(vg);
+  }
   renderRoomList();
   drawOverlay();
 });
@@ -8732,6 +9868,7 @@ materialIdEl?.addEventListener("change", () => {
   syncPendingRoomButtons();
   updateMaterialQuantityHint();
   updateMaterialSpectrumPreview();
+  updateReplaceMaterialBtn();
   if (materialFavoriteEl && materialIdEl.value) {
     if (favoriteMaterials.some((m) => m.material_id === materialIdEl.value)) {
       materialFavoriteEl.value = materialIdEl.value;
@@ -8740,6 +9877,18 @@ materialIdEl?.addEventListener("change", () => {
     }
   }
   syncFavoriteButtons();
+});
+replaceMatCb?.addEventListener("change", () => {
+  syncReplaceMaterialUi();
+});
+replaceMatFromEl?.addEventListener("change", () => {
+  void ensureReplaceToCatalogForFrom();
+});
+replaceMatToEl?.addEventListener("change", () => {
+  updateReplaceMaterialBtn();
+});
+replaceMatBtn?.addEventListener("click", () => {
+  void replaceMaterialInProject();
 });
 
 function openMaterialCatalogEditor(opts?: { newMaterial?: boolean }): void {
@@ -9043,14 +10192,23 @@ kierSuggestCb?.addEventListener("change", () => {
   if (editingId) {
     const room = rooms.find((r) => r.id === editingId);
     if (room && !componentIsLengthQuantity(room)) {
-      // Same action as the list «Kier» checkbox — keep both linked.
+      // Same action as the list «Kier» checkbox — persist immediately.
       void toggleKierSealForRoom(room, kierSuggestCb.checked).then(() => {
         syncKierSuggestUi();
       });
       return;
     }
   }
-  syncKierSuggestUi();
+  // New (unsaved) closed polygon: keep checkbox intent until Opslaan.
+  // Do not call syncKierSuggestUi here — it used to clear the tick immediately.
+  if (kierSuggestHintEl) {
+    const peri = pendingRoom ? perimeterMOfRing(pendingRoom.points) : null;
+    const periBit =
+      peri != null ? ` Omtrek ≈ ${peri.toFixed(2)} m.` : " Zet eerst de schaal voor meters.";
+    kierSuggestHintEl.textContent = kierSuggestCb.checked
+      ? `Kierdichting aangevinkt — wordt bij Opslaan toegevoegd.${periBit}`
+      : `Geen kierdichting bij Opslaan.${periBit}`;
+  }
 });
 kierSuggestNewBtn?.addEventListener("click", () => {
   sessionStorage.setItem("app-gevelwering-kier-suggest-new", "1");
@@ -9124,6 +10282,22 @@ copyLayoutBtn?.addEventListener("click", () => {
   }
   void copyLayoutFromSection(src);
 });
+copyGevelCb?.addEventListener("change", () => {
+  syncCopyGevelUi();
+});
+copyGevelSourceEl?.addEventListener("change", () => {
+  if (copyGevelBtn) {
+    copyGevelBtn.disabled = !(copyGevelCb?.checked && copyGevelSourceEl.value);
+  }
+});
+copyGevelBtn?.addEventListener("click", () => {
+  const src = copyGevelSourceEl?.value || "";
+  if (!src) {
+    setStatus("Kies eerst een bron VR · ori", "err");
+    return;
+  }
+  void copyGevelStackFromSource(src);
+});
 detailBtn?.addEventListener("click", () => startDetailTool());
 detailCloseBtn?.addEventListener("click", () => {
   void endDetail("Detailgebied gesloten");
@@ -9194,6 +10368,7 @@ toolClearBtn?.addEventListener("click", () => {
   const panel = document.getElementById("fm-tools-bar") as HTMLDetailsElement | null;
   if (!panel) return;
   const key = "app-gevelwering-tools-collapsed";
+  // Default open — live lengte/oppervlakte blijven zichtbaar tijdens tekenen.
   panel.open = localStorage.getItem(key) !== "1";
   panel.addEventListener("toggle", () => {
     localStorage.setItem(key, panel.open ? "0" : "1");
@@ -9203,7 +10378,8 @@ toolClearBtn?.addEventListener("click", () => {
   const panel = document.getElementById("fm-set-ops-fieldset") as HTMLDetailsElement | null;
   if (!panel) return;
   const key = "app-gevelwering-compose-collapsed";
-  panel.open = localStorage.getItem(key) !== "1";
+  // Default collapsed — frees sidebar space; expand when composing.
+  panel.open = localStorage.getItem(key) === "0";
   panel.addEventListener("toggle", () => {
     localStorage.setItem(key, panel.open ? "0" : "1");
   });

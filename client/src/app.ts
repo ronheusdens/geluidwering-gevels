@@ -78,6 +78,9 @@ const BPP_WS = resolveBppWsUrl();
 const STILTE_PORTAL_PROFILE_URL =
   (window as unknown as { STILTE_PORTAL_PROFILE_URL?: string }).STILTE_PORTAL_PROFILE_URL ||
   "http://127.0.0.1:4174/opdrachtgever.html#profiel";
+const STILTE_PORTAL_INBOX_URL =
+  (window as unknown as { STILTE_PORTAL_INBOX_URL?: string }).STILTE_PORTAL_INBOX_URL ||
+  "http://127.0.0.1:4174/opdrachtgever.html#inbox";
 
 function loadRememberedUsername(): string {
   try {
@@ -727,7 +730,16 @@ async function showApp(info: AuthInfo): Promise<void> {
   await loadCustomerProfile();
   await refreshProjectList();
   await refreshGlobalInbox();
+  if (location.hash === "#inbox") goToPortalInbox();
 }
+
+function goToPortalInbox(): void {
+  location.assign(STILTE_PORTAL_INBOX_URL);
+}
+
+window.addEventListener("hashchange", () => {
+  if (location.hash === "#inbox") goToPortalInbox();
+});
 
 function send(type: string, payload: Record<string, unknown>, wantType: string): Promise<Envelope> {
   if (!ws || ws.readyState !== WebSocket.OPEN) {

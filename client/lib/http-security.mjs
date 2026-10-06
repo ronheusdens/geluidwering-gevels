@@ -36,20 +36,37 @@ export function requireHttpsOrReject(req, res) {
   return true;
 }
 
+function isLocalStilteOrigin(origin) {
+  if (!origin || typeof origin !== "string") return false;
+  try {
+    const u = new URL(origin);
+    const host = u.hostname.toLowerCase();
+    if (host !== "127.0.0.1" && host !== "localhost" && host !== "[::1]") return false;
+    // Stilte keuzescherm :4170, gevel :4173, isolatie-portaal :4174
+    const port = u.port || (u.protocol === "https:" ? "443" : "80");
+    return port === "4170" || port === "4173" || port === "4174" || port === "80" || port === "443";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * CORS: explicit GEVELWERING_CORS_ORIGIN in production; * only for local/dev when unset.
+ * Local Stilte-apps (portaal :4174) get an echoed Origin so credentialed inbox downloads work.
  */
 export function corsHeaders(req) {
   const configured = (process.env.GEVELWERING_CORS_ORIGIN || "").trim();
+  const reqOrigin = typeof req?.headers?.origin === "string" ? req.headers.origin : "";
   let origin;
   if (configured) {
     origin = configured;
+  } else if (isLocalDevHost(req?.headers?.host) && isLocalStilteOrigin(reqOrigin)) {
+    origin = reqOrigin;
   } else if (isLocalDevHost(req?.headers?.host)) {
     origin = "*";
   } else {
     // Same-origin behind proxy: omit wildcard; echo request Origin only if same host
-    const reqOrigin = req?.headers?.origin;
-    origin = typeof reqOrigin === "string" ? reqOrigin : "null";
+    origin = reqOrigin || "null";
   }
   return {
     "Access-Control-Allow-Origin": origin,

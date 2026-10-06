@@ -3865,6 +3865,31 @@ button.drawing-list-select .drawing-list-select-label {
   margin: 0;
 }
 
+.ga-copy-vlakken-bar.panel-inset {
+  margin-top: 0.35rem;
+}
+
+.fm-replace-mat.panel-inset {
+  margin-top: 0.55rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--line);
+  background: #f7f8fa;
+  border-radius: 2px;
+}
+
+.fm-replace-mat.panel-inset.hidden {
+  display: none;
+}
+
+.fm-replace-mat .copy-layout-controls {
+  margin-top: 0.35rem;
+}
+
+.fm-replace-mat select {
+  width: 100%;
+  max-width: 100%;
+}
+
 .scale-mm-popup {
   display: flex;
   flex-wrap: wrap;
@@ -3953,6 +3978,32 @@ button.drawing-list-select .drawing-list-select-label {
   flex-direction: column;
   gap: 0.45rem;
   margin-top: 0.45rem;
+}
+
+/* Gereedschap in rechterzijbalk: dichter bij tekenfocus, compacte readouts */
+.engineer-sidebar .fm-sidebar-tools {
+  margin-top: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.engineer-sidebar .fm-sidebar-tools .tools-readouts {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.35rem;
+}
+
+.engineer-sidebar .fm-sidebar-tools .tools-readouts .discovery-inline {
+  min-width: 0;
+}
+
+.engineer-sidebar .fm-sidebar-tools .tools-readouts input {
+  width: 100%;
+  box-sizing: border-box;
+  font-variant-numeric: tabular-nums;
+}
+
+.engineer-sidebar #fm-set-ops-fieldset:not([open]) {
+  margin-bottom: 0.35rem;
 }
 
 .tools-panel-head {

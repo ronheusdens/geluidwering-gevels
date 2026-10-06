@@ -4686,6 +4686,13 @@ var copyLayoutRemapVgCb = document.getElementById(
   "fm-copy-layout-remap-vg"
 );
 var copyLayoutBtn = document.getElementById("fm-copy-layout-btn");
+var copyGevelBarEl = document.getElementById("fm-copy-gevel-bar");
+var copyGevelCb = document.getElementById("fm-copy-gevel-cb");
+var copyGevelControlsEl = document.getElementById("fm-copy-gevel-controls");
+var copyGevelSourceEl = document.getElementById("fm-copy-gevel-source");
+var copyGevelBtn = document.getElementById("fm-copy-gevel-btn");
+var gevelCopySources = null;
+var gevelCopySourcesLoading = false;
 var toolClearBtn = document.getElementById("fm-tool-clear-btn");
 var toolHintEl = document.getElementById("fm-tool-hint");
 var toolLengthMmEl = document.getElementById("fm-tool-length-mm");
@@ -4733,6 +4740,13 @@ var presetApplyBtn = document.getElementById("fm-preset-apply-btn");
 var materialIdEl = document.getElementById("fm-material-id");
 var openMatCatalogBtn = document.getElementById("fm-open-mat-btn");
 var customMatToggleBtn = document.getElementById("fm-custom-mat-toggle");
+var replaceMatEl = document.getElementById("fm-replace-mat");
+var replaceMatCb = document.getElementById("fm-replace-mat-cb");
+var replaceMatControlsEl = document.getElementById("fm-replace-mat-controls");
+var replaceMatFromEl = document.getElementById("fm-replace-mat-from");
+var replaceMatToEl = document.getElementById("fm-replace-mat-to");
+var replaceMatHintEl = document.getElementById("fm-replace-mat-hint");
+var replaceMatBtn = document.getElementById("fm-replace-mat-btn");
 var materialSpectrumEl = document.getElementById("fm-material-spectrum");
 var materialR125El = document.getElementById("fm-r125");
 var materialR250El = document.getElementById("fm-r250");
@@ -4835,7 +4849,7 @@ function syncOriCorrRows(preserve) {
   expectedOriCorrEl.classList.remove("hidden");
   const head = document.createElement("p");
   head.className = "fm-ori-corr-label";
-  head.textContent = "CL / Cg per ori\xEBntatie (dB) \u2014 vast voor GA;k";
+  head.textContent = "CL / Cg per gevelori\xEBntatie (dB) \u2014 gevelcorrectie in D2m,nT";
   expectedOriCorrEl.appendChild(head);
   for (const code of codes) {
     const fromPreserve = preserve?.[code];
@@ -5010,6 +5024,8 @@ function suggestVgNr() {
   for (let i = rooms.length - 1; i >= 0; i--) {
     if (rooms[i].vg_nr != null) return rooms[i].vg_nr;
   }
+  const filterVr = normalizeVrNr(roomListVrFilter) || normalizeVrNr(roomVrInput.value);
+  if (filterVr && buildingVrToVg.has(filterVr)) return buildingVrToVg.get(filterVr);
   return 1;
 }
 function suggestFacadeVrNr() {
@@ -5104,6 +5120,395 @@ async function collectProjectVgVrPairs(excludeSectionId) {
     }
   }
   return { pairs, maxVg };
+}
+function invalidateGevelCopySources() {
+  gevelCopySources = null;
+}
+function parseGevelCopySourceKey(raw) {
+  const parts = (raw || "").split("|");
+  if (parts.length < 3) return null;
+  const sectionId = parts[0].trim();
+  const vr = normalizeVrNr(parts[1]);
+  const ori = normalizeOrientatieCode(parts[2]);
+  if (!sectionId || !vr || !ori) return null;
+  return { sectionId, vr, ori };
+}
+async function refreshGevelCopySources() {
+  if (!auth()?.token || gevelCopySourcesLoading) return;
+  gevelCopySourcesLoading = true;
+  try {
+    const out = [];
+    for (const s of sections) {
+      if (isFloormapKind(s.region_kind)) continue;
+      if ((s.room_count || 0) < 1 && s.id !== activeSection?.id) continue;
+      let list;
+      try {
+        list = s.id === activeSection?.id ? rooms : await fetchSectionRooms(s.id);
+      } catch {
+        continue;
+      }
+      const groups = /* @__PURE__ */ new Map();
+      for (const r of list) {
+        if (isLegacySealSibling(r.analysis)) continue;
+        const vr = normalizeVrNr(r.vr_nr);
+        const ori = normalizeOrientatieCode(r.analysis?.orientatie || "");
+        if (!vr || !ori || !ORIENTATIE_CODES.includes(ori)) continue;
+        const k = `${vr}|${ori}`;
+        groups.set(k, (groups.get(k) || 0) + 1);
+      }
+      for (const [k, count] of groups) {
+        const [vr, ori] = k.split("|");
+        out.push({
+          key: `${s.id}|${vr}|${ori}`,
+          sectionId: s.id,
+          sectionLabel: (s.label || "Gevel").trim() || "Gevel",
+          vr,
+          ori,
+          count
+        });
+      }
+    }
+    out.sort((a, b) => {
+      const la = `${a.sectionLabel} \xB7 VR ${a.vr} \xB7 ${a.ori}`;
+      const lb = `${b.sectionLabel} \xB7 VR ${b.vr} \xB7 ${b.ori}`;
+      return la.localeCompare(lb, "nl");
+    });
+    gevelCopySources = out;
+  } finally {
+    gevelCopySourcesLoading = false;
+  }
+  syncCopyGevelUi();
+}
+function syncCopyGevelUi() {
+  if (!copyGevelBarEl) return;
+  const show = Boolean(activeSection && !isFloormapKind());
+  copyGevelBarEl.classList.toggle("hidden", !show);
+  if (!show) {
+    if (copyGevelCb) copyGevelCb.checked = false;
+    copyGevelControlsEl?.classList.add("hidden");
+    if (copyGevelBtn) copyGevelBtn.disabled = true;
+    return;
+  }
+  const enabled = Boolean(copyGevelCb?.checked);
+  copyGevelControlsEl?.classList.toggle("hidden", !enabled);
+  if (!copyGevelSourceEl) return;
+  if (enabled && gevelCopySources == null && !gevelCopySourcesLoading) {
+    void refreshGevelCopySources();
+  }
+  const prev = copyGevelSourceEl.value;
+  const sources = gevelCopySources || [];
+  copyGevelSourceEl.innerHTML = "";
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = gevelCopySourcesLoading ? "\u2014 bronnen laden\u2026 \u2014" : sources.length ? "\u2014 kies bron (VR \xB7 ori) \u2014" : "\u2014 geen VR \xB7 ori-stack gevonden \u2014";
+  copyGevelSourceEl.appendChild(ph);
+  for (const s of sources) {
+    const opt = document.createElement("option");
+    opt.value = s.key;
+    opt.textContent = `${s.sectionLabel} \xB7 VR ${s.vr} \xB7 ${s.ori} \xB7 ${s.count} component${s.count === 1 ? "" : "en"}`;
+    copyGevelSourceEl.appendChild(opt);
+  }
+  if (prev && sources.some((s) => s.key === prev)) copyGevelSourceEl.value = prev;
+  if (copyGevelBtn) {
+    copyGevelBtn.disabled = !(enabled && copyGevelSourceEl.value);
+  }
+}
+function unionStackBBox(stack) {
+  let minX = 1;
+  let minY = 1;
+  let maxX = 0;
+  let maxY = 0;
+  let any = false;
+  const consider = (pts) => {
+    for (const p of pts) {
+      if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
+      any = true;
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+  };
+  for (const r of stack) {
+    consider(r.points || []);
+    if (Array.isArray(r.analysis?.holes)) {
+      for (const h of r.analysis.holes) consider(coerceRingPoints(h));
+    }
+  }
+  if (!any) return { minX: 0, minY: 0, maxX: 1, maxY: 1 };
+  return { minX, minY, maxX, maxY };
+}
+function topoSortFacadeStack(items) {
+  const byId = new Map(items.map((r) => [r.id, r]));
+  const remaining = new Set(items.map((r) => r.id));
+  const out = [];
+  while (remaining.size) {
+    let progress = false;
+    for (const id of [...remaining]) {
+      const r = byId.get(id);
+      const deps = isComposeResultRoom(r) ? (r.analysis?.source_subsection_ids || []).filter((d) => byId.has(d)) : [];
+      if (deps.every((d) => !remaining.has(d))) {
+        out.push(r);
+        remaining.delete(id);
+        progress = true;
+      }
+    }
+    if (progress) continue;
+    for (const id of [...remaining]) {
+      const r = byId.get(id);
+      if (!isComposeResultRoom(r)) {
+        out.push(r);
+        remaining.delete(id);
+        progress = true;
+      }
+    }
+    if (progress) continue;
+    for (const id of [...remaining]) {
+      out.push(byId.get(id));
+      remaining.delete(id);
+    }
+  }
+  return out;
+}
+async function collectFacadeStackForCopy(sectionId, vr, ori) {
+  const list = sectionId === activeSection?.id ? rooms.slice() : await fetchSectionRooms(sectionId);
+  const wantVr = normalizeVrNr(vr);
+  const wantOri = normalizeOrientatieCode(ori);
+  const primary = list.filter((r) => {
+    if (isLegacySealSibling(r.analysis)) return false;
+    if (normalizeVrNr(r.vr_nr) !== wantVr) return false;
+    return normalizeOrientatieCode(r.analysis?.orientatie || "") === wantOri;
+  });
+  if (!primary.length) return [];
+  const byId = new Map(list.map((r) => [r.id, r]));
+  const stack = /* @__PURE__ */ new Map();
+  for (const r of primary) stack.set(r.id, r);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const r of [...stack.values()]) {
+      if (!isComposeResultRoom(r)) continue;
+      for (const sid of r.analysis?.source_subsection_ids || []) {
+        if (!sid || stack.has(sid)) continue;
+        const src = byId.get(sid);
+        if (!src || isLegacySealSibling(src.analysis)) continue;
+        stack.set(sid, src);
+        grew = true;
+      }
+    }
+  }
+  return topoSortFacadeStack([...stack.values()]);
+}
+function analysisForFacadeStackClone(src, idMap, targetOri, translatedHoles) {
+  const analysis = {};
+  if (src?.material_id) analysis.material_id = src.material_id;
+  if (src?.master_category) analysis.master_category = src.master_category;
+  if (src?.material_name) analysis.material_name = src.material_name;
+  if (src?.catalog_id) analysis.catalog_id = src.catalog_id;
+  if (src?.category) analysis.category = src.category;
+  if (src?.rubriek_nr != null) analysis.rubriek_nr = src.rubriek_nr;
+  if (src?.material_kind) analysis.material_kind = src.material_kind;
+  if (src?.repeat_count != null && Number(src.repeat_count) > 1) {
+    analysis.repeat_count = Math.max(1, Math.min(99, Math.round(Number(src.repeat_count))));
+  }
+  if (src?.quantity_kind === "length") {
+    analysis.quantity_kind = "length";
+    if (src.length_m != null) analysis.length_m = src.length_m;
+    if (src.length_norm != null) analysis.length_norm = src.length_norm;
+    if (src.open_path) analysis.open_path = true;
+  }
+  analysis.orientatie = targetOri;
+  const seal = readComponentSeal(src);
+  if (seal?.enabled) {
+    analysis.seal = {
+      enabled: true,
+      material_id: seal.material_id,
+      catalog_id: seal.catalog_id,
+      material_name: seal.material_name,
+      master_category: seal.master_category,
+      category: seal.category,
+      rubriek_nr: seal.rubriek_nr,
+      length_m: seal.length_m
+    };
+  }
+  const op = parseBooleanOp(src?.boolean_op);
+  if (op === "compose" || op === "difference") {
+    analysis.boolean_op = op;
+    const srcIds = (src?.source_subsection_ids || []).map((id) => idMap.get(id) || "").filter(Boolean);
+    if (srcIds.length) analysis.source_subsection_ids = srcIds;
+    if (src?.outer_subsection_id) {
+      const mapped = idMap.get(src.outer_subsection_id);
+      if (mapped) analysis.outer_subsection_id = mapped;
+    }
+    if (src?.constituent_signs && typeof src.constituent_signs === "object") {
+      const signs = {};
+      for (const [oldId, sign] of Object.entries(src.constituent_signs)) {
+        const nid = idMap.get(oldId);
+        if (nid && (sign === "+" || sign === "-")) signs[nid] = sign;
+      }
+      if (Object.keys(signs).length) analysis.constituent_signs = signs;
+    }
+    if (Array.isArray(src?.source_labels) && src.source_labels.length) {
+      analysis.source_labels = src.source_labels.slice();
+    }
+  }
+  if (translatedHoles.length) analysis.holes = translatedHoles;
+  return analysis;
+}
+async function copyGevelStackFromSource(sourceKey) {
+  if (!activeSection || !auth()?.token) {
+    setStatus("Geen geveltekening actief", "err");
+    return;
+  }
+  if (isFloormapKind()) {
+    setStatus("Gevelstack kopi\xEBren kan alleen op een open geveltekening", "err");
+    return;
+  }
+  const parsed = parseGevelCopySourceKey(sourceKey);
+  if (!parsed) {
+    setStatus("Kies een bron VR \xB7 ori", "err");
+    return;
+  }
+  const targetVgRaw = roomVgInput.value.trim();
+  const targetVr = normalizeVrNr(roomVrInput.value);
+  const targetVg = targetVgRaw ? Number(targetVgRaw) : NaN;
+  const targetOri = readComponentOrientatie();
+  if (!Number.isFinite(targetVg) || targetVg <= 0 || !targetVr) {
+    setStatus("Vul rechts VG en VR in voor de doelstack", "err");
+    return;
+  }
+  if (!targetOri || !ORIENTATIE_CODES.includes(targetOri)) {
+    setStatus("Kies rechts de gevelori\xEBntatie voor de doelstack", "err");
+    return;
+  }
+  if (parsed.sectionId === activeSection.id && parsed.vr === targetVr && parsed.ori === targetOri) {
+    setStatus("Bron en doel zijn dezelfde VR \xB7 ori op deze gevel \u2014 kies een andere bron of ori", "err");
+    return;
+  }
+  setStatus("Bronstack laden\u2026", "busy");
+  const stack = await collectFacadeStackForCopy(parsed.sectionId, parsed.vr, parsed.ori);
+  if (!stack.length) {
+    setStatus(`Geen componenten voor VR ${parsed.vr} \xB7 ${parsed.ori}`, "err");
+    return;
+  }
+  const conflict = rooms.filter((r) => {
+    if (isLegacySealSibling(r.analysis)) return false;
+    if (normalizeVrNr(r.vr_nr) !== targetVr) return false;
+    return normalizeOrientatieCode(r.analysis?.orientatie || "") === targetOri;
+  });
+  if (conflict.length) {
+    const ok = window.confirm(
+      `Op deze gevel staan al ${conflict.length} component(en) voor VR ${targetVr} \xB7 ${targetOri}.
+
+Toch ${stack.length} component(en) van VR ${parsed.vr} \xB7 ${parsed.ori} toevoegen (gecentreerd)?`
+    );
+    if (!ok) {
+      setStatus("Kopi\xEBren geannuleerd", "err");
+      return;
+    }
+  } else {
+    const srcSec = sections.find((s) => s.id === parsed.sectionId);
+    const ok = window.confirm(
+      `${stack.length} component(en) kopi\xEBren van VR ${parsed.vr} \xB7 ${parsed.ori}${srcSec ? ` (\xAB${srcSec.label || "bron"}\xBB)` : ""} naar VG ${targetVg} \xB7 VR ${targetVr} \xB7 ${targetOri} op deze gevel (gecentreerd)?`
+    );
+    if (!ok) {
+      setStatus("Kopi\xEBren geannuleerd", "err");
+      return;
+    }
+  }
+  const box = unionStackBBox(stack);
+  const dx = 0.5 - (box.minX + box.maxX) / 2;
+  const dy = 0.5 - (box.minY + box.maxY) / 2;
+  const mpu = activeScaleMpu();
+  const idMap = /* @__PURE__ */ new Map();
+  let savedN = 0;
+  if (copyGevelBtn) copyGevelBtn.disabled = true;
+  try {
+    for (let i = 0; i < stack.length; i++) {
+      const r = stack[i];
+      setStatus(`Component ${i + 1}/${stack.length} kopi\xEBren\u2026`, "busy");
+      const asLength = componentIsLengthQuantity(r) || r.analysis?.quantity_kind === "length" || isLengthQuantityRubriek(r.analysis?.rubriek_nr ?? r.analysis?.master_category);
+      const openPath = Boolean(asLength && r.analysis?.open_path);
+      const srcPoints = (r.points || []).map((p) => ({ ...p }));
+      const copyPoints = openPath ? clampPath(srcPoints.map((p) => ({ x: p.x + dx, y: p.y + dy }))) : translateRing(srcPoints, dx, dy);
+      if (openPath) {
+        if (copyPoints.length < 2) {
+          throw new Error(`\xAB${r.label}\xBB: kierdichting heeft te weinig punten`);
+        }
+      } else if (copyPoints.length < 4) {
+        throw new Error(`\xAB${r.label}\xBB: polygon heeft te weinig punten`);
+      }
+      const holesSrc = asLength ? [] : (Array.isArray(r.analysis?.holes) ? r.analysis.holes : []).map((h) => coerceRingPoints(h)).filter((h) => h.length >= 3).map((h) => translateRing(h, dx, dy));
+      const analysis = analysisForFacadeStackClone(
+        r.analysis,
+        idMap,
+        targetOri,
+        holesSrc
+      );
+      const body = {
+        section_id: activeSection.id,
+        label: r.label,
+        level_hint: r.level_hint || "OTHER",
+        vg_nr: targetVg,
+        vr_nr: targetVr,
+        points: copyPoints,
+        holes: holesSrc,
+        metres_per_norm_unit: mpu ?? void 0,
+        scale_aspect_yx: activeScaleAspect()
+      };
+      if (openPath) body.open_path = true;
+      if (Object.keys(analysis).length) body.analysis = analysis;
+      const saved = await saveDrawingSubsection(body);
+      idMap.set(r.id, saved.subsection_id);
+      upsertOptimisticRoom({
+        id: saved.subsection_id,
+        section_id: activeSection.id,
+        label: r.label,
+        level_hint: r.level_hint || "OTHER",
+        vg_nr: targetVg,
+        vr_nr: targetVr,
+        points: copyPoints.map((p) => ({ ...p })),
+        area_m2: saved.area_m2 != null ? Number(saved.area_m2) : r.area_m2,
+        area_norm: saved.area_norm != null ? Number(saved.area_norm) : r.area_norm,
+        perimeter_m: saved.perimeter_m != null ? Number(saved.perimeter_m) : r.perimeter_m,
+        perimeter_norm: null,
+        metres_per_norm_unit: mpu,
+        analysis_status: "ok",
+        sort_order: rooms.length,
+        analysis: body.analysis ?? null
+      });
+      savedN += 1;
+    }
+    await loadRooms({ preserveOrder: true });
+    invalidateGevelCopySources();
+    try {
+      const fresh = await fetchFloormapSections(buildingId);
+      sections = fresh;
+    } catch {
+      if (activeSection) {
+        activeSection.room_count = rooms.length;
+        const idx = sections.findIndex((s) => s.id === activeSection.id);
+        if (idx >= 0) sections[idx] = activeSection;
+      }
+    }
+    renderRoomList();
+    drawOverlay();
+    if (copyGevelCb) copyGevelCb.checked = false;
+    syncCopyGevelUi();
+    setStatus(
+      `${savedN} component(en) gekopieerd (VR ${parsed.vr} \xB7 ${parsed.ori} \u2192 VR ${targetVr} \xB7 ${targetOri}, gecentreerd). Sleep hoekpunten om bij te stellen.`,
+      "ok"
+    );
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+    try {
+      await loadRooms();
+    } catch {
+    }
+    renderRoomList();
+    drawOverlay();
+    syncCopyGevelUi();
+  }
 }
 function isSimpleLayoutRoom(r) {
   if (componentIsLengthQuantity(r)) return false;
@@ -5313,6 +5718,7 @@ function syncWorkspaceLabels(kind) {
     discoverHintEl.textContent = floormap ? `Plattegrond: ruimten op de crop.` : "Gevel: selecteer buitencontour (VR), stel filtergrootte in (grof \u2192 fijn), daarna Ontdek openingen \u2014 hi-res H/V-lijnen via server, fallback lokaal.";
   }
   syncCopyLayoutUi();
+  syncCopyGevelUi();
   if (markRoomLegendEl) markRoomLegendEl.textContent = cap;
   roomDrawBtn.textContent = `Teken ${n.singular}`;
   roomSaveBtn.textContent = "Opslaan";
@@ -5360,16 +5766,54 @@ function syncWorkspaceLabels(kind) {
     selectedSetIds.clear();
     constituentSigns.clear();
     booleanPreview = null;
+    projectMaterialUsages = null;
   } else {
     materialCategoriesLoaded = false;
     void ensureMaterialCategories();
   }
+  syncReplaceMaterialUi();
   renderComposeParts();
 }
 var roomListVrFilter = "";
+var buildingVrCatalog = [];
+var buildingVrToVg = /* @__PURE__ */ new Map();
+async function refreshBuildingVrCatalog() {
+  if (!auth()?.token || !buildingId) {
+    buildingVrCatalog = [];
+    buildingVrToVg.clear();
+    return;
+  }
+  const set = /* @__PURE__ */ new Set();
+  buildingVrToVg.clear();
+  const floormapSecs = sections.filter((s) => isFloormapKind(s.region_kind));
+  const targets = floormapSecs.length ? floormapSecs : sections;
+  for (const sec of targets) {
+    try {
+      const raw = bppPhase1Enabled() ? (await bppListDrawingSubsections(invokeString, auth().token, sec.id)).subsections : (await apiGet(`/api/floormap/subsections?section_id=${encodeURIComponent(sec.id)}`)).subsections;
+      for (const row of raw || []) {
+        const vr = normalizeVrNr(row.vr_nr);
+        if (!vr) continue;
+        set.add(vr);
+        if (row.vg_nr != null && Number.isFinite(Number(row.vg_nr)) && !buildingVrToVg.has(vr)) {
+          buildingVrToVg.set(vr, Number(row.vg_nr));
+        }
+      }
+    } catch (err) {
+      console.warn("building VR catalog: section failed", sec.id, err);
+    }
+  }
+  buildingVrCatalog = [...set].sort(compareVrNr);
+}
 function syncRoomListVrFilterOptions(items) {
   if (!roomVrFilterEl) return;
-  const vrs = collectAvailableVrNrs(items);
+  const onSection = collectAvailableVrNrs(items);
+  const merged = /* @__PURE__ */ new Set([...buildingVrCatalog, ...onSection]);
+  for (const r of items) {
+    const vr = normalizeVrNr(r.vr_nr);
+    if (!vr || r.vg_nr == null) continue;
+    if (!buildingVrToVg.has(vr)) buildingVrToVg.set(vr, Number(r.vg_nr));
+  }
+  const vrs = [...merged].sort(compareVrNr);
   const prev = roomListVrFilter;
   roomVrFilterEl.replaceChildren();
   const allOpt = document.createElement("option");
@@ -5379,7 +5823,10 @@ function syncRoomListVrFilterOptions(items) {
   for (const vr of vrs) {
     const opt = document.createElement("option");
     opt.value = vr;
-    opt.textContent = `VR ${vr}`;
+    const onThis = onSection.includes(vr);
+    const vg = buildingVrToVg.get(vr);
+    const vgBit = vg != null ? ` \xB7 VG ${vg}` : "";
+    opt.textContent = onThis ? `VR ${vr}${vgBit}` : `VR ${vr}${vgBit} (nog niet op deze gevel)`;
     roomVrFilterEl.appendChild(opt);
   }
   roomListVrFilter = prev && vrs.includes(prev) ? prev : "";
@@ -5577,7 +6024,11 @@ function localPatchCaughtUp(server, p) {
 function mergeAnalysisPreferPatch(server, patch) {
   if (!patch) return server;
   const merged = { ...server || {}, ...patch };
-  if (!componentSealEnabled(patch)) delete merged.seal;
+  if (Object.prototype.hasOwnProperty.call(patch, "seal") && !componentSealEnabled(patch)) {
+    delete merged.seal;
+  } else if (!Object.prototype.hasOwnProperty.call(patch, "seal") && componentSealEnabled(server)) {
+    merged.seal = server.seal;
+  }
   if (Array.isArray(patch.holes)) merged.holes = patch.holes;
   else if (server?.holes) merged.holes = server.holes;
   return merged;
@@ -6084,7 +6535,21 @@ function measureDisplayPoints() {
   }
   return pts;
 }
+function pendingDrawDisplayPoints() {
+  if (!pendingRoom?.drawing || pendingRoom.closed) return null;
+  if (!pendingRoom.points.length) return null;
+  const pts = pendingRoom.points.map((p) => ({ ...p }));
+  if (pendingRoom.drawCursor) pts.push({ ...pendingRoom.drawCursor });
+  return pts;
+}
 function ringForMetrics() {
+  if (pendingRoom?.closed && pendingRoom.points.length >= 2) {
+    return { pts: pendingRoom.points, closed: true };
+  }
+  const drawing = pendingDrawDisplayPoints();
+  if (drawing && drawing.length >= 2) {
+    return { pts: drawing, closed: false };
+  }
   if (pendingRoom && pendingRoom.points.length >= 2) {
     return { pts: pendingRoom.points, closed: pendingRoom.closed };
   }
@@ -6104,13 +6569,22 @@ function updateMeasureReadouts() {
   if (measure.tool === "length") {
     const display = measureDisplayPoints();
     toolLengthMmEl.value = display.length >= 2 ? fmtMeasure(pathLengthM(display.slice(0, 2), mpu, false), 2) : "\u2014";
+  } else if (pendingRoom?.drawing && !pendingRoom.closed) {
+    const pts = pendingDrawDisplayPoints();
+    if (pts && pts.length >= 2) {
+      const a = pts[pts.length - 2];
+      const b = pts[pts.length - 1];
+      toolLengthMmEl.value = fmtMeasure(pathLengthM([a, b], mpu, false), 2);
+    } else {
+      toolLengthMmEl.value = "\u2014";
+    }
   } else {
     toolLengthMmEl.value = "\u2014";
   }
   const ring = ringForMetrics();
   if (ring) {
     toolCircMmEl.value = fmtMeasure(pathLengthM(ring.pts, mpu, ring.closed), 2);
-    toolAreaMm2El.value = ring.pts.length >= 3 ? fmtMeasure(pathAreaM2(ring.pts, mpu), 2) : "\u2014";
+    toolAreaMm2El.value = ring.closed && ring.pts.length >= 3 ? fmtMeasure(pathAreaM2(ring.pts, mpu), 2) : "\u2014";
   } else {
     toolCircMmEl.value = "\u2014";
     toolAreaMm2El.value = "\u2014";
@@ -6124,7 +6598,7 @@ function updateToolHint() {
     return;
   }
   if (pendingRoom?.drawing && !pendingRoom.closed) {
-    toolHintEl.textContent = pendingRoom.points.length === 0 ? `Klik hoeken van de ${n.singular}. Omtrek wordt onderweg bijgewerkt; oppervlakte vanaf 3 punten.` : `${pendingRoom.points.length} hoekpunt(en). Beweeg naar het startkruis (groen) en klik om te sluiten.`;
+    toolHintEl.textContent = pendingRoom.points.length === 0 ? `Klik hoeken van de ${n.singular}. Lengte toont het actieve segment; omtrek loopt mee.` : `${pendingRoom.points.length} hoekpunt(en). Lengte = huidig segment; sluit bij het startkruis (groen) voor oppervlakte.`;
     return;
   }
   if (pendingRoom?.closed) {
@@ -6640,12 +7114,17 @@ function syncKierSuggestUi() {
   const hasSeal = editing ? componentHasSeal(editing) : false;
   const sealAttr = editing ? readComponentSeal(editing.analysis) : null;
   const setSelected = Boolean(editing && selectedSetIds.has(editing.id));
-  const canToggle = Boolean(editing && (setSelected || pendingRoom?.editingId === editing.id));
+  const canToggle = Boolean(
+    editing && (setSelected || pendingRoom?.editingId === editing.id) || !editing && pendingRoom?.closed && (pendingRoom.points.length || 0) >= 3
+  );
+  const pendingIntent = Boolean(kierSuggestCb?.dataset.userTouched === "1" && !editing && kierSuggestCb?.checked);
   if (kierSuggestCb && !kierToggleInFlight) {
-    kierSuggestCb.checked = hasSeal;
-    kierSuggestCb.disabled = !canToggle && !hasSeal;
-    kierSuggestCb.title = canToggle ? "Kierdichting (omtrek) voor dit component \u2014 meestal op een samengesteld \xB1-resultaat" : hasSeal ? "Uitvinken zet kierdichting uit" : "Open of selecteer het component om kierdichting aan/uit te zetten";
-    delete kierSuggestCb.dataset.userTouched;
+    if (!pendingIntent) {
+      kierSuggestCb.checked = hasSeal;
+      delete kierSuggestCb.dataset.userTouched;
+    }
+    kierSuggestCb.disabled = !canToggle && !hasSeal && !pendingIntent;
+    kierSuggestCb.title = canToggle ? editing ? "Kierdichting (omtrek) voor dit component \u2014 meestal op een samengesteld \xB1-resultaat" : "Kierdichting (omtrek) \u2014 wordt bij Opslaan op dit nieuwe vlak gezet" : hasSeal ? "Uitvinken zet kierdichting uit" : "Open of selecteer het component om kierdichting aan/uit te zetten";
     const mid = sealAttr?.material_id || existingSealFor(editing?.id || "")?.analysis?.material_id;
     if (mid) renderKierMaterialOptions(mid);
   }
@@ -6661,8 +7140,12 @@ function syncKierSuggestUi() {
     const composeHint = editing && !isComposeResultRoom(editing) ? " Meestal op een samengesteld (\xB1) component." : "";
     if (hasSeal) {
       kierSuggestHintEl.textContent = `Kierdichting aan \u2014 vink uit om uit te zetten. Opslaan werkt de omtreklengte bij.${periBit}${typeBit}${composeHint}`;
+    } else if (pendingIntent) {
+      kierSuggestHintEl.textContent = `Kierdichting aangevinkt \u2014 wordt bij Opslaan toegevoegd.${periBit}${typeBit}`;
     } else if (!canToggle) {
       kierSuggestHintEl.textContent = `Open of selecteer het component om kierdichting (omtrek) aan te zetten.${periBit}${composeHint}`;
+    } else if (!editing) {
+      kierSuggestHintEl.textContent = `Optioneel. Vink aan v\xF3\xF3r Opslaan om omtrek als kierdichting te koppelen (standaard ${DEFAULT_KIER_CATALOG_ID}).${periBit}${typeBit}`;
     } else {
       kierSuggestHintEl.textContent = `Optioneel kenmerk. Standaard ${DEFAULT_KIER_CATALOG_ID}. Lengtes van hetzelfde type worden opgeteld.${periBit}${typeBit}${composeHint}`;
     }
@@ -7477,7 +7960,7 @@ async function savePendingRoom() {
     setStatus("Kies een kierdichtingsmateriaal (rubriek 9)", "err");
     return;
   }
-  const wantSeal = !isFloormapKind() && !kier && Boolean(pendingRoom.closed) && Boolean(kierSuggestCb?.checked) && Boolean(pendingRoom.editingId);
+  const wantSeal = !isFloormapKind() && !kier && Boolean(pendingRoom.closed) && Boolean(kierSuggestCb?.checked);
   if (wantSeal) {
     await ensureKierMaterials();
     if (!resolveKierSuggestMaterial()) {
@@ -7612,7 +8095,10 @@ async function savePendingRoom() {
       sealBit = seal.created ? ` \xB7 kierdichting aan${lenTxt}` : ` \xB7 kierdichting bijgewerkt${lenTxt}`;
       const afterSeal = rooms.find((r) => r.id === savedId);
       if (afterSeal) patched = { ...patched, analysis: afterSeal.analysis };
-    } else if (editingId && (componentSealEnabled(savedRoomForSeal?.analysis) || existingSealFor(editingId))) {
+      if (kierSuggestCb) delete kierSuggestCb.dataset.userTouched;
+    } else if (editingId && !wantSeal && (componentSealEnabled(savedRoomForSeal?.analysis) || componentSealEnabled(
+      rooms.find((r) => r.id === editingId)?.analysis
+    ) || existingSealFor(editingId))) {
       const removed = await removeSealForParent(editingId);
       if (removed) sealBit = " \xB7 kierdichting uit";
       const afterSeal = rooms.find((r) => r.id === savedId);
@@ -8193,6 +8679,13 @@ function updateBooleanPreview() {
     drawOverlay();
     return;
   }
+  if (setOpsFieldset instanceof HTMLDetailsElement && !setOpsFieldset.open) {
+    setOpsFieldset.open = true;
+    try {
+      localStorage.setItem("app-gevelwering-compose-collapsed", "0");
+    } catch {
+    }
+  }
   try {
     const selected = rooms.filter((r) => selectedSetIds.has(r.id));
     const { parts } = buildComposeParts(selected);
@@ -8440,7 +8933,411 @@ async function selectMaterialById(materialId, fromFavorite = false) {
   syncFavoriteButtons();
   syncPendingRoomButtons();
   updateMaterialQuantityHint();
+  fillReplaceToSelect(mat.material_id);
+  updateReplaceMaterialBtn();
   await applyMaterialToEditingComponent(mat);
+}
+var projectMaterialUsages = null;
+var projectMaterialUsagesLoading = false;
+function materialUsageLabel(u) {
+  const code = (u.catalog_id || "").trim();
+  const name = (u.material_name || "").trim();
+  const base = code && name ? `${code} \xB7 ${name}` : name || code || u.material_id.slice(0, 8);
+  return `${base} \xB7 ${u.count}\xD7`;
+}
+async function collectProjectMaterialUsages() {
+  if (!auth()?.token || !buildingId) return [];
+  const byId = /* @__PURE__ */ new Map();
+  for (const s of sections) {
+    if (isFloormapKind(s.region_kind)) continue;
+    if ((s.room_count || 0) < 1 && s.id !== activeSection?.id) continue;
+    let list;
+    try {
+      list = s.id === activeSection?.id ? rooms : await fetchSectionRooms(s.id);
+    } catch {
+      continue;
+    }
+    for (const r of list) {
+      if (isLegacySealSibling(r.analysis)) continue;
+      const mid = String(r.analysis?.material_id || "").trim();
+      if (!mid) continue;
+      const cur = byId.get(mid);
+      if (cur) {
+        cur.count += 1;
+        cur.subsection_ids.push(r.id);
+        continue;
+      }
+      byId.set(mid, {
+        material_id: mid,
+        catalog_id: String(r.analysis?.catalog_id || "").trim(),
+        material_name: String(r.analysis?.material_name || "").trim(),
+        master_category: String(r.analysis?.master_category || "").trim(),
+        category: String(r.analysis?.category || "").trim(),
+        count: 1,
+        subsection_ids: [r.id]
+      });
+    }
+  }
+  return [...byId.values()].sort((a, b) => {
+    const la = `${a.catalog_id} ${a.material_name}`.trim();
+    const lb = `${b.catalog_id} ${b.material_name}`.trim();
+    return la.localeCompare(lb, "nl") || b.count - a.count;
+  });
+}
+async function refreshProjectMaterialUsages(force = false) {
+  if (!auth()?.token || !buildingId || projectMaterialUsagesLoading) return;
+  if (!force && projectMaterialUsages) {
+    syncReplaceMaterialUi();
+    return;
+  }
+  projectMaterialUsagesLoading = true;
+  try {
+    projectMaterialUsages = await collectProjectMaterialUsages();
+  } finally {
+    projectMaterialUsagesLoading = false;
+  }
+  syncReplaceMaterialUi();
+}
+function replaceToCandidateMaterials() {
+  const byId = /* @__PURE__ */ new Map();
+  for (const m of favoriteMaterials) byId.set(m.material_id, m);
+  for (const m of catalogMaterials) byId.set(m.material_id, m);
+  const sel = selectedCatalogMaterial();
+  if (sel) byId.set(sel.material_id, sel);
+  const fromId = (replaceMatFromEl?.value || "").trim();
+  const fromUsage = projectMaterialUsages?.find((u) => u.material_id === fromId);
+  const fromCat = (fromUsage?.category || materialSubcategoryEl?.value || "").trim().toLowerCase();
+  return [...byId.values()].sort((a, b) => {
+    const aSame = fromCat && (a.category || "").trim().toLowerCase() === fromCat ? 0 : 1;
+    const bSame = fromCat && (b.category || "").trim().toLowerCase() === fromCat ? 0 : 1;
+    if (aSame !== bSame) return aSame - bSame;
+    const aApp = (a.source || "") === "app" || (a.catalog_id || "").startsWith("A") ? 0 : 1;
+    const bApp = (b.source || "") === "app" || (b.catalog_id || "").startsWith("A") ? 0 : 1;
+    if (aApp !== bApp) return aApp - bApp;
+    const la = `${a.catalog_id || ""} ${a.name || ""}`.trim();
+    const lb = `${b.catalog_id || ""} ${b.name || ""}`.trim();
+    return la.localeCompare(lb, "nl");
+  });
+}
+function formatReplaceToOption(m) {
+  const code = (m.catalog_id || "").trim();
+  const name = (m.name || "").trim();
+  const ra = m.ra_dba != null && Number.isFinite(Number(m.ra_dba)) ? ` \xB7 RA ${m.ra_dba}` : "";
+  return (code && name ? `${code} \xB7 ${name}` : name || code || m.material_id.slice(0, 8)) + ra;
+}
+function resolveReplaceToMaterial() {
+  const id = (replaceMatToEl?.value || "").trim();
+  if (!id) return null;
+  return catalogMaterials.find((m) => m.material_id === id) || favoriteMaterials.find((m) => m.material_id === id) || null;
+}
+function fillReplaceToSelect(preferId) {
+  if (!replaceMatToEl) return;
+  const prev = (preferId || replaceMatToEl.value || selectedCatalogMaterial()?.material_id || "").trim();
+  const fromId = (replaceMatFromEl?.value || "").trim();
+  const list = replaceToCandidateMaterials().filter((m) => m.material_id !== fromId);
+  replaceMatToEl.innerHTML = "";
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = list.length ? "\u2014 kies nieuw materiaal \u2014" : "\u2014 kies eerst een rubriek hierboven \u2014";
+  replaceMatToEl.appendChild(ph);
+  for (const m of list) {
+    const opt = document.createElement("option");
+    opt.value = m.material_id;
+    opt.textContent = formatReplaceToOption(m);
+    replaceMatToEl.appendChild(opt);
+  }
+  if (prev && list.some((m) => m.material_id === prev)) {
+    replaceMatToEl.value = prev;
+  }
+}
+async function ensureReplaceToCatalogForFrom() {
+  const fromId = (replaceMatFromEl?.value || "").trim();
+  const usage = projectMaterialUsages?.find((u) => u.material_id === fromId);
+  const master = (usage?.master_category || materialCategoryEl?.value || "").trim();
+  let sub = (usage?.category || "").trim();
+  if (!master || !auth()?.token) {
+    fillReplaceToSelect();
+    updateReplaceMaterialBtn();
+    return;
+  }
+  try {
+    await ensureMaterialCategories();
+    if (materialCategoryEl && materialCategoryEl.value !== master) {
+      if (![...materialCategoryEl.options].some((o) => o.value === master)) {
+        const opt = document.createElement("option");
+        opt.value = master;
+        opt.textContent = master;
+        materialCategoryEl.appendChild(opt);
+      }
+      materialCategoryEl.value = master;
+      renderMaterialSubcategoryOptions();
+    } else {
+      renderMaterialSubcategoryOptions();
+    }
+    if (!sub && usage) {
+      const q = (usage.catalog_id || usage.material_name || "").trim();
+      if (q) {
+        const probe = bppPhase1Enabled() ? await bppListMaterials(invokeString, auth().token, {
+          master_category: master,
+          q,
+          limit: 20
+        }) : await apiGet(
+          `/api/floormap/materials?${new URLSearchParams({
+            limit: "20",
+            master_category: master,
+            q
+          }).toString()}`
+        );
+        const hit = (probe.materials || []).find((m) => m.material_id === fromId) || (probe.materials || []).find(
+          (m) => (m.catalog_id || "").trim() === (usage.catalog_id || "").trim()
+        );
+        if (hit?.category) {
+          sub = hit.category.trim();
+          usage.category = sub;
+        }
+      }
+    }
+    if (materialSubcategoryEl) {
+      if (sub) {
+        if (![...materialSubcategoryEl.options].some((o) => o.value === sub)) {
+          const opt = document.createElement("option");
+          opt.value = sub;
+          opt.textContent = sub;
+          materialSubcategoryEl.appendChild(opt);
+        }
+        materialSubcategoryEl.value = sub;
+      } else {
+        materialSubcategoryEl.value = "";
+      }
+    }
+    await loadMaterialsForCategory(master, "");
+  } catch {
+  }
+  fillReplaceToSelect();
+  updateReplaceMaterialBtn();
+}
+function syncReplaceMaterialUi() {
+  if (!replaceMatEl) return;
+  const show = Boolean(activeSection && !isFloormapKind() && buildingId);
+  replaceMatEl.classList.toggle("hidden", !show);
+  if (!show) {
+    if (replaceMatCb) replaceMatCb.checked = false;
+    replaceMatControlsEl?.classList.add("hidden");
+    if (replaceMatBtn) replaceMatBtn.disabled = true;
+    return;
+  }
+  const open = Boolean(replaceMatCb?.checked);
+  replaceMatControlsEl?.classList.toggle("hidden", !open);
+  if (open && !projectMaterialUsages && !projectMaterialUsagesLoading) {
+    void refreshProjectMaterialUsages(true);
+  }
+  if (!replaceMatFromEl) return;
+  const prev = replaceMatFromEl.value;
+  const usages = projectMaterialUsages || [];
+  replaceMatFromEl.innerHTML = "";
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = projectMaterialUsagesLoading ? "\u2014 laden\u2026 \u2014" : usages.length ? "\u2014 kies te vervangen materiaal \u2014" : "\u2014 nog geen materialen op gevels \u2014";
+  replaceMatFromEl.appendChild(ph);
+  for (const u of usages) {
+    const opt = document.createElement("option");
+    opt.value = u.material_id;
+    opt.textContent = materialUsageLabel(u);
+    replaceMatFromEl.appendChild(opt);
+  }
+  if (prev && usages.some((u) => u.material_id === prev)) {
+    replaceMatFromEl.value = prev;
+  }
+  fillReplaceToSelect();
+  updateReplaceMaterialBtn();
+}
+function updateReplaceMaterialBtn() {
+  if (!replaceMatBtn) return;
+  const fromId = (replaceMatFromEl?.value || "").trim();
+  const to = resolveReplaceToMaterial();
+  const usage = projectMaterialUsages?.find((u) => u.material_id === fromId);
+  const ok = Boolean(replaceMatCb?.checked) && Boolean(fromId) && Boolean(to?.material_id) && Boolean(usage?.count) && to.material_id !== fromId;
+  replaceMatBtn.disabled = !ok;
+  if (replaceMatHintEl) {
+    if (!fromId) {
+      replaceMatHintEl.textContent = "Kies \xABVan\xBB (huidig op gevels) en \xABNaar\xBB (vervanging). Alle componenten met Van worden omgezet.";
+    } else if (!to) {
+      replaceMatHintEl.textContent = `\xABVan\xBB geselecteerd (${usage?.count || 0}\xD7). Kies hieronder \xABNaar\xBB.`;
+    } else if (to.material_id === fromId) {
+      replaceMatHintEl.textContent = "Van en Naar moeten verschillen.";
+    } else {
+      const fromLabel = [usage?.catalog_id, usage?.material_name].filter(Boolean).join(" \xB7 ") || fromId.slice(0, 8);
+      const toLabel = [to.catalog_id, to.name].filter(Boolean).join(" \xB7 ") || to.name;
+      replaceMatHintEl.textContent = `Vervangt ${usage?.count || 0}\xD7 \xAB${fromLabel}\xBB door \xAB${toLabel}\xBB op alle gevels in dit project.`;
+    }
+  }
+  if (ok && usage) {
+    replaceMatBtn.textContent = `Vervang ${usage.count}\xD7 in project`;
+  } else {
+    replaceMatBtn.textContent = "Vervangen\u2026";
+  }
+}
+function clearLocalRoomPatch(id) {
+  const sid = normRoomId(id);
+  if (!sid) return;
+  localRoomPatches.delete(sid);
+  localRoomPatches.delete(id);
+}
+function labelAfterMaterialSwap(label, fromCatalogId, fromName, to) {
+  let out = (label || "").trim();
+  if (!out) return out;
+  const toCat = (to.catalog_id || "").trim();
+  const toName = (to.name || "").trim();
+  const fromCat = (fromCatalogId || "").trim();
+  const fromMat = (fromName || "").trim();
+  if (fromCat && toCat && out.includes(fromCat)) out = out.split(fromCat).join(toCat);
+  if (fromMat && toName && out.includes(fromMat)) out = out.split(fromMat).join(toName);
+  return out;
+}
+function applyMaterialSwapToRoom(room, to, fromCatalogId, fromName) {
+  const prev = room.analysis && typeof room.analysis === "object" ? { ...room.analysis } : {};
+  const nextLabel = labelAfterMaterialSwap(room.label || "", fromCatalogId, fromName, to);
+  const labelChanged = nextLabel !== (room.label || "").trim();
+  const next = {
+    ...room,
+    label: labelChanged ? nextLabel : room.label,
+    analysis: {
+      ...prev,
+      material_id: to.material_id,
+      catalog_id: to.catalog_id || prev.catalog_id,
+      material_name: to.name,
+      master_category: to.master_category || prev.master_category,
+      category: to.category || prev.category,
+      rubriek_nr: to.rubriek_nr ?? prev.rubriek_nr,
+      ra_dba: to.ra_dba ?? prev.ra_dba
+    }
+  };
+  return { room: next, labelChanged };
+}
+async function replaceMaterialInProject() {
+  if (!auth()?.token || !buildingId) {
+    setStatus("Geen project geladen", "err");
+    return;
+  }
+  const fromId = (replaceMatFromEl?.value || "").trim();
+  const to = resolveReplaceToMaterial();
+  if (!fromId || !to) {
+    setStatus("Kies \xABVan\xBB en \xABNaar\xBB", "err");
+    return;
+  }
+  if (to.material_id === fromId) {
+    setStatus("Van en Naar moeten verschillen", "err");
+    return;
+  }
+  const usage = projectMaterialUsages?.find((u) => u.material_id === fromId);
+  if (!usage?.subsection_ids.length) {
+    setStatus("Geen componenten met dat materiaal gevonden", "err");
+    return;
+  }
+  const fromLabel = [usage.catalog_id, usage.material_name].filter(Boolean).join(" \xB7 ") || fromId.slice(0, 8);
+  const toLabel = [to.catalog_id, to.name].filter(Boolean).join(" \xB7 ") || to.name;
+  const ok = window.confirm(
+    `${usage.count} gevelcomponent(en) in dit project:
+
+\xAB${fromLabel}\xBB \u2192 \xAB${toLabel}\xBB
+
+Doorgaan? (kierdichting-kenmerk blijft ongewijzigd)`
+  );
+  if (!ok) {
+    setStatus("Vervangen geannuleerd", "err");
+    return;
+  }
+  if (replaceMatBtn) replaceMatBtn.disabled = true;
+  let done = 0;
+  const failed = [];
+  const replacedIds = new Set(usage.subsection_ids.map((id) => normRoomId(id)));
+  try {
+    for (let i = 0; i < usage.subsection_ids.length; i++) {
+      const sid = usage.subsection_ids[i];
+      setStatus(`Materiaal vervangen ${i + 1}/${usage.count}\u2026`, "busy");
+      try {
+        if (bppPhase1Enabled()) {
+          await bppSaveSubsectionMaterial(invokeString, auth().token, sid, to.material_id);
+        } else {
+          await apiPost("/api/floormap/subsection-material", {
+            subsection_id: sid,
+            material_id: to.material_id
+          });
+        }
+        clearLocalRoomPatch(sid);
+        done += 1;
+      } catch (err) {
+        failed.push(`${sid.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (activeSection) sectionRoomsSnapshot.delete(activeSection.id);
+    for (const sid of usage.subsection_ids) clearLocalRoomPatch(sid);
+    projectMaterialUsages = null;
+    if (activeSection && !isFloormapKind()) {
+      try {
+        await loadRooms({ preserveOrder: true });
+      } catch {
+      }
+    }
+    const mpu = activeScaleMpu();
+    const aspect = activeScaleAspect();
+    const labelChangedIds = /* @__PURE__ */ new Set();
+    rooms = rooms.map((r) => {
+      if (!replacedIds.has(normRoomId(r.id))) return r;
+      const { room: next, labelChanged } = applyMaterialSwapToRoom(
+        r,
+        to,
+        usage.catalog_id,
+        usage.material_name
+      );
+      if (labelChanged) labelChangedIds.add(normRoomId(next.id));
+      noteLocalRoomPatch(next);
+      markRoomTouched(next.id);
+      return next;
+    });
+    if (labelChangedIds.size > 0 && activeSection && auth()?.token) {
+      setStatus(`Labels bijwerken (${labelChangedIds.size})\u2026`, "busy");
+      for (const r of rooms) {
+        if (!labelChangedIds.has(normRoomId(r.id))) continue;
+        const holes = Array.isArray(r.analysis?.holes) ? r.analysis.holes.map((h) => coerceRingPoints(h)).filter((h) => h.length >= 3) : [];
+        try {
+          await saveDrawingSubsection({
+            section_id: activeSection.id,
+            subsection_id: r.id,
+            label: r.label,
+            level_hint: r.level_hint || "OTHER",
+            vg_nr: r.vg_nr,
+            vr_nr: r.vr_nr,
+            points: r.points,
+            holes,
+            metres_per_norm_unit: mpu ?? void 0,
+            scale_aspect_yx: aspect,
+            analysis: r.analysis || void 0
+          });
+        } catch {
+        }
+      }
+    }
+    renderRoomList();
+    drawOverlay();
+    await refreshProjectMaterialUsages(true);
+    if (replaceMatCb) replaceMatCb.checked = false;
+    syncReplaceMaterialUi();
+    if (failed.length) {
+      setStatus(
+        `${done} vervangen, ${failed.length} mislukt (${failed.slice(0, 2).join("; ")}${failed.length > 2 ? "\u2026" : ""})`,
+        "err"
+      );
+    } else {
+      setStatus(
+        `${done} component(en): \xAB${fromLabel}\xBB \u2192 \xAB${toLabel}\xBB` + (labelChangedIds.size ? ` \xB7 ${labelChangedIds.size} label(s) bijgewerkt` : ""),
+        "ok"
+      );
+    }
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+    syncReplaceMaterialUi();
+  }
 }
 async function applyMaterialToEditingComponent(mat) {
   const editingId = pendingRoom?.editingId || "";
@@ -8526,6 +9423,10 @@ async function loadMaterialsForCategory(category, q = "") {
     catalogMaterials = data.materials || [];
     renderMaterialNameOptions(catalogMaterials, keep);
     updateMaterialSpectrumPreview();
+    if (replaceMatCb?.checked) {
+      fillReplaceToSelect();
+      updateReplaceMaterialBtn();
+    }
   } catch (err) {
     catalogMaterials = [];
     renderMaterialNameOptions([]);
@@ -9537,6 +10438,8 @@ async function loadRooms(opts) {
   }
   if (epoch === roomsLoadEpoch) {
     syncCopyLayoutUi();
+    invalidateGevelCopySources();
+    syncCopyGevelUi();
     requestAnimationFrame(() => {
       if (epoch === roomsLoadEpoch) drawOverlay();
     });
@@ -9664,6 +10567,12 @@ async function openSection(sectionId) {
     await loadRooms();
   } catch (err) {
     roomsErr = err;
+  }
+  try {
+    await refreshBuildingVrCatalog();
+    syncRoomListVrFilterOptions(rooms);
+  } catch (err) {
+    console.warn("building VR catalog refresh failed", err);
   }
   if (activeSection?.id !== sec.id) return;
   drawOverlay();
@@ -11337,6 +12246,7 @@ overlayCanvas.addEventListener("mousemove", (ev) => {
   if (pendingRoom?.drawing && !pendingRoom.closed) {
     pendingRoom.drawCursor = effectivePendingDrawCursor(norm);
     overlayCanvas.style.cursor = pendingDrawCanClose() ? "pointer" : "crosshair";
+    updateMeasureReadouts();
     drawOverlay();
     return;
   }
@@ -11494,6 +12404,11 @@ setClearSelBtn?.addEventListener("click", () => {
 });
 roomVrFilterEl?.addEventListener("change", () => {
   roomListVrFilter = roomVrFilterEl.value;
+  if (!isFloormapKind() && roomListVrFilter) {
+    roomVrInput.value = roomListVrFilter;
+    const vg = buildingVrToVg.get(roomListVrFilter);
+    if (vg != null) roomVgInput.value = String(vg);
+  }
   renderRoomList();
   drawOverlay();
 });
@@ -11593,6 +12508,7 @@ materialIdEl?.addEventListener("change", () => {
   syncPendingRoomButtons();
   updateMaterialQuantityHint();
   updateMaterialSpectrumPreview();
+  updateReplaceMaterialBtn();
   if (materialFavoriteEl && materialIdEl.value) {
     if (favoriteMaterials.some((m) => m.material_id === materialIdEl.value)) {
       materialFavoriteEl.value = materialIdEl.value;
@@ -11601,6 +12517,18 @@ materialIdEl?.addEventListener("change", () => {
     }
   }
   syncFavoriteButtons();
+});
+replaceMatCb?.addEventListener("change", () => {
+  syncReplaceMaterialUi();
+});
+replaceMatFromEl?.addEventListener("change", () => {
+  void ensureReplaceToCatalogForFrom();
+});
+replaceMatToEl?.addEventListener("change", () => {
+  updateReplaceMaterialBtn();
+});
+replaceMatBtn?.addEventListener("click", () => {
+  void replaceMaterialInProject();
 });
 function openMaterialCatalogEditor(opts) {
   const matUrl = new URL("/materials.html", location.origin);
@@ -11844,7 +12772,11 @@ kierSuggestCb?.addEventListener("change", () => {
       return;
     }
   }
-  syncKierSuggestUi();
+  if (kierSuggestHintEl) {
+    const peri = pendingRoom ? perimeterMOfRing(pendingRoom.points) : null;
+    const periBit = peri != null ? ` Omtrek \u2248 ${peri.toFixed(2)} m.` : " Zet eerst de schaal voor meters.";
+    kierSuggestHintEl.textContent = kierSuggestCb.checked ? `Kierdichting aangevinkt \u2014 wordt bij Opslaan toegevoegd.${periBit}` : `Geen kierdichting bij Opslaan.${periBit}`;
+  }
 });
 kierSuggestNewBtn?.addEventListener("click", () => {
   sessionStorage.setItem("app-gevelwering-kier-suggest-new", "1");
@@ -11912,6 +12844,22 @@ copyLayoutBtn?.addEventListener("click", () => {
     return;
   }
   void copyLayoutFromSection(src);
+});
+copyGevelCb?.addEventListener("change", () => {
+  syncCopyGevelUi();
+});
+copyGevelSourceEl?.addEventListener("change", () => {
+  if (copyGevelBtn) {
+    copyGevelBtn.disabled = !(copyGevelCb?.checked && copyGevelSourceEl.value);
+  }
+});
+copyGevelBtn?.addEventListener("click", () => {
+  const src = copyGevelSourceEl?.value || "";
+  if (!src) {
+    setStatus("Kies eerst een bron VR \xB7 ori", "err");
+    return;
+  }
+  void copyGevelStackFromSource(src);
 });
 detailBtn?.addEventListener("click", () => startDetailTool());
 detailCloseBtn?.addEventListener("click", () => {
@@ -11989,7 +12937,7 @@ toolClearBtn?.addEventListener("click", () => {
   const panel = document.getElementById("fm-set-ops-fieldset");
   if (!panel) return;
   const key = "app-gevelwering-compose-collapsed";
-  panel.open = localStorage.getItem(key) !== "1";
+  panel.open = localStorage.getItem(key) === "0";
   panel.addEventListener("toggle", () => {
     localStorage.setItem(key, panel.open ? "0" : "1");
   });

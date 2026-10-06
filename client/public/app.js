@@ -112,6 +112,7 @@ var AUTH_KEY = "app_gevelwering_auth";
 var LAST_USERNAME_KEY = "app_gevelwering_last_username";
 var BPP_WS = resolveBppWsUrl();
 var STILTE_PORTAL_PROFILE_URL = window.STILTE_PORTAL_PROFILE_URL || "http://127.0.0.1:4174/opdrachtgever.html#profiel";
+var STILTE_PORTAL_INBOX_URL = window.STILTE_PORTAL_INBOX_URL || "http://127.0.0.1:4174/opdrachtgever.html#inbox";
 function loadRememberedUsername() {
   try {
     return (localStorage.getItem(LAST_USERNAME_KEY) || "").trim();
@@ -659,7 +660,14 @@ async function showApp(info) {
   await loadCustomerProfile();
   await refreshProjectList();
   await refreshGlobalInbox();
+  if (location.hash === "#inbox") goToPortalInbox();
 }
+function goToPortalInbox() {
+  location.assign(STILTE_PORTAL_INBOX_URL);
+}
+window.addEventListener("hashchange", () => {
+  if (location.hash === "#inbox") goToPortalInbox();
+});
 function send(type, payload, wantType) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     return Promise.reject(new Error("Geen verbinding met de server"));

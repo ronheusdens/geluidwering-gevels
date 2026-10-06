@@ -75,6 +75,7 @@ SQL59="$SQL_DIR/app_gevelwering_0_2_57.sql"
 SQL60="$SQL_DIR/app_gevelwering_0_2_58.sql"
 SQL61="$SQL_DIR/app_gevelwering_0_2_59.sql"
 SQL62="$SQL_DIR/app_gevelwering_0_2_60.sql"
+SQL63="$SQL_DIR/app_gevelwering_0_2_61.sql"
 SMOKE_SAVE_GEOM="$APP_ROOT/scripts/smoke-save-geometry.sh"
 
 BPP_PORT="${BPP_PORT:-18080}"
@@ -269,6 +270,8 @@ echo "Applying DDL $SQL61 (document view_rotate) to database ${PG_DB}..."
 psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL61" >/dev/null
 echo "Applying DDL $SQL62 (reorder drawing regions) to database ${PG_DB}..."
 psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL62" >/dev/null
+echo "Applying DDL $SQL63 (kozijn aluminium jaren 80) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL63" >/dev/null
 
 echo "Smoke: save-geometry path (hypot / normalize_ring)..."
 chmod +x "$SMOKE_SAVE_GEOM"

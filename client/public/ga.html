@@ -154,7 +154,8 @@
             <fieldset id="ga-vr-add-fieldset" class="ga-room-pick">
               <legend>3. Nog vrije plattegrondruimte koppelen</legend>
               <p class="hint" id="ga-vr-add-hint">
-                Kies een ruimte die nog niet in de berekening zit. <strong>Start nieuw VG</strong> maakt een nieuw verblijfsgebied met die ruimte als eerste VR.
+                Kies een ruimte die nog niet in de berekening zit.
+                <strong>Start nieuw VG</strong> maakt een nieuw verblijfsgebied — of voegt toe aan een bestaand VG met hetzelfde plattegrond-VG-nummer.
                 <strong>Voeg toe aan VG</strong> hangt een extra VR onder het hierboven geselecteerde VG (zelfde vloer +zelfde VG-nummer).
               </p>
               <label class="block-label">Vrije plattegrondruimte
@@ -190,6 +191,30 @@
                 <li class="hint">— selecteer eerst een VR —</li>
               </ul>
             </div>
+            <section class="copy-layout-bar panel-inset ga-copy-vlakken-bar hidden" id="ga-copy-vlakken-bar" aria-label="Vlakken overnemen">
+              <label class="inline-check">
+                <input type="checkbox" id="ga-copy-vlakken-cb" />
+                Vlakken overnemen van VR + oriëntatie
+              </label>
+              <div class="copy-layout-controls hidden" id="ga-copy-vlakken-controls">
+                <label class="block-label">Bron (VR · ori)
+                  <select id="ga-copy-vlakken-source" aria-label="Bron VR en oriëntatie">
+                    <option value="">— kies bron —</option>
+                  </select>
+                </label>
+                <label class="block-label">Anker op actieve ori (gevelvlak)
+                  <select id="ga-copy-vlakken-anchor" aria-label="Target gevelvlak als anker">
+                    <option value="">— kies gevelvlak —</option>
+                  </select>
+                </label>
+                <button type="button" id="ga-copy-vlakken-btn" disabled>Vlakken overnemen</button>
+                <p class="hint">
+                  Bron is een unieke <strong>VR · ori</strong>. Het <strong>anker</strong> is het gevelvlak op de
+                  actieve ori waar de stack naartoe gaat (muur/±-contour). Materialen én dimensies worden 1:1
+                  overgenomen (inclusief ±), gekoppeld aan componenten rond dat anker. Daarna dimensies desgewenst tweaken.
+                </p>
+              </div>
+            </section>
             <form id="ga-vlak-form" class="form">
               <fieldset class="ga-vlak-props">
                 <legend>1. Vlak-eigenschappen</legend>
@@ -252,8 +277,8 @@
               <p class="hint" id="ga-vr-results-hint">Selecteer een VR en voeg vlakken met materiaal toe.</p>
               <dl class="ga-results-grid" id="ga-vr-results-grid">
                 <div><dt>S / Stot</dt><dd id="ga-res-s">—</dd></div>
-                <div><dt>R'</dt><dd id="ga-res-rp">—</dd></div>
-                <div><dt>D<sub>2m,nT</sub></dt><dd id="ga-res-d">—</dd></div>
+                <div><dt id="ga-res-rp-label">R' (gevel)</dt><dd id="ga-res-rp">—</dd></div>
+                <div><dt id="ga-res-d-label">D<sub>2m,nT</sub> (gevel)</dt><dd id="ga-res-d">—</dd></div>
                 <div><dt>GA</dt><dd id="ga-res-ga">—</dd></div>
                 <div><dt>Lbi</dt><dd id="ga-res-lbi">—</dd></div>
                 <div><dt>GA;k</dt><dd id="ga-res-gak">—</dd></div>
@@ -287,6 +312,6 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/ga.js?v=vlak-pick"></script>
+  <script type="module" src="/ga.js?v=0.73-report-recalc"></script>
 </body>
 </html>

@@ -41,7 +41,7 @@
           <li><a href="#gevel">6. Gevelcomponenten</a></li>
           <li><a href="#materialen">7. Materialen en Studio</a></li>
           <li><a href="#compositie">8. Compositie (+/−)</a></li>
-          <li><a href="#ga">9. Berekening gevelwering (GA)</a></li>
+          <li><a href="#ga">9. Berekening gevelwering (GA / GA;k)</a></li>
           <li><a href="#varianten">10. Varianten vergelijken</a></li>
           <li><a href="#toets">11. Resultaten en toets</a></li>
           <li><a href="#tips">12. Tips en problemen</a></li>
@@ -61,7 +61,8 @@
         <h1>Gebruikershandleiding voor engineers</h1>
         <p class="lede">
           Praktische online handleiding voor tekeningreview, plattegrond, materialen/Studio,
-          gevelcomponenten en gevelweringberekening. Gebruik de inhoudsopgave of zoekbalk links.
+          gevelcomponenten en gevelweringberekening (NPR&nbsp;5272 / NEN&nbsp;5077). Gebruik de
+          inhoudsopgave of zoekbalk links. Productversie: <strong>v0.72</strong>.
         </p>
       </header>
 
@@ -75,9 +76,9 @@
         </p>
         <ul>
           <li><strong>Engineer-review</strong> — tekeningen beoordelen en secties markeren</li>
-          <li><strong>Plattegrond / gevel</strong> — ruimten en gevelvlakken tekenen, schaal, materialen</li>
+          <li><strong>Plattegrond / gevel</strong> — ruimten en gevelvlakken tekenen, schaal, materialen; gevelstack kopiëren; materiaal projectbreed vervangen</li>
           <li><strong>Materialen / Studio</strong> — gedeelde catalogus, opbouwtemplates, samengestelde concepten (admin)</li>
-          <li><strong>GA-model</strong> — variant, VG/VR, vlakken, herberekenen en vergelijken</li>
+          <li><strong>GA-model</strong> — variant, VG/VR, vlakken per oriëntatie tot 100% Stotaal, herberekenen en vergelijken</li>
         </ul>
         <p class="hint">
           Demo: engineer <code>engineer</code>/<code>demo</code>; catalogusbeheer
@@ -127,16 +128,16 @@
         <ol>
           <li><strong>Tekeningen</strong> — reviewwachtrij, secties markeren, review afronden</li>
           <li><strong>Plattegrond</strong> — FLOORMAP: VG/VR-ruimten, schaal, <strong>geveloriëntaties + CL/Cg</strong> per windrichting</li>
-          <li><strong>Gevel</strong> — componenten tekenen, <strong>materiaal én oriëntatie</strong>, eventueel ×N / compositie / kierdichting</li>
+          <li><strong>Gevel</strong> — componenten tekenen, <strong>materiaal én oriëntatie</strong>, eventueel ×N / compositie / kierdichting; optioneel stack kopiëren of materiaal projectbreed vervangen</li>
           <li><strong>Materialen / Studio</strong> (admin) — catalogus bijhouden, opbouwtemplates, samengestelde concepten publiceren</li>
-          <li><strong>Geluidsbelasting (Lb)</strong> — handmatig op de variant (of later via NoiseLoad van de wegverkeer-app)</li>
-          <li><strong>GA</strong> — variant, VG/VR koppelen, per oriëntatie materialen als vlakken tot 100% Stotaal, herberekenen</li>
+          <li><strong>Geluidsbelasting (Lb)</strong> — één waarde handmatig op de <em>variant</em> (niet per gevelvlak)</li>
+          <li><strong>GA</strong> — variant, VG/VR koppelen, <strong>per oriëntatie</strong> materialen als vlakken tot 100% Stotaal, herberekenen (GA;k is één resultaat per VR)</li>
           <li><strong>Vergelijken</strong> — optioneel: variant kopiëren en scenario’s naast elkaar zetten</li>
         </ol>
         <p class="hint">
           Materiaal en RA horen bij de <em>gevelcomponent</em> (geveltekening). In GA kies je
           alleen nog welke complete componenten als vlak meetellen; CL/Cg komen uit de plattegrond
-          (read-only per oriëntatie).
+          (read-only per oriëntatie). Stotaal-dekking zie je altijd per actieve oriëntatie.
         </p>
       </article>
 
@@ -168,7 +169,8 @@
           <li><strong>VG (verblijfsgebied)</strong> — groepering van ruimten (vaak zelfde VG-nummer op één vloer)</li>
           <li><strong>VR (verblijfsruimte)</strong> — één plattegrondruimte, later gekoppeld in GA</li>
           <li><strong>Geveloriëntaties</strong> — welke windrichtingen (N…NW) deze VR heeft; verplicht bij opslaan</li>
-          <li><strong>CL / Cg</strong> — correcties per oriëntatie (dB); gaan mee naar GA;k en zijn daar niet meer te wijzigen</li>
+          <li><strong>CL / Cg</strong> — correcties per oriëntatie (dB); in GA;k telt de CL/Cg van het
+            <em>dominante</em> (grootste) geveloppervlak mee; in GA niet meer te wijzigen</li>
         </ul>
         <h3>Werkwijze</h3>
         <ol>
@@ -180,6 +182,8 @@
         <p>
           Het vloeroppervlak volgt uit de geometrie. In GA vul je later hoogte (en dus volume) en
           nagalmtijd T₀ in. Zonder oriëntaties op de plattegrond kun je in GA geen materialen kiezen.
+          Start je een nieuw VG: de plattegrondlijst vernieuwt na opslaan zodat nieuwe ruimten
+          meteen kiesbaar zijn op de gevel.
         </p>
       </article>
 
@@ -200,6 +204,31 @@
         <p>
           Voor netto metselwerk e.d.: eerst compositie (±) — zie hoofdstuk 8. Glas blijft een
           apart materiaal en blijft apart kiesbaar in GA.
+        </p>
+
+        <h3>Gevelstack kopiëren (VR · ori)</h3>
+        <p>
+          Op een <em>open geveltekening</em> (niet de plattegrond) kun je een bestaande stack
+          (vormen + materialen + ±-relaties) van een andere VR · ori overnemen — zonder opnieuw te tekenen.
+        </p>
+        <ol>
+          <li>Open de <strong>doel-geveltekening</strong>; vul rechts VG, VR en geveloriëntatie in.</li>
+          <li>Vink <strong>Kopieer gevelstack van VR · ori</strong> aan (onder VG/VR/ori).</li>
+          <li>Kies de <strong>bron</strong> (tekening · VR · ori) en klik <strong>Stack naar open gevel</strong>.</li>
+        </ol>
+        <p>
+          De stack wordt <strong>gecentreerd</strong> op de tekening geplaatst; hoekpunten blijven
+          sleepbaar. Bron en doel mogen niet dezelfde VR · ori op dezelfde tekening zijn. Staan er
+          al componenten voor het doel, dan vraagt de app om bevestiging.
+        </p>
+
+        <h3>Materiaal vervangen in project</h3>
+        <p>
+          Onder de materiaalkiezer: vink <strong>Vervang materiaal in project</strong> aan.
+          Kies <strong>Van</strong> (materiaal dat nu op gevelcomponenten staat) en
+          <strong>Naar</strong> (vervanging uit de huidige rubriek / meest gebruikt).
+          Alle gevelcomponenten in dit project met «Van» krijgen «Naar» (labels en materiaal-id).
+          Daarna opnieuw <strong>Herberekenen</strong> in GA.
         </p>
       </article>
 
@@ -320,7 +349,7 @@
           materiaal) verdwijnen uit de GA-keuze; <strong>ander materiaal</strong> (bijv. glas)
           blijft kiesbaar. Zet kierdichting en ×N op het <em>resultaat</em>, niet op vervangen
           buitencontouren. Tip: snijd openingen ook uit de muur (<em>gevel − kozijn</em>), anders
-          tellen muur en openingen dubbel in Stotaal.
+          tellen muur en openingen dubbel in Stotaal (per oriëntatie in GA).
         </p>
       </article>
 
@@ -331,6 +360,7 @@
         <p>
           <strong>Variant</strong> → <strong>VG</strong> → <strong>VR</strong> (plattegrondruimte) →
           <strong>vlakken</strong> (gevelcomponenten met materiaal, per oriëntatie).
+          Rekenmethode: NPR&nbsp;5272 / NEN&nbsp;5077 (afgestemd op DGMR Geluidwering gevels).
         </p>
         <h3>Stappen</h3>
         <ol>
@@ -350,15 +380,57 @@
                 klik een regel om te bewerken of te verwijderen.</li>
             </ul>
           </li>
-          <li>Vul Stotaal tot <strong>100%</strong> (som deeloppervlakten = geveloppervlak). Zonder 100% geen berekening.</li>
+          <li>
+            Vul <strong>Stotaal per oriëntatie</strong> tot <strong>100%</strong>
+            (som deeloppervlakten = geveloppervlak van die ori). De dekkingsmeter telt
+            <em>nooit</em> VR-breed over alle ori’s. Zonder 100% op de bewerkte ori start de
+            berekening voor die ori niet.
+          </li>
           <li>Klik <strong>Herberekenen GA / GA;k</strong> of sla een bewerkt vlak op.</li>
           <li>Aan het eind van een sessie: <strong>Bestand → Project opslaan</strong> om alle VR-resultaten te checkpointen.</li>
         </ol>
+
+        <h3>Wat wordt berekend (per VR)</h3>
+        <p>
+          Alle vlakken van de VR (alle oriëntaties die je hebt toegevoegd) worden bij herberekenen
+          als <strong>één gevelvlak</strong> gecombineerd. Resultaten GA / GA;k / Lbi;k horen bij de
+          <em>verblijfsruimte</em>, niet bij een losse geveloriëntatie. Daarom zie je dezelfde GA;k
+          bij elke ori van die VR in de UI.
+        </p>
+        <ul>
+          <li>
+            <strong>R′</strong> — energetische samenvoeging van deelvlakken:<br />
+            <code>RAs<sub>i</sub> = RA<sub>i</sub> + 10·log<sub>10</sub>(S / Q<sub>i</sub>)</code>
+            → <code>R′ = −10·log<sub>10</sub>(Σ 10<sup>−RAs<sub>i</sub>/10</sup>)</code>
+          </li>
+          <li><strong>GA</strong> = D<sub>2m,nT</sub> − Cr (Cr = 3&nbsp;dB reflectie)</li>
+          <li><strong>Lbi</strong> = Lb − GA</li>
+          <li>
+            <strong>GA;k</strong> = GA − 10·log<sub>10</sub>(max(V/Stot,&nbsp;3) / (6·T)) + CL + Cg<br />
+            Stot = som S van vlakken met «meenemen in GA;k» (lengte telt niet mee)
+          </li>
+          <li><strong>Lbi;k</strong> = Lb − GA;k</li>
+        </ul>
+
+        <h3>Geluidsbelasting, CL/Cg — geen gewogen gemiddelde Lb</h3>
+        <ul>
+          <li>
+            <strong>Lb</strong> is <em>één waarde per variant</em>. De app neemt
+            <strong>geen</strong> gewogen gemiddelde van gevelbelastingen over oriëntaties.
+          </li>
+          <li>
+            Meerdere gevelvlakken beïnvloeden GA;k via de gecombineerde <strong>R′</strong>,
+            <strong>S</strong> / <strong>Stot</strong>, en CL/Cg — niet via middeling van Lb.
+          </li>
+          <li>
+            <strong>CL / Cg</strong> voor GA;k komen van het <strong>dominante</strong>
+            (grootste) geveloppervlak van de VR (of een VR-override); niet oppervlakte-gewogen
+            over alle ori’s. CL/Cg tellen alleen mee in GA;k, niet in R′ / D<sub>2m,nT</sub> / GA.
+          </li>
+        </ul>
         <p>
           <strong>Materiaal / RA</strong> staan op de geveltekening (niet te wijzigen in GA).
           <strong>Oriëntatie, CL en Cg</strong> komen uit de plattegrond en zijn in GA read-only.
-          CL/Cg van het grootste geveloppervlak tellen alleen mee bij <strong>GA;k</strong>
-          (niet in R′ / D<sub>2m,nT</sub> / GA).
         </p>
         <p class="hint">
           Spectrum op de variant is vooralsnog vooral ter weergave/export; de rekenkern gebruikt
@@ -395,9 +467,9 @@
       <article class="manual-section" id="toets" data-manual-section>
         <h2>11. Resultaten en toets</h2>
         <ul>
-          <li><strong>GA</strong> — geluidwering gevel</li>
+          <li><strong>GA</strong> — geluidwering gevel (per VR, na combinatie van alle vlakken)</li>
           <li><strong>Lbi</strong> — Lb − GA</li>
-          <li><strong>GA;k</strong> — karakteristieke geluidwering</li>
+          <li><strong>GA;k</strong> — karakteristieke geluidwering (per VR; NPR/NEN, niet per oriëntatie)</li>
           <li><strong>Lbi;k</strong> — Lb − GA;k (karakteristiek binnenniveau)</li>
         </ul>
         <p>
@@ -408,8 +480,8 @@
           <li>Onderwijs / kinderopvang (en Wgh-onderwijs): <strong>28 dB</strong></li>
         </ul>
         <p>
-          Vereiste GA;k ≈ Lb − grens. Pas Lb of de constructie (materiaal op de gevel / CL–Cg op de
-          plattegrond) aan tot de toets groen is.
+          Vereiste GA;k ≈ Lb − grens. Pas Lb (op de variant), de constructie (materiaal op de
+          gevel) of CL–Cg (op de plattegrond, dominante ori) aan tot de toets groen is.
         </p>
       </article>
 
@@ -431,15 +503,33 @@
           </dd>
           <dt>Stotaal komt niet op 100% / te hoog</dt>
           <dd>
-            Deeloppervlakten moeten optellen tot het geveloppervlak. Openingen (kozijn/glas) die
-            nog in de muurcontour zitten zonder ± (<em>gevel − kozijn</em>) tellen dubbel — snijd
-            die eerst uit op de geveltekening. Bij ×N op een kozijn: zorg dat de muur evenveel
+            Dekking geldt <em>per actieve oriëntatie</em>, niet over de hele VR. Deeloppervlakten
+            moeten optellen tot het geveloppervlak van die ori. Openingen (kozijn/glas) die nog in
+            de muurcontour zitten zonder ± (<em>gevel − kozijn</em>) tellen dubbel — snijd die
+            eerst uit op de geveltekening. Bij ×N op een kozijn: zorg dat de muur evenveel
             openingen aftrekt (of gebruik ×N consequent).
+          </dd>
+          <dt>GA;k is gelijk voor alle oriëntaties van dezelfde VR</dt>
+          <dd>
+            Dat is correct: GA;k is een <em>VR-resultaat</em> (NPR&nbsp;5272 / NEN&nbsp;5077).
+            Alle toegevoegde vlakken van die VR gaan in één R′/Stot-berekening. Er is geen aparte
+            GA;k per gevelvlak en geen gewogen gemiddelde van Lb over ori’s.
           </dd>
           <dt>Berekening lukt niet / geen RA</dt>
           <dd>
             Koppel op de geveltekening een materiaal met RA. Compositieresultaten moeten een
-            materiaal op het resultaat hebben. Zonder 100% Stotaal start de berekening niet.
+            materiaal op het resultaat hebben. Zonder 100% Stotaal op de betreffende ori start de
+            berekening niet.
+          </dd>
+          <dt>Gevelstack kopiëren lukt niet</dt>
+          <dd>
+            Alleen op een <em>open geveltekening</em> (niet FLOORMAP). Vul rechts VG, VR en ori in;
+            kies een andere bron VR · ori. Bij bestaande doelcomponenten bevestig je eerst.
+          </dd>
+          <dt>Materiaal projectbreed vervangen: Naar-lijst leeg</dt>
+          <dd>
+            Kies eerst een rubriek (of meest gebruikt) zodat de Naar-lijst gevuld wordt. Na
+            vervangen: componentlijst ververst automatisch; herbereken daarna in GA.
           </dd>
           <dt>Vergelijking toont streepjes</dt>
           <dd>
@@ -484,6 +574,6 @@
     </main>
   </div>
 
-  <script type="module" src="/handleiding.js?v=materials-studio"></script>
+  <script type="module" src="/handleiding.js?v=0.72"></script>
 </body>
 </html>

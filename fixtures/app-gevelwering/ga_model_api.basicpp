@@ -899,7 +899,7 @@ REM ---------------------------------------------------------------------------
 
 PROCEDURE API_ListVlakken(session_token$, verblijfsruimte_id$) AS STRING
     DIM sql$, rid%, n%, i%, out$, t$, vr_id$
-    DIM id$, omschr$, area$, cl$, cg$, gak$, sort$, fac$, qkind$, len$, ori$
+    DIM id$, omschr$, area$, cl$, cg$, gak$, sort$, fac$, qkind$, len$, ori$, pref$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -930,6 +930,7 @@ PROCEDURE API_ListVlakken(session_token$, verblijfsruimte_id$) AS STRING
     sql$ = sql$ + "sort_order::text AS sort_order, COALESCE(facade_subsection_id::text,'') AS facade_subsection_id, "
     sql$ = sql$ + "COALESCE(analysis->>'quantity_kind','area') AS quantity_kind, "
     sql$ = sql$ + "COALESCE(analysis->>'length_m','') AS length_m, "
+    sql$ = sql$ + "COALESCE(analysis->>'prefer_stored_qty','') AS prefer_stored_qty, "
     sql$ = sql$ + "COALESCE(orientatie,'') AS orientatie "
     sql$ = sql$ + "FROM app_gevelwering.vlak WHERE verblijfsruimte_id = '" + vr_id$ + "'::uuid "
     sql$ = sql$ + "ORDER BY sort_order ASC, created_at ASC"
@@ -953,6 +954,7 @@ PROCEDURE API_ListVlakken(session_token$, verblijfsruimte_id$) AS STRING
         fac$ = POSTGRES_GET_BY_NAME$(rid%, i%, "facade_subsection_id")
         qkind$ = POSTGRES_GET_BY_NAME$(rid%, i%, "quantity_kind")
         len$ = POSTGRES_GET_BY_NAME$(rid%, i%, "length_m")
+        pref$ = LCASE$(POSTGRES_GET_BY_NAME$(rid%, i%, "prefer_stored_qty"))
         ori$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "orientatie"), CHR$(34), "")
         out$ = out$ + "{" + CHR$(34) + "vlak_id" + CHR$(34) + ":" + CHR$(34) + id$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "omschrijving" + CHR$(34) + ":" + CHR$(34) + omschr$ + CHR$(34)
@@ -973,6 +975,12 @@ PROCEDURE API_ListVlakken(session_token$, verblijfsruimte_id$) AS STRING
         ELSE
             out$ = out$ + len$
         END IF
+        out$ = out$ + "," + CHR$(34) + "prefer_stored_qty" + CHR$(34) + ":"
+        IF pref$ = "t" OR pref$ = "true" OR pref$ = "1" THEN
+            out$ = out$ + "true"
+        ELSE
+            out$ = out$ + "false"
+        END IF
         out$ = out$ + "," + CHR$(34) + "orientatie" + CHR$(34) + ":" + CHR$(34) + ori$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "facade_subsection_id" + CHR$(34) + ":"
         IF fac$ = "" THEN
@@ -987,9 +995,9 @@ PROCEDURE API_ListVlakken(session_token$, verblijfsruimte_id$) AS STRING
     RETURN out$
 END PROCEDURE
 
-PROCEDURE API_SaveVlak(session_token$, verblijfsruimte_id$, vlak_id$, omschrijving$, area_m2$, cl_db$, cg_db$, meenemen_gak$, sort_order$, facade_subsection_id$, quantity_kind$, length_m$, orientatie$) AS STRING
+PROCEDURE API_SaveVlak(session_token$, verblijfsruimte_id$, vlak_id$, omschrijving$, area_m2$, cl_db$, cg_db$, meenemen_gak$, sort_order$, facade_subsection_id$, quantity_kind$, length_m$, orientatie$, prefer_stored_qty$) AS STRING
     DIM sql$, rid%, t$, vr_id$, vl_id$, omschr$, area$, cl$, cg$, gak$, sort$, fac$, out$, created$, b_id$
-    DIM qkind$, len$, anal$, ori$
+    DIM qkind$, len$, anal$, ori$, pref$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -1026,11 +1034,17 @@ PROCEDURE API_SaveVlak(session_token$, verblijfsruimte_id$, vlak_id$, omschrijvi
     qkind$ = LCASE$(SUBSTITUTE$(quantity_kind$, "'", "''"))
     len$ = SUBSTITUTE$(length_m$, "'", "''")
     ori$ = UCASE$(SUBSTITUTE$(orientatie$, "'", "''"))
+    pref$ = LCASE$(SUBSTITUTE$(prefer_stored_qty$, "'", "''"))
     IF ori$ <> "" AND ori$ <> "N" AND ori$ <> "NO" AND ori$ <> "O" AND ori$ <> "ZO" AND ori$ <> "Z" AND ori$ <> "ZW" AND ori$ <> "W" AND ori$ <> "NW" THEN
         RETURN "ERROR: orientatie must be empty or one of N,NO,O,ZO,Z,ZW,W,NW"
     END IF
     IF qkind$ <> "length" THEN
         qkind$ = "area"
+    END IF
+    IF pref$ = "1" OR pref$ = "true" OR pref$ = "t" OR pref$ = "yes" THEN
+        pref$ = "true"
+    ELSE
+        pref$ = "false"
     END IF
     IF qkind$ = "length" THEN
         area$ = "0"
@@ -1038,12 +1052,20 @@ PROCEDURE API_SaveVlak(session_token$, verblijfsruimte_id$, vlak_id$, omschrijvi
             len$ = "0"
         END IF
         anal$ = "{" + CHR$(34) + "quantity_kind" + CHR$(34) + ":" + CHR$(34) + "length" + CHR$(34)
-        anal$ = anal$ + "," + CHR$(34) + "length_m" + CHR$(34) + ":" + len$ + "}"
+        anal$ = anal$ + "," + CHR$(34) + "length_m" + CHR$(34) + ":" + len$
+        IF pref$ = "true" THEN
+            anal$ = anal$ + "," + CHR$(34) + "prefer_stored_qty" + CHR$(34) + ":true"
+        END IF
+        anal$ = anal$ + "}"
     ELSE
         IF area$ = "" THEN
             area$ = "0"
         END IF
-        anal$ = "{" + CHR$(34) + "quantity_kind" + CHR$(34) + ":" + CHR$(34) + "area" + CHR$(34) + "}"
+        anal$ = "{" + CHR$(34) + "quantity_kind" + CHR$(34) + ":" + CHR$(34) + "area" + CHR$(34)
+        IF pref$ = "true" THEN
+            anal$ = anal$ + "," + CHR$(34) + "prefer_stored_qty" + CHR$(34) + ":true"
+        END IF
+        anal$ = anal$ + "}"
     END IF
     IF cl$ = "" THEN
         cl$ = "0"
