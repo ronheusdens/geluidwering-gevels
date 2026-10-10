@@ -219,6 +219,7 @@ ALTER TABLE app_gevelwering.building
 | `API_ListVerblijfsgebieden` / `API_CreateVerblijfsgebied` / `API_SaveVerblijfsgebied` / `API_DeleteVerblijfsgebied` | engineer: VG (create = VG+eerste VR + floormap subsection; uniqueness subsection **per variant**) |
 | `API_ListVerblijfsruimten` / `API_AddVerblijfsruimte` / `API_SaveVerblijfsruimte` / `API_DeleteVerblijfsruimte` / `API_SaveVerblijfsruimteResults` | engineer: VR (+ persist GA/Lbi/GA;k); laatste VR niet verwijderbaar |
 | `API_ListVlakken` / `API_SaveVlak` / `API_DeleteVlak` | engineer: gevelvlakken |
+| `API_ListGevelgroepen` / `API_SaveGevelgroep` / `API_DeleteGevelgroep` | engineer: gevelgroepen (CL/Cg per groep binnen VR·ori) |
 | `API_ListVlakElementen` / `API_SaveVlakElement` / `API_DeleteVlakElement` | engineer: elementen ↔ `material` |
 | `API_ListLinkedSubsections(token$, building_id$)` | engineer: floormap subsection → VR-koppelingen (inclusief `variant_id`) |
 

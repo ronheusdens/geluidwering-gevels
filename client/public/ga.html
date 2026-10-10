@@ -4,7 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Stilte advies en meten — Berekening gevelwering</title>
-  <link rel="stylesheet" href="/styles.css?v=logo-wordmark" />
+  <link rel="stylesheet" href="/styles.css?v=0.86-process-dock-ga" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body>
   <main class="page page-wide">
@@ -105,6 +106,16 @@
             </form>
             <ul id="ga-variant-list" class="drawing-list"></ul>
 
+            <aside class="ga-section-preview" id="ga-section-preview" aria-live="polite">
+              <h3 class="ga-subhead">Huidige sectie</h3>
+              <p class="hint ga-section-preview-caption" id="ga-section-preview-caption">Selecteer een VR of vrije ruimte</p>
+              <div class="ga-section-preview-frame">
+                <img id="ga-section-preview-img" class="ga-section-preview-img" alt="" hidden />
+                <p class="ga-section-preview-empty" id="ga-section-preview-empty">Geen plattegrondsectie</p>
+              </div>
+              <p class="hint"><a id="ga-section-preview-link" class="hidden" href="/floormap.html">Open in plattegrond →</a></p>
+            </aside>
+
             <h3 class="ga-subhead">Varianten vergelijken</h3>
             <p class="hint">Selecteer minstens twee varianten. Ruimten worden gematcht op dezelfde plattegrondruimte. Spectrum is alleen ter info (geen spectraal rekenmodel).</p>
             <div id="ga-compare-pick" class="ga-compare-pick"></div>
@@ -177,9 +188,8 @@
             <h2>Vlakken</h2>
             <p class="hint" id="ga-vlak-facade-hint">
               <strong>Gevelcomponenten</strong> teken en materiaal je op de geveltekening.
-              <strong>Vlakken</strong> hieronder zijn de koppeling naar de berekening (per materiaal; CL/Cg vast per ori).
-              Zelfde materiaal wordt opgeteld tot één keuze. Meerdere materialen op dezelfde oriëntatie mogen.
-              Een compositie (±) telt als één netto-component — bronnen (glas, kozijn, …) horen niet als apart vlak tenzij ze een eigen materiaal hebben.
+              Extra gevelgroepen (2/3) zet je daar per component; hier kies je oriëntatie + groep — de lijst toont alleen die componenten.
+              Binnen een groep wordt hetzelfde materiaal weer opgeteld (eigen CL per groep).
             </p>
             <div class="ga-vlak-pick" id="ga-vlak-pick-wrap">
               <p class="block-label" id="ga-vlak-pick-label">Geveloriëntatie (deze VR)</p>
@@ -190,6 +200,12 @@
               <ul id="ga-vlak-pick" class="ga-ori-pick-list drawing-list" role="listbox" aria-labelledby="ga-vlak-pick-label" aria-disabled="true">
                 <li class="hint">— selecteer eerst een VR —</li>
               </ul>
+              <label class="block-label ga-vlak-pick-groep-label" id="ga-vlak-pick-groep-wrap">Gevelgroep
+                <select id="ga-vlak-pick-groep" aria-label="Gevelgroep (1 = standaard)">
+                  <option value="1">1</option>
+                </select>
+              </label>
+              <p class="hint" id="ga-vlak-pick-groep-hint">Groep 1 is standaard. Groep 2/3 alleen als je die op de geveltekening hebt gezet.</p>
             </div>
             <section class="copy-layout-bar panel-inset ga-copy-vlakken-bar hidden" id="ga-copy-vlakken-bar" aria-label="Vlakken overnemen">
               <label class="inline-check">
@@ -218,16 +234,30 @@
             <form id="ga-vlak-form" class="form">
               <fieldset class="ga-vlak-props">
                 <legend>1. Vlak-eigenschappen</legend>
-                <p class="hint">Oriëntatie en CL/Cg komen uit de plattegrond (vast per windrichting). Koppel daarna één materiaal-groep als vlak.</p>
+                <p class="hint">Oriëntatie + gevelgroep kies je hierboven. CL/Cg gelden voor de gekozen groep (alle vlakken met componenten in die groep).</p>
                 <label>Omschrijving vlak <input id="ga-vlak-name" maxlength="80" placeholder="bijv. voorzijde" /></label>
                 <p class="ga-ori-readonly" id="ga-vlak-orientatie-display" aria-live="polite">Oriëntatie: — (uit plattegrond)</p>
                 <select id="ga-vlak-orientatie" class="hidden" tabindex="-1" aria-hidden="true">
                   <option value="">—</option>
                 </select>
-                <div class="mat-row">
-                  <label>CL [dB] <input id="ga-vlak-cl" type="number" step="0.1" min="0" max="100" value="" readonly placeholder="0" title="Vast per geveloriëntatie (plattegrond) — niet live te wijzigen. Alleen op GA;k." /></label>
-                  <label>Cg [dB] <input id="ga-vlak-cg" type="number" step="0.1" value="" readonly placeholder="0" title="Vast per geveloriëntatie (plattegrond) — niet live te wijzigen. Alleen op GA;k." /></label>
+                <div class="mat-row ga-vlak-corr-row">
+                  <label>CL [dB]
+                    <span class="ga-corr-stepper">
+                      <button type="button" id="ga-vlak-cl-down" class="secondary ga-corr-step" aria-label="CL omlaag">−</button>
+                      <input id="ga-vlak-cl" type="number" step="1" min="0" max="100" value="" placeholder="0" title="CL voor de gekozen gevelgroep (hele dB)." />
+                      <button type="button" id="ga-vlak-cl-up" class="secondary ga-corr-step" aria-label="CL omhoog">+</button>
+                    </span>
+                  </label>
+                  <label>Cg [dB]
+                    <span class="ga-corr-stepper">
+                      <button type="button" id="ga-vlak-cg-down" class="secondary ga-corr-step" aria-label="Cg omlaag">−</button>
+                      <input id="ga-vlak-cg" type="number" step="0.1" value="" placeholder="0" title="Cg voor de gekozen gevelgroep." />
+                      <button type="button" id="ga-vlak-cg-up" class="secondary ga-corr-step" aria-label="Cg omhoog">+</button>
+                    </span>
+                  </label>
+                  <button type="button" id="ga-vlak-corr-reset" class="secondary" title="Zet CL/Cg terug op de plattegrond-waarde voor deze oriëntatie">Ori-default</button>
                 </div>
+                <p class="hint" id="ga-vlak-corr-hint"></p>
                 <label class="inline-check"><input id="ga-vlak-gak" type="checkbox" checked /> Meenemen in GA;k (Stot)</label>
                 <p class="hint" id="ga-vlak-edit-hint">Kies hierboven alleen een oriëntatie. Materialen kies je bij 2; vastgelegde vlakken staan in de scrollbox «Toegevoegde vlakken».</p>
                 <p class="hint" id="ga-vlak-ori-status"></p>
@@ -252,7 +282,8 @@
               </fieldset>
 
               <div class="actions">
-                <button type="submit" id="ga-vlak-save-btn" disabled>Vlak toevoegen</button>
+                <button type="submit" id="ga-vlak-save-btn" disabled>Vlak vullen</button>
+                <button type="button" id="ga-vlak-list-to-vlak-btn" class="secondary" disabled title="Alle nog vrije materialen in de pickerlijst (deze ori · groep) als vlakken toevoegen">Lijst naar vlak</button>
                 <button type="button" id="ga-vlak-cancel-btn" class="secondary hidden">Annuleer bewerken</button>
               </div>
             </form>
@@ -312,6 +343,47 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/ga.js?v=0.73-report-recalc"></script>
+
+  <!-- Zelfde procesdock als geveltekening — stap 5 actief; 1–4 navigeren terug. -->
+  <aside id="ga-work-mode" class="fm-process-dock hidden" aria-label="Processtappen gevel" hidden>
+    <header class="fm-process-dock-head" id="ga-process-dock-drag" title="Versleep om te verplaatsen">
+      <p class="fm-work-mode-q">Processtappen</p>
+      <button
+        type="button"
+        id="ga-process-dock-collapse"
+        class="fm-process-dock-collapse"
+        aria-expanded="true"
+        aria-controls="ga-process-dock-body"
+        title="Inklappen"
+      >−</button>
+    </header>
+    <div class="fm-process-dock-body" id="ga-process-dock-body">
+      <p class="hint fm-process-dock-hint">Stappen 1–4 openen de geveltekening; hier ben je bij GA.</p>
+      <div class="fm-work-mode-btns" role="radiogroup" aria-label="Kies processtap">
+        <button type="button" class="fm-work-mode-btn" data-mode="picklist" aria-pressed="false" title="Terug naar geveltekening · picklist">
+          <span class="fm-work-mode-num">1</span>
+          <span class="fm-work-mode-txt">Picklist voor dit project samenstellen</span>
+        </button>
+        <button type="button" class="fm-work-mode-btn" data-mode="draw" aria-pressed="false" title="Terug naar geveltekening · tekenen">
+          <span class="fm-work-mode-num">2</span>
+          <span class="fm-work-mode-txt">Componenten tekenen</span>
+        </button>
+        <button type="button" class="fm-work-mode-btn" data-mode="assign" aria-pressed="false" title="Terug naar geveltekening · materiaal">
+          <span class="fm-work-mode-num">3</span>
+          <span class="fm-work-mode-txt">Materiaal koppelen</span>
+        </button>
+        <button type="button" class="fm-work-mode-btn" data-mode="compose" aria-pressed="false" title="Terug naar geveltekening · compositie">
+          <span class="fm-work-mode-num">4</span>
+          <span class="fm-work-mode-txt">Compositie (+/−) — optioneel</span>
+        </button>
+        <button type="button" class="fm-work-mode-btn active fm-work-mode-btn--jump" data-mode="ga" aria-pressed="true" title="GA-berekening (huidige pagina)">
+          <span class="fm-work-mode-num">5</span>
+          <span class="fm-work-mode-txt">GA-berekening</span>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <script type="module" src="/ga.js?v=0.85-dgmr-cl"></script>
 </body>
 </html>

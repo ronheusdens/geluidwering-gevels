@@ -505,6 +505,45 @@ PROCEDURE API_SaveVerblijfsgebied(session_token$, verblijfsgebied_id$, omschrijv
     RETURN out$
 END PROCEDURE
 
+PROCEDURE API_CreateEmptyVerblijfsgebied(session_token$, variant_id$, omschrijving$) AS STRING
+    DIM sql$, rid%, t$, v_id$, omschr$, out$, vg_id$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF variant_id$ = "" OR omschrijving$ = "" THEN
+        RETURN "ERROR: variant_id and omschrijving are required"
+    END IF
+    v_id$ = SUBSTITUTE$(variant_id$, "'", "''")
+    omschr$ = SUBSTITUTE$(omschrijving$, "'", "''")
+    sql$ = "INSERT INTO app_gevelwering.verblijfsgebied (variant_id, building_id, omschrijving) "
+    sql$ = sql$ + "SELECT v.id, v.building_id, '" + omschr$ + "' FROM app_gevelwering.variant v "
+    sql$ = sql$ + "WHERE v.id = '" + v_id$ + "'::uuid RETURNING id::text AS id"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: variant not found"
+    END IF
+    vg_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "id")
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "verblijfsgebied_id" + CHR$(34) + ":" + CHR$(34) + vg_id$ + CHR$(34) + "}"
+    RETURN out$
+END PROCEDURE
+
 PROCEDURE API_DeleteVerblijfsgebied(session_token$, verblijfsgebied_id$) AS STRING
     DIM sql$, rid%, t$, vg_id$, out$
 
@@ -787,6 +826,72 @@ PROCEDURE API_SaveVerblijfsruimte(session_token$, verblijfsruimte_id$, omschrijv
     RETURN out$
 END PROCEDURE
 
+PROCEDURE API_MoveVerblijfsruimte(session_token$, verblijfsruimte_id$, target_verblijfsgebied_id$) AS STRING
+    DIM sql$, rid%, t$, vr_id$, tgt_id$, out$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF verblijfsruimte_id$ = "" OR target_verblijfsgebied_id$ = "" THEN
+        RETURN "ERROR: verblijfsruimte_id and target_verblijfsgebied_id are required"
+    END IF
+    vr_id$ = SUBSTITUTE$(verblijfsruimte_id$, "'", "''")
+    tgt_id$ = SUBSTITUTE$(target_verblijfsgebied_id$, "'", "''")
+
+    sql$ = "SELECT CASE WHEN vr.id IS NULL THEN 'missing_vr' "
+    sql$ = sql$ + "WHEN tg.id IS NULL THEN 'missing_vg' "
+    sql$ = sql$ + "WHEN vr.variant_id IS DISTINCT FROM tg.variant_id THEN 'variant_mismatch' "
+    sql$ = sql$ + "WHEN vr.verblijfsgebied_id = tg.id THEN 'unchanged' "
+    sql$ = sql$ + "ELSE 'ok' END AS status "
+    sql$ = sql$ + "FROM app_gevelwering.verblijfsruimte vr "
+    sql$ = sql$ + "FULL JOIN app_gevelwering.verblijfsgebied tg ON tg.id = '" + tgt_id$ + "'::uuid "
+    sql$ = sql$ + "WHERE vr.id = '" + vr_id$ + "'::uuid"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: verblijfsruimte not found"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "status") = "missing_vg" THEN
+        RETURN "ERROR: target verblijfsgebied not found"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "status") = "variant_mismatch" THEN
+        RETURN "ERROR: verblijfsruimte and target verblijfsgebied must belong to the same variant"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "status") = "unchanged" THEN
+        out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "verblijfsruimte_id" + CHR$(34) + ":" + CHR$(34) + vr_id$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "verblijfsgebied_id" + CHR$(34) + ":" + CHR$(34) + tgt_id$ + CHR$(34) + "}"
+        RETURN out$
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "status") <> "ok" THEN
+        RETURN "ERROR: move verblijfsruimte failed"
+    END IF
+
+    sql$ = "UPDATE app_gevelwering.verblijfsruimte SET verblijfsgebied_id = '" + tgt_id$ + "'::uuid, updated_at = now() "
+    sql$ = sql$ + "WHERE id = '" + vr_id$ + "'::uuid RETURNING id::text AS id"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: move verblijfsruimte failed"
+    END IF
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "verblijfsruimte_id" + CHR$(34) + ":" + CHR$(34) + vr_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "verblijfsgebied_id" + CHR$(34) + ":" + CHR$(34) + tgt_id$ + CHR$(34) + "}"
+    RETURN out$
+END PROCEDURE
+
 PROCEDURE API_DeleteVerblijfsruimte(session_token$, verblijfsruimte_id$) AS STRING
     DIM sql$, rid%, t$, vr_id$, out$, n$
 
@@ -899,7 +1004,7 @@ REM ---------------------------------------------------------------------------
 
 PROCEDURE API_ListVlakken(session_token$, verblijfsruimte_id$) AS STRING
     DIM sql$, rid%, n%, i%, out$, t$, vr_id$
-    DIM id$, omschr$, area$, cl$, cg$, gak$, sort$, fac$, qkind$, len$, ori$, pref$
+    DIM id$, omschr$, area$, cl$, cg$, gak$, sort$, fac$, qkind$, len$, ori$, pref$, gg$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -931,7 +1036,8 @@ PROCEDURE API_ListVlakken(session_token$, verblijfsruimte_id$) AS STRING
     sql$ = sql$ + "COALESCE(analysis->>'quantity_kind','area') AS quantity_kind, "
     sql$ = sql$ + "COALESCE(analysis->>'length_m','') AS length_m, "
     sql$ = sql$ + "COALESCE(analysis->>'prefer_stored_qty','') AS prefer_stored_qty, "
-    sql$ = sql$ + "COALESCE(orientatie,'') AS orientatie "
+    sql$ = sql$ + "COALESCE(orientatie,'') AS orientatie, "
+    sql$ = sql$ + "COALESCE(gevelgroep_id::text,'') AS gevelgroep_id "
     sql$ = sql$ + "FROM app_gevelwering.vlak WHERE verblijfsruimte_id = '" + vr_id$ + "'::uuid "
     sql$ = sql$ + "ORDER BY sort_order ASC, created_at ASC"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
@@ -956,6 +1062,7 @@ PROCEDURE API_ListVlakken(session_token$, verblijfsruimte_id$) AS STRING
         len$ = POSTGRES_GET_BY_NAME$(rid%, i%, "length_m")
         pref$ = LCASE$(POSTGRES_GET_BY_NAME$(rid%, i%, "prefer_stored_qty"))
         ori$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "orientatie"), CHR$(34), "")
+        gg$ = POSTGRES_GET_BY_NAME$(rid%, i%, "gevelgroep_id")
         out$ = out$ + "{" + CHR$(34) + "vlak_id" + CHR$(34) + ":" + CHR$(34) + id$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "omschrijving" + CHR$(34) + ":" + CHR$(34) + omschr$ + CHR$(34)
         out$ = out$ + "," + CHR$(34) + "area_m2" + CHR$(34) + ":" + area$
@@ -988,6 +1095,12 @@ PROCEDURE API_ListVlakken(session_token$, verblijfsruimte_id$) AS STRING
         ELSE
             out$ = out$ + CHR$(34) + fac$ + CHR$(34)
         END IF
+        out$ = out$ + "," + CHR$(34) + "gevelgroep_id" + CHR$(34) + ":"
+        IF gg$ = "" THEN
+            out$ = out$ + "null"
+        ELSE
+            out$ = out$ + CHR$(34) + gg$ + CHR$(34)
+        END IF
         out$ = out$ + "}"
         i% = i% + 1
     WEND
@@ -995,9 +1108,9 @@ PROCEDURE API_ListVlakken(session_token$, verblijfsruimte_id$) AS STRING
     RETURN out$
 END PROCEDURE
 
-PROCEDURE API_SaveVlak(session_token$, verblijfsruimte_id$, vlak_id$, omschrijving$, area_m2$, cl_db$, cg_db$, meenemen_gak$, sort_order$, facade_subsection_id$, quantity_kind$, length_m$, orientatie$, prefer_stored_qty$) AS STRING
+PROCEDURE API_SaveVlak(session_token$, verblijfsruimte_id$, vlak_id$, omschrijving$, area_m2$, cl_db$, cg_db$, meenemen_gak$, sort_order$, facade_subsection_id$, quantity_kind$, length_m$, orientatie$, prefer_stored_qty$, gevelgroep_id$) AS STRING
     DIM sql$, rid%, t$, vr_id$, vl_id$, omschr$, area$, cl$, cg$, gak$, sort$, fac$, out$, created$, b_id$
-    DIM qkind$, len$, anal$, ori$, pref$
+    DIM qkind$, len$, anal$, ori$, pref$, gg$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -1035,6 +1148,7 @@ PROCEDURE API_SaveVlak(session_token$, verblijfsruimte_id$, vlak_id$, omschrijvi
     len$ = SUBSTITUTE$(length_m$, "'", "''")
     ori$ = UCASE$(SUBSTITUTE$(orientatie$, "'", "''"))
     pref$ = LCASE$(SUBSTITUTE$(prefer_stored_qty$, "'", "''"))
+    gg$ = SUBSTITUTE$(gevelgroep_id$, "'", "''")
     IF ori$ <> "" AND ori$ <> "N" AND ori$ <> "NO" AND ori$ <> "O" AND ori$ <> "ZO" AND ori$ <> "Z" AND ori$ <> "ZW" AND ori$ <> "W" AND ori$ <> "NW" THEN
         RETURN "ERROR: orientatie must be empty or one of N,NO,O,ZO,Z,ZW,W,NW"
     END IF
@@ -1089,8 +1203,62 @@ PROCEDURE API_SaveVlak(session_token$, verblijfsruimte_id$, vlak_id$, omschrijvi
     END IF
     b_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "building_id")
 
+    REM Ensure / resolve gevelgroep: CL/Cg live on the group.
+    IF gg$ <> "" THEN
+        sql$ = "SELECT cl_db::text AS cl_db, cg_db::text AS cg_db, orientatie "
+        sql$ = sql$ + "FROM app_gevelwering.gevelgroep WHERE id = '" + gg$ + "'::uuid "
+        sql$ = sql$ + "AND verblijfsruimte_id = '" + vr_id$ + "'::uuid"
+        rid% = POSTGRES_QUERY(g_conn%, sql$)
+        IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+            RETURN "ERROR: gevelgroep not found for this VR"
+        END IF
+        cl$ = POSTGRES_GET_BY_NAME$(rid%, 0, "cl_db")
+        cg$ = POSTGRES_GET_BY_NAME$(rid%, 0, "cg_db")
+        IF ori$ = "" THEN
+            ori$ = POSTGRES_GET_BY_NAME$(rid%, 0, "orientatie")
+        END IF
+    ELSE
+        IF ori$ <> "" THEN
+            REM Match bestaande groep op CL/Cg, anders nieuwe groep (Standaard als eerste).
+            sql$ = "SELECT id::text AS id FROM app_gevelwering.gevelgroep "
+            sql$ = sql$ + "WHERE verblijfsruimte_id = '" + vr_id$ + "'::uuid AND orientatie = '" + ori$ + "' "
+            sql$ = sql$ + "AND ABS(cl_db - " + cl$ + "::double precision) < 1e-9 "
+            sql$ = sql$ + "AND ABS(cg_db - " + cg$ + "::double precision) < 1e-9 "
+            sql$ = sql$ + "ORDER BY sort_order ASC, created_at ASC LIMIT 1"
+            rid% = POSTGRES_QUERY(g_conn%, sql$)
+            IF POSTGRES_NUM_ROWS(rid%) >= 1 THEN
+                gg$ = POSTGRES_GET_BY_NAME$(rid%, 0, "id")
+            ELSE
+                sql$ = "SELECT COUNT(*)::text AS n FROM app_gevelwering.gevelgroep "
+                sql$ = sql$ + "WHERE verblijfsruimte_id = '" + vr_id$ + "'::uuid AND orientatie = '" + ori$ + "'"
+                rid% = POSTGRES_QUERY(g_conn%, sql$)
+                IF POSTGRES_GET_BY_NAME$(rid%, 0, "n") = "0" THEN
+                    sql$ = "INSERT INTO app_gevelwering.gevelgroep "
+                    sql$ = sql$ + "(verblijfsruimte_id, building_id, orientatie, label, cl_db, cg_db, sort_order) "
+                    sql$ = sql$ + "VALUES ('" + vr_id$ + "'::uuid, '" + b_id$ + "'::uuid, '" + ori$ + "', 'Standaard', "
+                    sql$ = sql$ + cl$ + "::double precision, " + cg$ + "::double precision, 0) "
+                    sql$ = sql$ + "RETURNING id::text AS id"
+                ELSE
+                    sql$ = "INSERT INTO app_gevelwering.gevelgroep "
+                    sql$ = sql$ + "(verblijfsruimte_id, building_id, orientatie, label, cl_db, cg_db, sort_order) "
+                    sql$ = sql$ + "VALUES ('" + vr_id$ + "'::uuid, '" + b_id$ + "'::uuid, '" + ori$ + "', "
+                    sql$ = sql$ + "'Groep CL=" + cl$ + "', "
+                    sql$ = sql$ + cl$ + "::double precision, " + cg$ + "::double precision, "
+                    sql$ = sql$ + "(SELECT COALESCE(MAX(sort_order),-1)+1 FROM app_gevelwering.gevelgroep "
+                    sql$ = sql$ + "WHERE verblijfsruimte_id = '" + vr_id$ + "'::uuid AND orientatie = '" + ori$ + "')) "
+                    sql$ = sql$ + "RETURNING id::text AS id"
+                END IF
+                rid% = POSTGRES_QUERY(g_conn%, sql$)
+                IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+                    RETURN "ERROR: gevelgroep create failed"
+                END IF
+                gg$ = POSTGRES_GET_BY_NAME$(rid%, 0, "id")
+            END IF
+        END IF
+    END IF
+
     IF vlak_id$ = "" THEN
-        sql$ = "INSERT INTO app_gevelwering.vlak (verblijfsruimte_id, building_id, omschrijving, area_m2, cl_db, cg_db, meenemen_gak, sort_order, facade_subsection_id, analysis, orientatie) "
+        sql$ = "INSERT INTO app_gevelwering.vlak (verblijfsruimte_id, building_id, omschrijving, area_m2, cl_db, cg_db, meenemen_gak, sort_order, facade_subsection_id, analysis, orientatie, gevelgroep_id) "
         sql$ = sql$ + "VALUES ('" + vr_id$ + "'::uuid, '" + b_id$ + "'::uuid, '" + omschr$ + "', "
         sql$ = sql$ + area$ + "::double precision, " + cl$ + "::double precision, " + cg$ + "::double precision, "
         sql$ = sql$ + gak$ + "::boolean, " + sort$ + "::integer, "
@@ -1099,7 +1267,12 @@ PROCEDURE API_SaveVlak(session_token$, verblijfsruimte_id$, vlak_id$, omschrijvi
         ELSE
             sql$ = sql$ + "'" + fac$ + "'::uuid"
         END IF
-        sql$ = sql$ + ", '" + SUBSTITUTE$(anal$, "'", "''") + "'::jsonb, '" + ori$ + "'"
+        sql$ = sql$ + ", '" + SUBSTITUTE$(anal$, "'", "''") + "'::jsonb, '" + ori$ + "', "
+        IF gg$ = "" THEN
+            sql$ = sql$ + "NULL"
+        ELSE
+            sql$ = sql$ + "'" + gg$ + "'::uuid"
+        END IF
         sql$ = sql$ + ") RETURNING id::text AS id"
         created$ = "true"
     ELSE
@@ -1108,7 +1281,13 @@ PROCEDURE API_SaveVlak(session_token$, verblijfsruimte_id$, vlak_id$, omschrijvi
         sql$ = sql$ + "meenemen_gak = " + gak$ + "::boolean, sort_order = " + sort$ + "::integer, "
         sql$ = sql$ + "analysis = '" + SUBSTITUTE$(anal$, "'", "''") + "'::jsonb, "
         sql$ = sql$ + "orientatie = '" + ori$ + "', "
-        sql$ = sql$ + "facade_subsection_id = "
+        sql$ = sql$ + "gevelgroep_id = "
+        IF gg$ = "" THEN
+            sql$ = sql$ + "NULL"
+        ELSE
+            sql$ = sql$ + "'" + gg$ + "'::uuid"
+        END IF
+        sql$ = sql$ + ", facade_subsection_id = "
         IF fac$ = "" THEN
             sql$ = sql$ + "NULL"
         ELSE
@@ -1160,6 +1339,261 @@ PROCEDURE API_DeleteVlak(session_token$, vlak_id$) AS STRING
         RETURN "ERROR: vlak not found"
     END IF
     out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "vlak_id" + CHR$(34) + ":" + CHR$(34) + vl_id$ + CHR$(34) + "}"
+    RETURN out$
+END PROCEDURE
+
+REM ---------------------------------------------------------------------------
+REM Gevelgroep (CL/Cg per groep binnen VR·oriëntatie)
+REM ---------------------------------------------------------------------------
+
+PROCEDURE API_ListGevelgroepen(session_token$, verblijfsruimte_id$) AS STRING
+    DIM sql$, rid%, n%, i%, out$, t$, vr_id$
+    DIM id$, omschr$, ori$, cl$, cg$, sort$, cnt$, gnr$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF verblijfsruimte_id$ = "" THEN
+        RETURN "ERROR: verblijfsruimte_id is required"
+    END IF
+    vr_id$ = SUBSTITUTE$(verblijfsruimte_id$, "'", "''")
+
+    sql$ = "SELECT g.id::text AS id, g.orientatie, g.label, g.cl_db::text AS cl_db, "
+    sql$ = sql$ + "g.cg_db::text AS cg_db, g.sort_order::text AS sort_order, "
+    sql$ = sql$ + "COALESCE(g.groep_nr, 1)::text AS groep_nr, "
+    sql$ = sql$ + "COUNT(v.id)::text AS vlak_count "
+    sql$ = sql$ + "FROM app_gevelwering.gevelgroep g "
+    sql$ = sql$ + "LEFT JOIN app_gevelwering.vlak v ON v.gevelgroep_id = g.id "
+    sql$ = sql$ + "WHERE g.verblijfsruimte_id = '" + vr_id$ + "'::uuid "
+    sql$ = sql$ + "GROUP BY g.id, g.orientatie, g.label, g.cl_db, g.cg_db, g.sort_order, g.groep_nr, g.created_at "
+    sql$ = sql$ + "ORDER BY g.orientatie ASC, g.groep_nr ASC, g.sort_order ASC, g.created_at ASC"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    n% = POSTGRES_NUM_ROWS(rid%)
+
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "verblijfsruimte_id" + CHR$(34) + ":" + CHR$(34) + vr_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "gevelgroepen" + CHR$(34) + ":["
+    i% = 0
+    WHILE i% < n%
+        IF i% > 0 THEN
+            out$ = out$ + ","
+        END IF
+        id$ = POSTGRES_GET_BY_NAME$(rid%, i%, "id")
+        ori$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "orientatie"), CHR$(34), "")
+        omschr$ = SUBSTITUTE$(SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, i%, "label"), CHR$(34), ""), CHR$(10), " ")
+        cl$ = POSTGRES_GET_BY_NAME$(rid%, i%, "cl_db")
+        cg$ = POSTGRES_GET_BY_NAME$(rid%, i%, "cg_db")
+        sort$ = POSTGRES_GET_BY_NAME$(rid%, i%, "sort_order")
+        gnr$ = POSTGRES_GET_BY_NAME$(rid%, i%, "groep_nr")
+        cnt$ = POSTGRES_GET_BY_NAME$(rid%, i%, "vlak_count")
+        out$ = out$ + "{" + CHR$(34) + "gevelgroep_id" + CHR$(34) + ":" + CHR$(34) + id$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "orientatie" + CHR$(34) + ":" + CHR$(34) + ori$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "label" + CHR$(34) + ":" + CHR$(34) + omschr$ + CHR$(34)
+        out$ = out$ + "," + CHR$(34) + "cl_db" + CHR$(34) + ":" + cl$
+        out$ = out$ + "," + CHR$(34) + "cg_db" + CHR$(34) + ":" + cg$
+        out$ = out$ + "," + CHR$(34) + "sort_order" + CHR$(34) + ":" + sort$
+        out$ = out$ + "," + CHR$(34) + "groep_nr" + CHR$(34) + ":" + gnr$
+        out$ = out$ + "," + CHR$(34) + "vlak_count" + CHR$(34) + ":" + cnt$ + "}"
+        i% = i% + 1
+    WEND
+    out$ = out$ + "]}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_SaveGevelgroep(session_token$, verblijfsruimte_id$, gevelgroep_id$, orientatie$, label$, cl_db$, cg_db$, sort_order$) AS STRING
+    DIM sql$, rid%, t$, vr_id$, gg_id$, ori$, lab$, cl$, cg$, sort$, out$, created$, b_id$, gnr$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF verblijfsruimte_id$ = "" THEN
+        RETURN "ERROR: verblijfsruimte_id is required"
+    END IF
+
+    vr_id$ = SUBSTITUTE$(verblijfsruimte_id$, "'", "''")
+    gg_id$ = SUBSTITUTE$(gevelgroep_id$, "'", "''")
+    ori$ = UCASE$(SUBSTITUTE$(orientatie$, "'", "''"))
+    lab$ = SUBSTITUTE$(label$, "'", "''")
+    cl$ = SUBSTITUTE$(cl_db$, "'", "''")
+    cg$ = SUBSTITUTE$(cg_db$, "'", "''")
+    sort$ = SUBSTITUTE$(sort_order$, "'", "''")
+    IF ori$ <> "N" AND ori$ <> "NO" AND ori$ <> "O" AND ori$ <> "ZO" AND ori$ <> "Z" AND ori$ <> "ZW" AND ori$ <> "W" AND ori$ <> "NW" THEN
+        RETURN "ERROR: orientatie must be one of N,NO,O,ZO,Z,ZW,W,NW"
+    END IF
+    IF lab$ = "" THEN
+        lab$ = "1"
+    END IF
+    IF cl$ = "" THEN
+        cl$ = "0"
+    END IF
+    IF cg$ = "" THEN
+        cg$ = "0"
+    END IF
+    IF sort$ = "" THEN
+        sort$ = "0"
+    END IF
+    REM groep_nr 1–3: uit label, anders sort_order+1.
+    IF lab$ = "1" OR lab$ = "2" OR lab$ = "3" THEN
+        gnr$ = lab$
+    ELSE
+        IF sort$ = "1" THEN
+            gnr$ = "2"
+        ELSE
+            IF sort$ = "2" THEN
+                gnr$ = "3"
+            ELSE
+                gnr$ = "1"
+            END IF
+        END IF
+        lab$ = gnr$
+    END IF
+    IF gnr$ = "2" THEN
+        sort$ = "1"
+    ELSE
+        IF gnr$ = "3" THEN
+            sort$ = "2"
+        ELSE
+            sort$ = "0"
+        END IF
+    END IF
+
+    sql$ = "SELECT building_id::text AS building_id FROM app_gevelwering.verblijfsruimte WHERE id = '" + vr_id$ + "'::uuid"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: verblijfsruimte not found"
+    END IF
+    b_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "building_id")
+
+    IF gg_id$ = "" THEN
+        sql$ = "INSERT INTO app_gevelwering.gevelgroep "
+        sql$ = sql$ + "(verblijfsruimte_id, building_id, orientatie, label, cl_db, cg_db, sort_order, groep_nr) "
+        sql$ = sql$ + "VALUES ('" + vr_id$ + "'::uuid, '" + b_id$ + "'::uuid, '" + ori$ + "', '" + lab$ + "', "
+        sql$ = sql$ + cl$ + "::double precision, " + cg$ + "::double precision, " + sort$ + "::integer, "
+        sql$ = sql$ + gnr$ + "::integer) "
+        sql$ = sql$ + "RETURNING id::text AS id"
+        created$ = "true"
+    ELSE
+        sql$ = "UPDATE app_gevelwering.gevelgroep SET orientatie = '" + ori$ + "', label = '" + lab$ + "', "
+        sql$ = sql$ + "cl_db = " + cl$ + "::double precision, cg_db = " + cg$ + "::double precision, "
+        sql$ = sql$ + "sort_order = " + sort$ + "::integer, groep_nr = " + gnr$ + "::integer, updated_at = now() "
+        sql$ = sql$ + "WHERE id = '" + gg_id$ + "'::uuid AND verblijfsruimte_id = '" + vr_id$ + "'::uuid "
+        sql$ = sql$ + "RETURNING id::text AS id"
+        created$ = "false"
+    END IF
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: gevelgroep save failed"
+    END IF
+    gg_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "id")
+
+    REM Keep vlak CL/Cg/ori in sync with the group.
+    sql$ = "UPDATE app_gevelwering.vlak SET cl_db = " + cl$ + "::double precision, "
+    sql$ = sql$ + "cg_db = " + cg$ + "::double precision, orientatie = '" + ori$ + "', updated_at = now() "
+    sql$ = sql$ + "WHERE gevelgroep_id = '" + gg_id$ + "'::uuid"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "gevelgroep_id" + CHR$(34) + ":" + CHR$(34) + gg_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "created" + CHR$(34) + ":" + created$ + "}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE API_DeleteGevelgroep(session_token$, gevelgroep_id$) AS STRING
+    DIM sql$, rid%, t$, gg_id$, out$, vr_id$, ori$, cnt$, sib$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
+    END IF
+    IF session_token$ = "" THEN
+        RETURN "ERROR: login required"
+    END IF
+    t$ = SUBSTITUTE$(session_token$, "'", "''")
+    sql$ = "SELECT u.username, u.is_engineer::text AS is_engineer "
+    sql$ = sql$ + "FROM app_gevelwering.login_session s "
+    sql$ = sql$ + "JOIN app_gevelwering.service_user u ON u.id = s.user_id "
+    sql$ = sql$ + "WHERE s.token = '" + t$ + "' AND s.revoked_at IS NULL "
+    sql$ = sql$ + "AND s.expires_at > now() AND u.is_active = true"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: session invalid or expired — login again"
+    END IF
+    IF POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "engineer" AND POSTGRES_GET_BY_NAME$(rid%, 0, "username") <> "admin" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "true" AND POSTGRES_GET_BY_NAME$(rid%, 0, "is_engineer") <> "t" THEN
+        RETURN "ERROR: engineer access required"
+    END IF
+    IF gevelgroep_id$ = "" THEN
+        RETURN "ERROR: gevelgroep_id is required"
+    END IF
+    gg_id$ = SUBSTITUTE$(gevelgroep_id$, "'", "''")
+
+    sql$ = "SELECT verblijfsruimte_id::text AS vr_id, orientatie FROM app_gevelwering.gevelgroep "
+    sql$ = sql$ + "WHERE id = '" + gg_id$ + "'::uuid"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: gevelgroep not found"
+    END IF
+    vr_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "vr_id")
+    ori$ = POSTGRES_GET_BY_NAME$(rid%, 0, "orientatie")
+
+    sql$ = "SELECT COUNT(*)::text AS n FROM app_gevelwering.gevelgroep "
+    sql$ = sql$ + "WHERE verblijfsruimte_id = '" + vr_id$ + "'::uuid AND orientatie = '" + ori$ + "'"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    cnt$ = POSTGRES_GET_BY_NAME$(rid%, 0, "n")
+    IF cnt$ = "1" THEN
+        RETURN "ERROR: laatste gevelgroep voor deze oriëntatie kan niet worden verwijderd"
+    END IF
+
+    REM Reassign vlakken to sibling group (lowest sort_order).
+    sql$ = "SELECT id::text AS id FROM app_gevelwering.gevelgroep "
+    sql$ = sql$ + "WHERE verblijfsruimte_id = '" + vr_id$ + "'::uuid AND orientatie = '" + ori$ + "' "
+    sql$ = sql$ + "AND id <> '" + gg_id$ + "'::uuid ORDER BY sort_order ASC, created_at ASC LIMIT 1"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: geen andere gevelgroep om vlakken naartoe te verplaatsen"
+    END IF
+    sib$ = POSTGRES_GET_BY_NAME$(rid%, 0, "id")
+    sql$ = "UPDATE app_gevelwering.vlak vl SET "
+    sql$ = sql$ + "gevelgroep_id = g.id, cl_db = g.cl_db, cg_db = g.cg_db, updated_at = now() "
+    sql$ = sql$ + "FROM app_gevelwering.gevelgroep g "
+    sql$ = sql$ + "WHERE vl.gevelgroep_id = '" + gg_id$ + "'::uuid AND g.id = '" + sib$ + "'::uuid"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+
+    sql$ = "DELETE FROM app_gevelwering.gevelgroep WHERE id = '" + gg_id$ + "'::uuid RETURNING id::text AS id"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: gevelgroep delete failed"
+    END IF
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "gevelgroep_id" + CHR$(34) + ":" + CHR$(34) + gg_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "moved_to" + CHR$(34) + ":" + CHR$(34) + sib$ + CHR$(34) + "}"
     RETURN out$
 END PROCEDURE
 

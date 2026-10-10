@@ -1,20 +1,20 @@
 /**
- * GA / GA;k / Lbi rekenkern (NPR 5272 / NEN 5077, afgestemd op DGMR Geluidwering gevels).
+ * GA / GA;k / Lbi rekenkern — NPR 5272 / NEN 5077 / EN 12354-3, DGMR-parity.
  *
- * Per geveloriëntatie (één “gevel”):
- *   RAs_i = RA_i + 10·log10(S_ori / Q_i)     Q = m² of m (kier)
+ * Per gevelgroep (binnen oriëntatie; default = één groep per ori):
+ *   RAs_i = RA_i + 10·log10(S_groep / Q_i)    Q = m² of m (kier)
  *   R'    = −10·log10(Σ 10^(−RAs_i/10))
- *   Ruimte = 10·log10(V / (6·T·S_ori))
- *   D2m,nT = R' + Ruimte + CL + Cg            CL/Cg = gevelcorrectie van die oriëntatie
- *   GA_ori = D2m,nT − Cr                      Cr = 3 dB (reflectie, vast)
+ *   Ruimte = 10·log10(V / (6·T·S_groep))
+ *   D2m,nT = R' + Ruimte + Cg                 fysiek (EN 12354-3 / DGMR-vlakrij)
+ *   GA_vlak = D2m,nT − Cr                     Cr = 3 dB; CL zit NIET in de vlak-GA
  *
- * Meerdere oriëntaties: energetisch combineren van D2m (of equivalent GA_ori):
- *   D2m_tot = −10·log10(Σ 10^(−D2m_ori/10))
+ * CL (NEN 5077 herleidingsterm): corrigeert de geluidbelasting t.o.v. L_ref.
+ * Equivalent: D2m_ref = D2m,nT + CL vóór energetische som over gevels:
+ *   D2m_tot = −10·log10(Σ 10^(−(D2m_vlak + CL_vlak)/10))
  *   GA      = D2m_tot − Cr
  *   Lbi     = Lb − GA
  *   GA;k    = GA − 10·log10(max(V/Stot, 3) / (6·T))
  *            Stot = som S van vlakken met meenemen_gak (lengte telt niet mee)
- *            (CL/Cg zitten al in D2m per gevel — niet nogmaals op GA;k)
  *   Lbi;k   = Lb − GA;k
  *   Toets   = Lbi;k ≤ grens (gebruiksfunctie) → Voldoet
  *
@@ -99,13 +99,17 @@ export function gakCorrectionDb(volumeM3: number, t0s: number, stotM2: number): 
 
 export type GaVlakInput = {
   label?: string;
-  /** Geveloriëntatie (N/O/Z/W/…); bepaalt CL/Cg-groep. Leeg → één anonieme gevel. */
+  /** Geveloriëntatie (N/O/Z/W/…). Leeg → één anonieme gevel. */
   orientatie?: string | null;
+  /** Expliciete gevelgroep; anders groepering op ori+CL+Cg. */
+  gevelgroep_id?: string | null;
+  gevelgroep_label?: string | null;
   ra_dba: number;
   quantity_kind: "area" | "length" | string;
   area_m2?: number | null;
   length_m?: number | null;
   meenemen_gak?: boolean;
+  /** CL/Cg van de gevelgroep (alle vlakken in de groep delen deze). */
   cl_db?: number;
   cg_db?: number;
 };
@@ -136,17 +140,25 @@ export type GaElementResult = {
   cg_db: number;
   area_for_s: number;
   orientatie: string;
+  gevelgroep_id?: string | null;
 };
 
 export type GaFacadeResult = {
   orientatie: string;
+  gevelgroep_id?: string | null;
+  gevelgroep_label?: string | null;
   s_m2: number;
   r_prime: number;
   ruimte_db: number;
   cl_db: number;
   cg_db: number;
+  /** Fysiek D2m,nT = R′+ruimte+Cg (zonder CL) — DGMR-vlakrij. */
   d2m_nt: number;
+  /** D2m t.o.v. L_ref = D2m,nT+CL — alleen voor ruimtesom. */
+  d2m_nt_ref: number;
+  /** Vlak-GA = D2m,nT − Cr (zonder CL), zoals DGMR. */
   ga_dba: number;
+  /** Effectieve bijdrage t.o.v. Lb: Lb − (D2m_ref − Cr). */
   lbi_dba: number | null;
   elements: GaElementResult[];
 };
@@ -242,6 +254,8 @@ export function computeVrGa(input: GaVrInput): GaVrResult {
     cg_db: number;
     area_for_s: number;
     orientatie: string;
+    gevelgroep_id: string;
+    gevelgroep_label: string;
   };
 
   const raw: RawEl[] = [];
@@ -257,16 +271,22 @@ export function computeVrGa(input: GaVrInput): GaVrResult {
           : NaN;
     const ra = Number(v.ra_dba);
     if (!(qty > 0) || !Number.isFinite(ra)) continue;
+    const cl = overrideCl != null ? overrideCl : Number(v.cl_db) || 0;
+    const cg = overrideCg != null ? overrideCg : Number(v.cg_db) || 0;
+    const ori = normalizeOriKey(v.orientatie);
+    const ggId = String(v.gevelgroep_id || "").trim();
     raw.push({
       label: v.label || "",
       kind,
       quantity: qty,
       ra_dba: ra,
       meenemen_gak: v.meenemen_gak !== false,
-      cl_db: overrideCl != null ? overrideCl : Number(v.cl_db) || 0,
-      cg_db: overrideCg != null ? overrideCg : Number(v.cg_db) || 0,
+      cl_db: cl,
+      cg_db: cg,
       area_for_s: kind === "area" ? qty : 0,
-      orientatie: normalizeOriKey(v.orientatie),
+      orientatie: ori,
+      gevelgroep_id: ggId,
+      gevelgroep_label: String(v.gevelgroep_label || "").trim(),
     });
   }
 
@@ -290,17 +310,27 @@ export function computeVrGa(input: GaVrInput): GaVrResult {
     });
   }
 
-  const byOri = new Map<string, RawEl[]>();
+  /* D2m-groep = gevelgroep_id, anders ori+CL+Cg. Alle groepen van de VR
+   * worden apart gerekend en energetisch gecombineerd. */
+  const byFacadeKey = new Map<string, RawEl[]>();
   for (const e of raw) {
-    const list = byOri.get(e.orientatie) || [];
+    const key = e.gevelgroep_id
+      ? `g:${e.gevelgroep_id}`
+      : `${e.orientatie}\0${e.cl_db}\0${e.cg_db}`;
+    const list = byFacadeKey.get(key) || [];
     list.push(e);
-    byOri.set(e.orientatie, list);
+    byFacadeKey.set(key, list);
   }
 
   const facades: GaFacadeResult[] = [];
   const allElements: GaElementResult[] = [];
 
-  for (const [ori, group] of byOri) {
+  for (const group of byFacadeKey.values()) {
+    const ori = group[0].orientatie;
+    const cl = group[0].cl_db;
+    const cg = group[0].cg_db;
+    const ggId = group[0].gevelgroep_id || null;
+    const ggLabel = group[0].gevelgroep_label || "";
     const sOri = group.reduce((a, e) => a + e.area_for_s, 0);
     if (!(sOri > 0)) {
       return failResult(grens, {
@@ -310,18 +340,6 @@ export function computeVrGa(input: GaVrInput): GaVrResult {
         elements: allElements,
         facades,
       });
-    }
-
-    // CL/Cg: van grootste area-element in deze ori (alle zouden gelijk moeten zijn vanuit plattegrond).
-    let cl = 0;
-    let cg = 0;
-    let bestArea = -1;
-    for (const e of group) {
-      if (e.area_for_s > bestArea) {
-        bestArea = e.area_for_s;
-        cl = e.cl_db;
-        cg = e.cg_db;
-      }
     }
 
     const elements: GaElementResult[] = group.map((e) => ({
@@ -335,6 +353,7 @@ export function computeVrGa(input: GaVrInput): GaVrResult {
       cg_db: cg,
       area_for_s: e.area_for_s,
       orientatie: ori,
+      gevelgroep_id: e.gevelgroep_id || null,
     }));
 
     const rPrime = combineRprime(elements.map((e) => e.ras).filter((x): x is number => x != null));
@@ -355,17 +374,23 @@ export function computeVrGa(input: GaVrInput): GaVrResult {
       });
     }
 
-    const d2m = rPrime + ruimte + cl + cg;
+    // DGMR / EN 12354-3: fysiek D2m zonder CL; CL is herleiding op Lb.
+    const d2m = rPrime + ruimte + cg;
+    const d2mRef = d2m + cl;
     const gaOri = d2m - Cr;
-    const lbiOri = Number.isFinite(Lb) ? Lb - gaOri : null;
+    const gaRef = d2mRef - Cr;
+    const lbiOri = Number.isFinite(Lb) ? Lb - gaRef : null;
     facades.push({
       orientatie: ori,
+      gevelgroep_id: ggId,
+      gevelgroep_label: ggLabel || null,
       s_m2: sOri,
       r_prime: rPrime,
       ruimte_db: ruimte,
       cl_db: cl,
       cg_db: cg,
       d2m_nt: d2m,
+      d2m_nt_ref: d2mRef,
       ga_dba: gaOri,
       lbi_dba: lbiOri,
       elements,
@@ -382,7 +407,8 @@ export function computeVrGa(input: GaVrInput): GaVrResult {
     });
   }
 
-  const d2mTot = combineLevelsDb(facades.map((f) => f.d2m_nt));
+  // Ruimtesom t.o.v. L_ref: CL wél meenemen (anders ~3 dB te laag bij hoekkamers).
+  const d2mTot = combineLevelsDb(facades.map((f) => f.d2m_nt_ref));
   if (d2mTot == null) {
     return failResult(grens, {
       reason: "combinatie van gevels mislukt",
@@ -445,7 +471,13 @@ export function computeVrGa(input: GaVrInput): GaVrResult {
  * With multi-ori: operates within the façade that owns `elementIndex` (global elements order).
  */
 export function minRaDeltaForRprime(
-  elements: Array<{ ras: number | null; orientatie?: string }>,
+  elements: Array<{
+    ras: number | null;
+    orientatie?: string;
+    cl_db?: number;
+    cg_db?: number;
+    gevelgroep_id?: string | null;
+  }>,
   elementIndex: number,
   needDeltaR: number,
 ): number | null {
@@ -453,11 +485,20 @@ export function minRaDeltaForRprime(
   const target = elements[elementIndex];
   if (!target || target.ras == null || !Number.isFinite(target.ras)) return null;
   const ori = target.orientatie;
+  const gg = String(target.gevelgroep_id || "").trim();
   const peers =
     ori != null
       ? elements
           .map((e, i) => ({ e, i }))
-          .filter(({ e }) => e.orientatie === ori)
+          .filter(({ e }) => {
+            if (e.orientatie !== ori) return false;
+            const eg = String(e.gevelgroep_id || "").trim();
+            if (gg || eg) return eg === gg;
+            return (
+              (target.cl_db == null || e.cl_db === target.cl_db) &&
+              (target.cg_db == null || e.cg_db === target.cg_db)
+            );
+          })
       : elements.map((e, i) => ({ e, i }));
   const rasList = peers.map(({ e }) => e.ras).filter((x): x is number => x != null && Number.isFinite(x));
   if (rasList.length !== peers.length) return null;

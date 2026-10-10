@@ -57,7 +57,10 @@ flowchart LR
 **In scope**
 
 - Engineer/admin UI: tekeningen, plattegrond, gevels, materialencatalogus, GA-model  
-- VG / VR / vlakken, schaal + oppervlakten, **compositie (+/−)** van gevelcomponenten  
+- VG / VR / vlakken, schaal + oppervlakten; **verwerkingsregel 1** (hiërarchie gevel ⊃ kozijn ⊃ ruit) automatisch voor Stotaal/GA — **compositie (+/−)** alleen optioneel bij uitzonderingen  
+- **Verwerkingsregel 2:** rond een kozijn wordt kierdichting (omtrek) automatisch toegevoegd bij stap 3 (materiaal koppelen), gestuurd door het vinkje/type «Kierdichting voor dit vlak» in stap 1 (picklist); length-bijdrage in stap 5 (GA)  
+- **Kozijn-tekentool** (gevel): hartlijnen + balkbreedte → kozijnopp. + glasvlakken; muur-opp. via hiërarchie netto (bruto − openingen) zonder verplichte ±  
+
 - Materialen: één gedeelde catalogus (`app_gevelwering.material`); eenmalige DGMR-seed (`catalogusGG.pdf`), daarna app-owned onderhoud; projectfavorieten («meest gebruikt») + benoemde presets  
 - Berekening gevelwering (NPR/NEN-route zoals geïmplementeerd); toets Lbi;k ≤ grens per gebruiksfunctie (Woonfunctie 33 dB)  
 - Meerdere **berekeningsvarianten** per project (deep clone + vergelijking op `/ga.html`)  
@@ -97,9 +100,9 @@ Procesdiagram: [`docs/workflow gevelweringgevels-app.drawio`](../workflow%20geve
 1. Gebouw/project openen via **Bestand**-menu (Openen / Recent) of queue — gedeelde building data in Postgres.  
 2. Tekeningen registreren / engineer-review (`/engineer.html`).  
 3. Plattegrond (`FLOORMAP`): VG/VR-ruimten tekenen, schaal, opslaan; volgorde in de lijst met ▲/▼.  
-4. Geveltekening: **Detailgebied** (sleep rechthoek → 2×/3×/4×; rechterlijst blijft zichtbaar) voor kleine componenten; tekenen (materiaal optioneel; oranje/groene led) → **materiaal toekennen** → eventueel **Kopie/Dupliceer** → eventueel **compositie (+/−)** → GA (alleen complete componenten in vlakdelenkiezer; ▲/▼).  
+4. Geveltekening: **Detailgebied** (sleep rechthoek → 2×/3×/4×; rechterlijst blijft zichtbaar) voor kleine componenten; tekenen (materiaal optioneel; oranje/groene led) → **materiaal toekennen** → eventueel **Kopie/Dupliceer** → hiërarchie gevel ⊃ kozijn ⊃ ruit automatisch (Stotaal/netto); **compositie (+/−)** alleen bij uitzonderingen → GA (alleen complete componenten in vlakdelenkiezer; ▲/▼).  
 5. `NoiseLoad[]` van wegverkeer-app (of import / handmatig) → Lb (en later spectrum) op de **variant**.  
-6. GA-berekening per VR (`/ga.html`); per vlak **orientatie** (N/NO/…; basis voor later Lb→CL); toets Lbi;k; resultaten naar Postgres (`ga_dba` / `lbi_dba` / `gak_dba`). **Bestand → Project opslaan** checkpoint alle VR’s van de actieve variant. **Rapport opslaan** schrijft HTML+PDF naar `data/projecten/{project}/rapporten/` (waarschuwing bij identieke inhoud). **Naar inbox opdrachtgever** publiceert de PDF (concept/definitief) naar de klant-inbox; opdrachtgever haalt `.pdf` op.  
+6. GA-berekening per VR (`/ga.html`); per vlak **orientatie** (N/NO/…) + toewijzing aan een **gevelgroep** (default «Standaard» per ori; meerdere groepen wanneer CL verschilt, bv. bel-etage). **CL/Cg** staan op de groep; D2m/GA per vlak = R′+ruimte+Cg−Cr (**zonder CL**, DGMR/NPR); CL zit in de ruimtesom (D2m+CL). Toets Lbi;k; resultaten naar Postgres (`ga_dba` / `lbi_dba` / `gak_dba`). **Bestand → Project opslaan** checkpoint alle VR’s van de actieve variant. **Rapport opslaan** schrijft HTML+PDF naar `data/projecten/{project}/rapporten/` (waarschuwing bij identieke inhoud). **Naar inbox opdrachtgever** publiceert de PDF (concept/definitief) naar de klant-inbox; opdrachtgever haalt `.pdf` op.  
 7. Optioneel: variant **kopiëren**, Lb/CL/constructie per scenario wijzigen, **varianten vergelijken**.
 
 ### Sessie-overleving
@@ -141,8 +144,8 @@ Doel: meerdere gesloten contouren combineren tot één netto oppervlak met één
 
 1. Teken en sla de broncomponenten op (bijv. slaapkamer-omhulling, kozijn L, kozijn R) — materiaal op bronnen is optioneel.  
 2. Selecteer ≥2 gesloten componenten in de lijst.  
-3. **Grootste oppervlak = buitencontour (+)**; overige moeten **volledig binnen** die ring liggen.  
-4. Zet per deel **+** (meenemen) of **−** (aftrekken).  
+3. Zet per deel **+** (meenemen / optellen) of **−** (aftrekken). Meerdere **+**-delen worden verenigd; **−** moet **volledig binnen** een **+**-contour liggen.  
+4. Grootste **+**-oppervlak geldt als referentie-buitencontour (metadata); aangrenzende **+**-wanddelen hoeven daar niet in te passen.  
 5. Kies het materiaal voor het **resultaat** in de materiaalkiezer.  
 6. Klik **Toepassen & opslaan** (niet «Component opslaan»).  
 7. Selectie blijft staan → volgende compositie met ander materiaal kan op dezelfde buitencontour.

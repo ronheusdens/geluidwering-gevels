@@ -316,6 +316,10 @@ async function loadCustomerProjects(customerId: string): Promise<void> {
           <p class="hint">${esc(drawingLine)}</p>
           <div class="admin-project-fields">
             <label class="block-label">
+              Projectnaam
+              <input type="text" class="admin-project-label" maxlength="200" value="${esc(p.label || "")}" placeholder="bijv. Woning 51" autocomplete="off" />
+            </label>
+            <label class="block-label">
               Projectnummer (werknummer)
               <input type="text" class="admin-project-number" maxlength="80" value="${refVal}" placeholder="bijv. 2026.0123" autocomplete="off" />
             </label>
@@ -340,6 +344,7 @@ async function loadCustomerProjects(customerId: string): Promise<void> {
       const card = btn.closest<HTMLElement>(".admin-project-card");
       const select = card?.querySelector<HTMLSelectElement>(".admin-project-status");
       const numberEl = card?.querySelector<HTMLInputElement>(".admin-project-number");
+      const labelEl = card?.querySelector<HTMLInputElement>(".admin-project-label");
       if (!card || !select || !session.auth?.token) return;
       btn.disabled = true;
       setStatus("Project bijwerken…", "busy");
@@ -349,12 +354,13 @@ async function loadCustomerProjects(customerId: string): Promise<void> {
           card.dataset.buildingId || "",
           select.value,
           (numberEl?.value || "").trim(),
+          (labelEl?.value || "").trim(),
         ]);
         if (ret2.startsWith("ERROR")) {
           setStatus(ret2, "err");
           return;
         }
-        setStatus("Projectnummer en status bijgewerkt", "ok");
+        setStatus("Projectnaam, nummer en status bijgewerkt", "ok");
         await loadCustomers();
         if (customerSelectEl.value) await loadCustomerProjects(customerSelectEl.value);
       } catch (err) {

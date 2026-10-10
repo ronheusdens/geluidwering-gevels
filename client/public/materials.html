@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Stilte advies en meten — Materiaalcatalogus</title>
-  <link rel="stylesheet" href="/styles.css?v=logo-wordmark" />
+  <link rel="stylesheet" href="/styles.css?v=0.74-fav-status" />
 </head>
 <body>
   <main class="page page-wide">
@@ -41,6 +41,19 @@
         </fieldset>
         <div class="actions">
           <button type="submit" id="mat-login-btn">Inloggen</button>
+        </div>
+        <p class="hint">Admin: wachtwoord + Microsoft Authenticator (6 cijfers).</p>
+      </form>
+      <form id="mat-totp-form" class="form hidden" novalidate>
+        <fieldset>
+          <legend>Authenticator-code</legend>
+          <p class="hint" id="mat-totp-hint">Open <strong>Microsoft Authenticator</strong> en vul de code in.</p>
+          <p class="hint hidden" id="mat-totp-setup">Eerste keer: voeg account toe met geheime sleutel <code id="mat-totp-secret">—</code></p>
+          <label>Code <input name="totp" id="mat-totp-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required /></label>
+        </fieldset>
+        <div class="actions">
+          <button type="submit" id="mat-totp-btn">Bevestigen</button>
+          <button type="button" id="mat-totp-cancel-btn" class="secondary">Terug</button>
         </div>
       </form>
     </section>
@@ -436,6 +449,6 @@
       </div>
     </section>
   </main>
-  <script type="module" src="/materials.js?v=approve-pub"></script>
+  <script type="module" src="/materials.js?v=0.74-fav-status"></script>
 </body>
 </html>

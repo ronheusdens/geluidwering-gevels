@@ -1,6 +1,6 @@
 var __defProp = Object.defineProperty;
-var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
-var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+var __defNormalProp = (obj, key2, value) => key2 in obj ? __defProp(obj, key2, { enumerable: true, configurable: true, writable: true, value }) : obj[key2] = value;
+var __publicField = (obj, key2, value) => __defNormalProp(obj, typeof key2 !== "symbol" ? key2 + "" : key2, value);
 
 // src/auth-store.ts
 function loadAuth(storageKey) {
@@ -47,6 +47,64 @@ function apiAuthHeaders(token, json = false) {
   };
   if (json) h["Content-Type"] = "application/json";
   return h;
+}
+
+// src/flow-vr.ts
+function key(bid) {
+  return `app-gevelwering-flow-vr:${bid.trim().toLowerCase()}`;
+}
+function normalizeFlowVrNr(raw) {
+  const s = String(raw ?? "").trim();
+  return s || null;
+}
+function flowVrNrsEqual(a, b) {
+  const x = normalizeFlowVrNr(a);
+  const y = normalizeFlowVrNr(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const nx = Number(x);
+  const ny = Number(y);
+  return Number.isFinite(nx) && Number.isFinite(ny) && nx === ny;
+}
+function clearFlowVr(buildingId2) {
+  const bid = String(buildingId2 || "").trim();
+  if (!bid) return;
+  try {
+    sessionStorage.removeItem(key(bid));
+  } catch {
+  }
+}
+function persistFlowVr(buildingId2, vrNr, vgNr) {
+  const bid = String(buildingId2 || "").trim();
+  if (!bid) return;
+  const vr = normalizeFlowVrNr(vrNr);
+  if (!vr) {
+    clearFlowVr(bid);
+    return;
+  }
+  const payload = {
+    vr_nr: vr,
+    vg_nr: vgNr != null && Number.isFinite(Number(vgNr)) ? Number(vgNr) : null
+  };
+  try {
+    sessionStorage.setItem(key(bid), JSON.stringify(payload));
+  } catch {
+  }
+}
+function readFlowVr(buildingId2) {
+  const bid = String(buildingId2 || "").trim();
+  if (!bid) return null;
+  try {
+    const raw = sessionStorage.getItem(key(bid));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const vr = normalizeFlowVrNr(parsed?.vr_nr);
+    if (!vr) return null;
+    const vg = parsed.vg_nr != null && Number.isFinite(Number(parsed.vg_nr)) ? Number(parsed.vg_nr) : null;
+    return { vr_nr: vr, vg_nr: vg };
+  } catch {
+    return null;
+  }
 }
 
 // src/ws-url.ts
@@ -102,9 +160,9 @@ var GRENZWAARDE_LBIK_BY_FUNCTIE = {
   Overig: 33
 };
 function grenswaardeLbik(gebruiksfunctie) {
-  const key = String(gebruiksfunctie || "").trim();
-  if (key && key in GRENZWAARDE_LBIK_BY_FUNCTIE) {
-    return GRENZWAARDE_LBIK_BY_FUNCTIE[key];
+  const key2 = String(gebruiksfunctie || "").trim();
+  if (key2 && key2 in GRENZWAARDE_LBIK_BY_FUNCTIE) {
+    return GRENZWAARDE_LBIK_BY_FUNCTIE[key2];
   }
   return GRENZWAARDE_LBIK_DB;
 }
@@ -190,16 +248,22 @@ function computeVrGa(input) {
     const qty = kind === "length" ? v.length_m != null ? Number(v.length_m) : NaN : v.area_m2 != null ? Number(v.area_m2) : NaN;
     const ra = Number(v.ra_dba);
     if (!(qty > 0) || !Number.isFinite(ra)) continue;
+    const cl = overrideCl != null ? overrideCl : Number(v.cl_db) || 0;
+    const cg = overrideCg != null ? overrideCg : Number(v.cg_db) || 0;
+    const ori = normalizeOriKey(v.orientatie);
+    const ggId = String(v.gevelgroep_id || "").trim();
     raw.push({
       label: v.label || "",
       kind,
       quantity: qty,
       ra_dba: ra,
       meenemen_gak: v.meenemen_gak !== false,
-      cl_db: overrideCl != null ? overrideCl : Number(v.cl_db) || 0,
-      cg_db: overrideCg != null ? overrideCg : Number(v.cg_db) || 0,
+      cl_db: cl,
+      cg_db: cg,
       area_for_s: kind === "area" ? qty : 0,
-      orientatie: normalizeOriKey(v.orientatie)
+      orientatie: ori,
+      gevelgroep_id: ggId,
+      gevelgroep_label: String(v.gevelgroep_label || "").trim()
     });
   }
   const sAll = raw.reduce((a, e) => a + e.area_for_s, 0);
@@ -218,15 +282,21 @@ function computeVrGa(input) {
       stot_m2: stot
     });
   }
-  const byOri = /* @__PURE__ */ new Map();
+  const byFacadeKey = /* @__PURE__ */ new Map();
   for (const e of raw) {
-    const list = byOri.get(e.orientatie) || [];
+    const key2 = e.gevelgroep_id ? `g:${e.gevelgroep_id}` : `${e.orientatie}\0${e.cl_db}\0${e.cg_db}`;
+    const list = byFacadeKey.get(key2) || [];
     list.push(e);
-    byOri.set(e.orientatie, list);
+    byFacadeKey.set(key2, list);
   }
   const facades = [];
   const allElements = [];
-  for (const [ori, group] of byOri) {
+  for (const group of byFacadeKey.values()) {
+    const ori = group[0].orientatie;
+    const cl = group[0].cl_db;
+    const cg = group[0].cg_db;
+    const ggId = group[0].gevelgroep_id || null;
+    const ggLabel = group[0].gevelgroep_label || "";
     const sOri = group.reduce((a, e) => a + e.area_for_s, 0);
     if (!(sOri > 0)) {
       return failResult(grens, {
@@ -236,16 +306,6 @@ function computeVrGa(input) {
         elements: allElements,
         facades
       });
-    }
-    let cl = 0;
-    let cg = 0;
-    let bestArea = -1;
-    for (const e of group) {
-      if (e.area_for_s > bestArea) {
-        bestArea = e.area_for_s;
-        cl = e.cl_db;
-        cg = e.cg_db;
-      }
     }
     const elements = group.map((e) => ({
       label: e.label,
@@ -257,7 +317,8 @@ function computeVrGa(input) {
       cl_db: cl,
       cg_db: cg,
       area_for_s: e.area_for_s,
-      orientatie: ori
+      orientatie: ori,
+      gevelgroep_id: e.gevelgroep_id || null
     }));
     const rPrime = combineRprime(elements.map((e) => e.ras).filter((x) => x != null));
     const ruimte = roomCorrectionDb(V, T, sOri);
@@ -274,17 +335,22 @@ function computeVrGa(input) {
         cg_db: cg
       });
     }
-    const d2m = rPrime + ruimte + cl + cg;
+    const d2m = rPrime + ruimte + cg;
+    const d2mRef = d2m + cl;
     const gaOri = d2m - Cr;
-    const lbiOri = Number.isFinite(Lb) ? Lb - gaOri : null;
+    const gaRef = d2mRef - Cr;
+    const lbiOri = Number.isFinite(Lb) ? Lb - gaRef : null;
     facades.push({
       orientatie: ori,
+      gevelgroep_id: ggId,
+      gevelgroep_label: ggLabel || null,
       s_m2: sOri,
       r_prime: rPrime,
       ruimte_db: ruimte,
       cl_db: cl,
       cg_db: cg,
       d2m_nt: d2m,
+      d2m_nt_ref: d2mRef,
       ga_dba: gaOri,
       lbi_dba: lbiOri,
       elements
@@ -299,7 +365,7 @@ function computeVrGa(input) {
       elements: allElements
     });
   }
-  const d2mTot = combineLevelsDb(facades.map((f) => f.d2m_nt));
+  const d2mTot = combineLevelsDb(facades.map((f) => f.d2m_nt_ref));
   if (d2mTot == null) {
     return failResult(grens, {
       reason: "combinatie van gevels mislukt",
@@ -355,7 +421,13 @@ function minRaDeltaForRprime(elements, elementIndex, needDeltaR) {
   const target = elements[elementIndex];
   if (!target || target.ras == null || !Number.isFinite(target.ras)) return null;
   const ori = target.orientatie;
-  const peers = ori != null ? elements.map((e, i) => ({ e, i })).filter(({ e }) => e.orientatie === ori) : elements.map((e, i) => ({ e, i }));
+  const gg = String(target.gevelgroep_id || "").trim();
+  const peers = ori != null ? elements.map((e, i) => ({ e, i })).filter(({ e }) => {
+    if (e.orientatie !== ori) return false;
+    const eg = String(e.gevelgroep_id || "").trim();
+    if (gg || eg) return eg === gg;
+    return (target.cl_db == null || e.cl_db === target.cl_db) && (target.cg_db == null || e.cg_db === target.cg_db);
+  }) : elements.map((e, i) => ({ e, i }));
   const rasList = peers.map(({ e }) => e.ras).filter((x) => x != null && Number.isFinite(x));
   if (rasList.length !== peers.length) return null;
   const oldSum = rasList.reduce((a, r) => a + 10 ** (-r / 10), 0);
@@ -375,7 +447,7 @@ function minRaDeltaForRprime(elements, elementIndex, needDeltaR) {
 }
 
 // src/app-version.ts
-var APP_VERSION = "0.72";
+var APP_VERSION = "0.74";
 var APP_NAME = "Stilte advies en meten";
 var USER_DOCS_HREF = "/handleiding.html";
 
@@ -569,10 +641,13 @@ function mountProjectMenu(root, host) {
         const btn = document.createElement("button");
         btn.type = "button";
         const title = projectTitle(p);
-        btn.textContent = p.customer_name ? `${title} \u2014 ${p.customer_name}` : title;
+        const finished = p.project_status === "PROJECT_FINISHED";
+        const who = p.customer_name ? ` \u2014 ${p.customer_name}` : "";
+        btn.textContent = finished ? `${title}${who} \xB7 afgerond` : `${title}${who}`;
         if (p.project_status) {
           btn.title = p.project_status;
         }
+        if (finished) btn.classList.add("project-open-finished");
         btn.addEventListener("click", () => {
           dialogEl.close();
           void openProject(p.building_id);
@@ -759,6 +834,14 @@ function vrLabelFromNr(vrNr, roomLabel) {
   if (n) return `VR ${n}`;
   return room || "Verblijfsruimte";
 }
+function formatVrVgLabel(vrNr, vgNr) {
+  const vr = String(vrNr ?? "").trim();
+  const vg = vgNr != null && String(vgNr).trim() !== "" && Number.isFinite(Number(vgNr)) ? String(Number(vgNr)) : "";
+  if (vr && vg) return `VR ${vr} (VG ${vg})`;
+  if (vr) return `VR ${vr}`;
+  if (vg) return `VG ${vg}`;
+  return "geen VG/VR";
+}
 function parseVgNrFromText(text) {
   const m = String(text || "").trim().match(/^VG\s+(\d+)\b/i);
   if (!m) return null;
@@ -805,13 +888,158 @@ function formatVrListLine(r, volumeM3) {
 }
 function formatRoomSummary(r) {
   const bits = [
-    r.vg_nr != null ? `VG ${r.vg_nr}` : null,
-    r.vr_nr ? `VR ${r.vr_nr}` : null,
+    r.vr_nr || r.vg_nr != null ? formatVrVgLabel(r.vr_nr, r.vg_nr) : null,
     r.label || null,
     levelLabel(r.level_hint),
     r.area_m2 != null ? `${Number(r.area_m2).toFixed(2)} m\xB2` : null
   ].filter(Boolean);
   return bits.join(" \xB7 ");
+}
+
+// src/gevel-coverage.ts
+function gevelgroepNrOf(row) {
+  const n = Number(row.gevelgroep_nr);
+  return n === 2 || n === 3 ? n : 1;
+}
+function rowAreaM2(row) {
+  const a = row.area_m2;
+  return a != null && Number.isFinite(Number(a)) ? Number(a) : 0;
+}
+function isKozijnFacadeRole(role) {
+  const r = String(role || "").trim();
+  return r === "wood" || r === "glass";
+}
+function isComposeBooleanOp(op) {
+  const o = String(op || "").toLowerCase();
+  return o === "compose" || o === "difference";
+}
+function filterPool(rows, ori, groepNr) {
+  const wantGg = groepNr === 2 || groepNr === 3 ? groepNr : 1;
+  return rows.filter((r) => {
+    if (String(r.orientatie || "").trim().toUpperCase() !== ori) return false;
+    if (gevelgroepNrOf(r) !== wantGg) return false;
+    if (String(r.quantity_kind || "area") === "length") return false;
+    if (!String(r.material_id || "").trim()) return false;
+    return rowAreaM2(r) > 0;
+  });
+}
+function classifyHierarchy(pool) {
+  const composes = pool.filter((r) => isComposeBooleanOp(r.boolean_op));
+  const roleOpenings = pool.filter(
+    (r) => !isComposeBooleanOp(r.boolean_op) && isKozijnFacadeRole(r.kozijn_role)
+  );
+  const plain = pool.filter(
+    (r) => !isComposeBooleanOp(r.boolean_op) && !isKozijnFacadeRole(r.kozijn_role)
+  );
+  const primaryGevels = [];
+  const secondaryGevels = [];
+  const nestedPlain = [];
+  if (plain.length) {
+    const maxA = Math.max(...plain.map(rowAreaM2));
+    for (const r of plain) {
+      const a = rowAreaM2(r);
+      if (a >= maxA - 0.021) primaryGevels.push(r);
+      else if (a < maxA * 0.5) nestedPlain.push(r);
+      else secondaryGevels.push(r);
+    }
+  }
+  return {
+    composes,
+    primaryGevels,
+    secondaryGevels,
+    openings: [...roleOpenings, ...nestedPlain]
+  };
+}
+function openingSumM2(parts) {
+  return parts.openings.reduce((s, r) => s + rowAreaM2(r), 0);
+}
+function sameRow(a, b) {
+  if (a === b) return true;
+  const aid = String(a.id || "").trim();
+  const bid = String(b.id || "").trim();
+  if (aid && bid) return aid === bid;
+  return rowAreaM2(a) === rowAreaM2(b) && String(a.kozijn_role || "") === String(b.kozijn_role || "") && String(a.material_id || "") === String(b.material_id || "") && String(a.boolean_op || "") === String(b.boolean_op || "");
+}
+function gevelContourStotaalM2(rows, ori, groepNr) {
+  const pool = filterPool(rows, ori, groepNr);
+  if (!pool.length) return 0;
+  const parts = classifyHierarchy(pool);
+  if (parts.composes.length) {
+    let best = 0;
+    const openingsInPool = openingSumM2(parts);
+    for (const c of parts.composes) {
+      const net = rowAreaM2(c);
+      let plusMax = 0;
+      let minusSum = 0;
+      for (const part of c.constituents || []) {
+        const a = part.area_m2 != null && Number.isFinite(Number(part.area_m2)) ? Number(part.area_m2) : 0;
+        if (!(a > 0)) continue;
+        if (String(part.sign || "") === "+") plusMax = Math.max(plusMax, a);
+        else if (String(part.sign || "") === "-") minusSum += a;
+      }
+      const fromParts = plusMax > 0 ? plusMax : net + minusSum;
+      const fromPoolOpenings = net + openingsInPool;
+      best = Math.max(best, fromParts, fromPoolOpenings, net);
+    }
+    return Math.round(best * 100) / 100;
+  }
+  if (parts.primaryGevels.length) {
+    return Math.round(Math.max(...parts.primaryGevels.map(rowAreaM2)) * 100) / 100;
+  }
+  return Math.round(Math.max(...pool.map(rowAreaM2)) * 100) / 100;
+}
+function gevelMaterialSumM2(rows, ori, groepNr) {
+  const pool = filterPool(rows, ori, groepNr);
+  if (!pool.length) return 0;
+  const parts = classifyHierarchy(pool);
+  if (parts.composes.length) {
+    const sum = pool.reduce((s, r) => s + rowAreaM2(r), 0);
+    return Math.round(sum * 100) / 100;
+  }
+  const openingSum = openingSumM2(parts);
+  const primaryBruto = parts.primaryGevels.reduce((s, r) => s + rowAreaM2(r), 0);
+  const secondary = parts.secondaryGevels.reduce((s, r) => s + rowAreaM2(r), 0);
+  if (parts.primaryGevels.length && openingSum > 0) {
+    const netPrimary = Math.max(0, primaryBruto - openingSum);
+    return Math.round((netPrimary + openingSum + secondary) * 100) / 100;
+  }
+  return Math.round((primaryBruto + secondary + openingSum) * 100) / 100;
+}
+function gevelHierarchyEffectiveAreaM2(rows, ori, groepNr, row) {
+  const base = rowAreaM2(row);
+  if (!(base > 0)) return 0;
+  if (isComposeBooleanOp(row.boolean_op) || isKozijnFacadeRole(row.kozijn_role)) {
+    return Math.round(base * 100) / 100;
+  }
+  const pool = filterPool(rows, ori, groepNr);
+  if (!pool.length) return Math.round(base * 100) / 100;
+  const parts = classifyHierarchy(pool);
+  if (parts.composes.length) {
+    return Math.round(base * 100) / 100;
+  }
+  const openingSum = openingSumM2(parts);
+  if (!(openingSum > 0) || !parts.primaryGevels.length) {
+    return Math.round(base * 100) / 100;
+  }
+  const isOpening = parts.openings.some((o) => sameRow(o, row));
+  if (isOpening) return Math.round(base * 100) / 100;
+  const isPrimary = parts.primaryGevels.some((g) => sameRow(g, row));
+  if (!isPrimary) return Math.round(base * 100) / 100;
+  const primaryBruto = parts.primaryGevels.reduce((s, r) => s + rowAreaM2(r), 0);
+  const share = primaryBruto > 0 ? base / primaryBruto : 1;
+  const net = Math.max(0, base - openingSum * share);
+  return Math.round(net * 100) / 100;
+}
+function gevelHierarchyApplies(rows, ori, groepNr) {
+  const pool = filterPool(rows, ori, groepNr);
+  if (!pool.length) return false;
+  const parts = classifyHierarchy(pool);
+  return !parts.composes.length && parts.primaryGevels.length > 0 && parts.openings.length > 0;
+}
+function gevelMaterialExceedsContour(rows, ori, groepNr, tol = 0.02) {
+  const contour = gevelContourStotaalM2(rows, ori, groepNr);
+  const sum = gevelMaterialSumM2(rows, ori, groepNr);
+  return contour > 0 && sum > contour + tol;
 }
 
 // src/ga-orientation.ts
@@ -953,6 +1181,16 @@ function formatFacadeGroupOption(g) {
 }
 
 // src/shared/bpp-session.ts
+var MfaChallengeError = class extends Error {
+  constructor(challenge) {
+    super(
+      challenge.needs_totp_setup ? "Authenticator koppelen vereist (Microsoft Authenticator)" : "Authenticator-code vereist"
+    );
+    __publicField(this, "challenge");
+    this.name = "MfaChallengeError";
+    this.challenge = challenge;
+  }
+};
 var BppSession = class {
   constructor(opts) {
     __publicField(this, "ws", null);
@@ -1074,22 +1312,48 @@ var BppSession = class {
     const bootRet = await this.invokeString("API_Bootstrap", []);
     if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap mislukt: ${bootRet}`);
   }
+  applyAuth(info) {
+    this.auth = info;
+    this.storeAuth(info);
+    this.cb.onLogin(info);
+    return info;
+  }
   async bootstrapAndLogin(username, password) {
     await this.whenOpen();
     await this.loadSharedApi();
     const ret = await this.invokeString("API_Login", [username, password]);
     if (ret.startsWith("ERROR")) throw new Error(ret);
     const parsed = JSON.parse(ret);
+    if (parsed.needs_totp || parsed.needs_totp_setup) {
+      if (!parsed.challenge) throw new Error("MFA challenge ontbreekt");
+      throw new MfaChallengeError({
+        needs_totp: parsed.needs_totp,
+        needs_totp_setup: parsed.needs_totp_setup,
+        challenge: parsed.challenge,
+        username: parsed.username || username,
+        totp_secret: parsed.totp_secret,
+        otpauth_uri: parsed.otpauth_uri,
+        authenticator_app: parsed.authenticator_app,
+        authenticator_hint: parsed.authenticator_hint
+      });
+    }
     if (!parsed.ok || !parsed.token) throw new Error("Inloggen mislukt");
-    const info = {
+    return this.applyAuth({
       token: parsed.token,
       username: parsed.username || username,
       display_name: parsed.display_name || username
-    };
-    this.auth = info;
-    this.storeAuth(info);
-    this.cb.onLogin(info);
-    return info;
+    });
+  }
+  async verifyTotp(challenge, code) {
+    const ret = await this.invokeString("API_VerifyTotp", [challenge, code]);
+    if (ret.startsWith("ERROR")) throw new Error(ret.replace(/^ERROR:\s*/, ""));
+    const parsed = JSON.parse(ret);
+    if (!parsed.ok || !parsed.token) throw new Error("Authenticator-bevestiging mislukt");
+    return this.applyAuth({
+      token: parsed.token,
+      username: parsed.username || "admin",
+      display_name: parsed.display_name || parsed.username || "admin"
+    });
   }
   storeAuth(info) {
     storeAuth(this.authKey, info);
@@ -1144,6 +1408,8 @@ var BppSession = class {
             const ret = await this.invokeString("API_ValidateSession", [stored.token]);
             if (gen !== this.connectGen) return;
             if (ret.startsWith("ERROR")) {
+              this.auth = null;
+              this.storeAuth(null);
               this.cb.onLogout();
               this.cb.onStatus("Sessie verlopen \u2014 log in", "err");
             } else {
@@ -1155,12 +1421,18 @@ var BppSession = class {
             this.cb.onLogout();
             this.cb.onStatus("Verbonden \u2014 log in", "ok");
           }
+        } catch (err) {
           if (gen !== this.connectGen) return;
+          this.cb.onStatus(err instanceof Error ? err.message : String(err), "err");
+          if (!this.auth) this.cb.onLogout();
+          return;
+        }
+        if (gen !== this.connectGen) return;
+        try {
           await this.cb.onReady?.();
         } catch (err) {
           if (gen !== this.connectGen) return;
           this.cb.onStatus(err instanceof Error ? err.message : String(err), "err");
-          this.cb.onLogout();
         }
       })();
     });
@@ -1227,7 +1499,13 @@ function findFacadeForVlak(v) {
   if (v.quantity_kind === "length") {
     return vrFacades.find((f) => f.from_seal && facadeSourceId(f) === sid) || vrFacades.find((f) => f.id === sid && f.quantity_kind === "length") || null;
   }
-  return vrFacades.find((f) => !f.from_seal && f.id === sid) || vrFacades.find((f) => f.id === sid) || null;
+  return vrFacades.find((f) => !f.from_seal && f.id === sid) || vrFacades.find((f) => !f.from_seal && facadeSourceId(f) === sid) || vrFacades.find((f) => f.id === sid) || vrFacades.find((f) => facadeSourceId(f) === sid) || null;
+}
+function vlakGevelgroepNr(v) {
+  const fac = findFacadeForVlak(v);
+  if (fac) return facadeGevelgroepNr(fac);
+  const g = findGevelgroep(v.gevelgroep_id);
+  return g ? gevelgroepNrOf2(g) : 1;
 }
 var AUTH_KEY = "app_gevelwering_engineer_auth";
 var params = new URLSearchParams(location.search);
@@ -1248,6 +1526,15 @@ var queueListEl = document.getElementById("ga-queue-list");
 var modelPanelEl = document.getElementById("ga-model-panel");
 var floormapLinkEl = document.getElementById("ga-floormap-link");
 var fileMenuRoot = document.getElementById("ga-file-menu");
+var processDockEl = document.getElementById("ga-work-mode");
+var processDockCollapseBtn = document.getElementById(
+  "ga-process-dock-collapse"
+);
+var processDockDragEl = document.getElementById("ga-process-dock-drag");
+var PROCESS_DOCK_POS_KEY = "app-gevelwering-process-dock-pos";
+var PROCESS_DOCK_COLLAPSE_KEY = "app-gevelwering-process-dock-collapsed";
+var SIDEBAR_WORK_MODE_KEY = "app-gevelwering-sidebar-work-mode";
+var FM_LAST_SECTION_PREFIX = "app-gevelwering-fm-last-section:";
 var variantForm = document.getElementById("ga-variant-form");
 var variantListEl = document.getElementById("ga-variant-list");
 var variantNameEl = document.getElementById("ga-variant-name");
@@ -1261,6 +1548,16 @@ var comparePickEl = document.getElementById("ga-compare-pick");
 var compareBtn = document.getElementById("ga-compare-btn");
 var compareWrapEl = document.getElementById("ga-compare-table-wrap");
 var compareTableEl = document.getElementById("ga-compare-table");
+var sectionPreviewCaptionEl = document.getElementById(
+  "ga-section-preview-caption"
+);
+var sectionPreviewImgEl = document.getElementById("ga-section-preview-img");
+var sectionPreviewEmptyEl = document.getElementById(
+  "ga-section-preview-empty"
+);
+var sectionPreviewLinkEl = document.getElementById(
+  "ga-section-preview-link"
+);
 var vgNewBtn = document.getElementById("ga-vg-new-btn");
 var vgRoomEl = document.getElementById("ga-vg-room");
 var roomPreviewEl = document.getElementById("ga-room-preview");
@@ -1299,12 +1596,23 @@ var vlakAreaEl = document.getElementById("ga-vlak-area");
 var vlakQtyLabelEl = document.getElementById("ga-vlak-qty-label");
 var vlakOrientatieEl = document.getElementById("ga-vlak-orientatie");
 var vlakOrientatieDisplayEl = document.getElementById("ga-vlak-orientatie-display");
+var vlakPickGroepEl = document.getElementById("ga-vlak-pick-groep");
+var vlakPickGroepHintEl = document.getElementById("ga-vlak-pick-groep-hint");
 var vlakClEl = document.getElementById("ga-vlak-cl");
 var vlakCgEl = document.getElementById("ga-vlak-cg");
+var vlakClDownBtn = document.getElementById("ga-vlak-cl-down");
+var vlakClUpBtn = document.getElementById("ga-vlak-cl-up");
+var vlakCgDownBtn = document.getElementById("ga-vlak-cg-down");
+var vlakCgUpBtn = document.getElementById("ga-vlak-cg-up");
+var vlakCorrResetBtn = document.getElementById("ga-vlak-corr-reset");
+var vlakCorrHintEl = document.getElementById("ga-vlak-corr-hint");
 var vlakOriStatusEl = document.getElementById("ga-vlak-ori-status");
 var vlakEditHintEl = document.getElementById("ga-vlak-edit-hint");
 var vlakGakEl = document.getElementById("ga-vlak-gak");
 var vlakSaveBtn = document.getElementById("ga-vlak-save-btn");
+var vlakListToVlakBtn = document.getElementById(
+  "ga-vlak-list-to-vlak-btn"
+);
 var vlakCancelBtn = document.getElementById("ga-vlak-cancel-btn");
 var vlakListEl = document.getElementById("ga-vlak-list");
 var vlakPickEl = document.getElementById("ga-vlak-pick");
@@ -1349,13 +1657,16 @@ var pendingImportVrNr = (params.get("vr_nr") || "").trim();
 var variants = [];
 var selectedVariantId = params.get("variant_id");
 var vgs = [];
-var selectedVgId = null;
+var selectedVgId = (params.get("vg_id") || "").trim() || null;
 var vrs = [];
-var selectedVrId = null;
+var selectedVrId = (params.get("vr_id") || "").trim() || null;
 var selectedVlakId = null;
 var vlakPickSyncLock = false;
 var vlakPickValue = "";
 var vlakken = [];
+var gevelgroepen = [];
+var selectedGevelgroepId = null;
+var selectedPickGroepNr = 1;
 var vrOriPresentById = /* @__PURE__ */ new Map();
 var vrVlakkenById = /* @__PURE__ */ new Map();
 var vrCopyLabelById = /* @__PURE__ */ new Map();
@@ -1366,6 +1677,14 @@ var lastFreshGaResult = null;
 var calcRevealEpoch = 0;
 var freeRooms = [];
 var floormapRoomsById = /* @__PURE__ */ new Map();
+var floormapSectionsById = /* @__PURE__ */ new Map();
+var sectionPreviewUrlCache = /* @__PURE__ */ new Map();
+var sectionPreviewPdfByDoc = /* @__PURE__ */ new Map();
+var sectionPreviewPdfLoads = /* @__PURE__ */ new Map();
+var sectionPreviewBuildingId = "";
+var sectionPreviewReq = 0;
+var SECTION_PREVIEW_W = 480;
+var SECTION_PREVIEW_H = 360;
 var vrFacades = [];
 var allLinks = [];
 var linkedBySub = /* @__PURE__ */ new Map();
@@ -1383,6 +1702,7 @@ function showLogin() {
   panelEl.classList.add("hidden");
   if (fileMenuRoot) fileMenuRoot.hidden = true;
   projectMenu?.setEnabled(false);
+  syncProcessDockVisibility();
 }
 function showPanel(info) {
   loginPanelEl.classList.add("hidden");
@@ -1391,6 +1711,7 @@ function showPanel(info) {
   if (fileMenuRoot) fileMenuRoot.hidden = false;
   projectMenu?.setEnabled(true);
   projectMenu?.refreshTitle();
+  syncProcessDockVisibility();
 }
 var session = new BppSession({
   wsUrl: resolveBppWsUrl(),
@@ -1438,9 +1759,153 @@ function parseJsonOk2(ret) {
 function esc(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
+function readLastFloormapSectionId(bid) {
+  if (!bid) return "";
+  try {
+    return sessionStorage.getItem(`${FM_LAST_SECTION_PREFIX}${bid.trim().toLowerCase()}`)?.trim() || "";
+  } catch {
+    return "";
+  }
+}
+function currentFlowVr() {
+  if (selectedVrId) {
+    const vr = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
+    const room = vr ? roomFromVr(vr) : null;
+    const nr = vrNrForVrId(selectedVrId) || normalizeFlowVrNr(room?.vr_nr);
+    if (nr) {
+      const vg = room?.vg_nr != null && Number.isFinite(Number(room.vg_nr)) ? Number(room.vg_nr) : null;
+      return { vr_nr: nr, vg_nr: vg };
+    }
+  }
+  const fromUrl = normalizeFlowVrNr(params.get("vr_nr"));
+  if (fromUrl) {
+    const vgRaw = Number(params.get("vg_nr") || NaN);
+    return {
+      vr_nr: fromUrl,
+      vg_nr: Number.isFinite(vgRaw) && vgRaw >= 1 ? vgRaw : null
+    };
+  }
+  return buildingId ? readFlowVr(buildingId) : null;
+}
+function floormapHref(workMode) {
+  const q = new URLSearchParams();
+  if (buildingId) q.set("building_id", buildingId);
+  const sectionId = readLastFloormapSectionId(buildingId);
+  if (sectionId) q.set("section_id", sectionId);
+  if (workMode) q.set("work_mode", workMode);
+  const flow = currentFlowVr();
+  if (flow?.vr_nr) {
+    q.set("vr_nr", flow.vr_nr);
+    if (flow.vg_nr != null) q.set("vg_nr", String(flow.vg_nr));
+    if (buildingId) persistFlowVr(buildingId, flow.vr_nr, flow.vg_nr);
+  }
+  const qs = q.toString();
+  return qs ? `/floormap.html?${qs}` : "/floormap.html";
+}
 function syncFloormapLink() {
-  const q = buildingId ? `?building_id=${encodeURIComponent(buildingId)}` : "";
-  floormapLinkEl.href = `/floormap.html${q}`;
+  floormapLinkEl.href = floormapHref();
+}
+function syncProcessDockVisibility() {
+  if (!processDockEl) return;
+  const show = !panelEl.classList.contains("hidden");
+  processDockEl.classList.toggle("hidden", !show);
+  if (show) processDockEl.removeAttribute("hidden");
+  else processDockEl.setAttribute("hidden", "");
+}
+function applyProcessDockCollapsed(collapsed) {
+  if (!processDockEl) return;
+  processDockEl.classList.toggle("is-collapsed", collapsed);
+  if (processDockCollapseBtn) {
+    processDockCollapseBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    processDockCollapseBtn.textContent = collapsed ? "+" : "\u2212";
+    processDockCollapseBtn.title = collapsed ? "Uitklappen" : "Inklappen";
+  }
+  try {
+    sessionStorage.setItem(PROCESS_DOCK_COLLAPSE_KEY, collapsed ? "1" : "0");
+  } catch {
+  }
+}
+function restoreProcessDockLayout() {
+  if (!processDockEl) return;
+  try {
+    if (sessionStorage.getItem(PROCESS_DOCK_COLLAPSE_KEY) === "1") {
+      applyProcessDockCollapsed(true);
+    }
+    const raw = sessionStorage.getItem(PROCESS_DOCK_POS_KEY);
+    if (raw) {
+      const pos = JSON.parse(raw);
+      if (Number.isFinite(pos.left) && Number.isFinite(pos.top)) {
+        processDockEl.style.left = `${Math.max(8, Number(pos.left))}px`;
+        processDockEl.style.top = `${Math.max(8, Number(pos.top))}px`;
+        processDockEl.style.right = "auto";
+      }
+    }
+  } catch {
+  }
+}
+function initProcessDockChrome() {
+  restoreProcessDockLayout();
+  syncProcessDockVisibility();
+  processDockCollapseBtn?.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    const next = !processDockEl?.classList.contains("is-collapsed");
+    applyProcessDockCollapsed(next);
+  });
+  if (!processDockEl || !processDockDragEl) return;
+  let drag = null;
+  processDockDragEl.addEventListener("pointerdown", (ev) => {
+    if (ev.target?.closest?.("button")) return;
+    const rect = processDockEl.getBoundingClientRect();
+    drag = { ox: ev.clientX, oy: ev.clientY, sl: rect.left, st: rect.top };
+    processDockDragEl.setPointerCapture(ev.pointerId);
+    ev.preventDefault();
+  });
+  processDockDragEl.addEventListener("pointermove", (ev) => {
+    if (!drag) return;
+    const left = Math.min(window.innerWidth - 48, Math.max(8, drag.sl + (ev.clientX - drag.ox)));
+    const top = Math.min(window.innerHeight - 40, Math.max(8, drag.st + (ev.clientY - drag.oy)));
+    processDockEl.style.left = `${left}px`;
+    processDockEl.style.top = `${top}px`;
+    processDockEl.style.right = "auto";
+  });
+  const endDrag = (ev) => {
+    if (!drag) return;
+    drag = null;
+    try {
+      processDockDragEl.releasePointerCapture(ev.pointerId);
+    } catch {
+    }
+    const left = parseFloat(processDockEl.style.left || "0");
+    const top = parseFloat(processDockEl.style.top || "0");
+    try {
+      sessionStorage.setItem(PROCESS_DOCK_POS_KEY, JSON.stringify({ left, top }));
+    } catch {
+    }
+  };
+  processDockDragEl.addEventListener("pointerup", endDrag);
+  processDockDragEl.addEventListener("pointercancel", endDrag);
+  processDockEl.addEventListener("click", (ev) => {
+    const btn = ev.target?.closest?.("button[data-mode]");
+    if (!btn || !processDockEl.contains(btn)) return;
+    const mode = btn.dataset.mode;
+    if (mode === "ga") {
+      setConn("ok", "Je bent al op GA-berekening");
+      return;
+    }
+    if (mode !== "picklist" && mode !== "draw" && mode !== "assign" && mode !== "compose") {
+      return;
+    }
+    if (!buildingId) {
+      setConn("err", "Open eerst een project om terug te gaan naar de geveltekening");
+      return;
+    }
+    try {
+      sessionStorage.setItem(SIDEBAR_WORK_MODE_KEY, mode);
+    } catch {
+    }
+    setConn("busy", "Terug naar geveltekening\u2026");
+    window.location.assign(floormapHref(mode));
+  });
 }
 async function refreshLinks() {
   if (!buildingId || !auth()) return;
@@ -1469,10 +1934,35 @@ function roomsForVg(vgId) {
   return out;
 }
 function vgNrForVg(vgId, omschrijving) {
+  const fromTitle = parseVgNrFromText(omschrijving || "");
+  if (fromTitle != null) return fromTitle;
   const rooms = roomsForVg(vgId);
+  const nrs = [...new Set(rooms.map((r) => r.vg_nr != null ? Number(r.vg_nr) : null).filter((n) => n != null))];
+  if (nrs.length === 1) return nrs[0];
+  if (nrs.length > 1) {
+    const g = vgs.find((x) => x.verblijfsgebied_id === vgId);
+    const fromLabel = parseVgNrFromText(g?.omschrijving || "");
+    if (fromLabel != null) return fromLabel;
+  }
   const fromRoom = rooms.find((r) => r.vg_nr != null)?.vg_nr;
   if (fromRoom != null) return Number(fromRoom);
-  return parseVgNrFromText(omschrijving || "");
+  return null;
+}
+function floormapRoomsForVg(vgId) {
+  const want = vgNrForVg(vgId, vgs.find((g) => g.verblijfsgebied_id === vgId)?.omschrijving);
+  return roomsForVg(vgId).filter((r) => {
+    if (want == null || r.vg_nr == null) return true;
+    return Number(r.vg_nr) === want;
+  });
+}
+function vrsMatchingFloormapVg(vgId, list) {
+  const want = vgNrForVg(vgId, vgs.find((g) => g.verblijfsgebied_id === vgId)?.omschrijving);
+  if (want == null) return list;
+  return list.filter((vr) => {
+    const room = floormapRoomsById.get(vr.subsection_id);
+    if (!room || room.vg_nr == null) return true;
+    return Number(room.vg_nr) === want;
+  });
 }
 function floorLevelForVg(vgId) {
   const rooms = roomsForVg(vgId);
@@ -1487,12 +1977,98 @@ function findVgIdForNr(vgNr) {
   const n = Number(vgNr);
   if (!Number.isFinite(n)) return null;
   for (const g of vgs) {
+    if (parseVgNrFromText(g.omschrijving) === n) return g.verblijfsgebied_id;
+  }
+  for (const g of vgs) {
+    if (floormapRoomsForVg(g.verblijfsgebied_id).some((r) => Number(r.vg_nr) === n)) {
+      return g.verblijfsgebied_id;
+    }
+  }
+  for (const g of vgs) {
     if (vgNrForVg(g.verblijfsgebied_id, g.omschrijving) === n) return g.verblijfsgebied_id;
   }
   return null;
 }
+async function ensureVgForFloormapNr(vgNr) {
+  if (!auth()?.token || !selectedVariantId) return null;
+  const existing = findVgIdForNr(vgNr);
+  if (existing) return existing;
+  const label = vgLabelFromNr(vgNr);
+  const ret = await invokeString("API_CreateEmptyVerblijfsgebied", [
+    auth().token,
+    selectedVariantId,
+    label
+  ]);
+  const data = parseJsonOk2(ret);
+  const id = (data.verblijfsgebied_id || "").trim();
+  if (!id) return null;
+  vgs.push({ verblijfsgebied_id: id, omschrijving: label, sort_order: vgs.length, vr_count: 0 });
+  vgs = sortByLabelAz(vgs, vgDisplayTitle);
+  return id;
+}
+async function syncVrVgMembershipFromFloormap() {
+  if (!auth()?.token || !selectedVariantId || floormapRoomsById.size === 0 || !vgs.length) {
+    return 0;
+  }
+  const pending = [];
+  for (const g of vgs) {
+    const ret = await invokeString("API_ListVerblijfsruimten", [
+      auth().token,
+      g.verblijfsgebied_id
+    ]);
+    const data = parseJsonOk2(ret);
+    for (const vr of data.verblijfsruimten || []) {
+      const room = floormapRoomsById.get(vr.subsection_id);
+      if (!room || room.vg_nr == null) continue;
+      const wantVgNr = Number(room.vg_nr);
+      if (!Number.isFinite(wantVgNr)) continue;
+      const target = findVgIdForNr(wantVgNr);
+      if (target === g.verblijfsgebied_id) continue;
+      pending.push({ vrId: vr.verblijfsruimte_id, fromVgId: g.verblijfsgebied_id, wantVgNr });
+    }
+  }
+  if (!pending.length) return 0;
+  let moved = 0;
+  for (const row of pending) {
+    let targetId = findVgIdForNr(row.wantVgNr);
+    if (!targetId) targetId = await ensureVgForFloormapNr(row.wantVgNr);
+    if (!targetId || targetId === row.fromVgId) continue;
+    const ret = await invokeString("API_MoveVerblijfsruimte", [
+      auth().token,
+      row.vrId,
+      targetId
+    ]);
+    if (ret.startsWith("ERROR")) {
+      console.warn("sync VR\u2192VG failed", row.vrId, ret);
+      continue;
+    }
+    moved++;
+  }
+  if (moved > 0) {
+    await refreshLinks();
+    const vgRet = await invokeString("API_ListVerblijfsgebieden", [
+      auth().token,
+      selectedVariantId
+    ]);
+    const vgData = parseJsonOk2(vgRet);
+    vgs = sortByLabelAz(vgData.verblijfsgebieden || [], vgDisplayTitle);
+  }
+  return moved;
+}
 function gaSelStorageKey(bid) {
   return `app-gevelwering-ga-sel:${bid}`;
+}
+function syncGaLocation() {
+  const url = new URL(location.href);
+  if (buildingId) url.searchParams.set("building_id", buildingId);
+  else url.searchParams.delete("building_id");
+  if (selectedVariantId) url.searchParams.set("variant_id", selectedVariantId);
+  else url.searchParams.delete("variant_id");
+  if (selectedVgId) url.searchParams.set("vg_id", selectedVgId);
+  else url.searchParams.delete("vg_id");
+  if (selectedVrId) url.searchParams.set("vr_id", selectedVrId);
+  else url.searchParams.delete("vr_id");
+  history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
 }
 function rememberGaSelection() {
   if (!buildingId) return;
@@ -1502,23 +2078,63 @@ function rememberGaSelection() {
       vgId: selectedVgId,
       vrId: selectedVrId
     };
-    sessionStorage.setItem(gaSelStorageKey(buildingId), JSON.stringify(payload));
+    const raw = JSON.stringify(payload);
+    localStorage.setItem(gaSelStorageKey(buildingId), raw);
+    sessionStorage.setItem(gaSelStorageKey(buildingId), raw);
   } catch {
   }
+  if (selectedVrId) {
+    const nr = vrNrForVrId(selectedVrId);
+    if (nr) {
+      const vr = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
+      const room = vr ? roomFromVr(vr) : null;
+      persistFlowVr(
+        buildingId,
+        nr,
+        room?.vg_nr != null && Number.isFinite(Number(room.vg_nr)) ? Number(room.vg_nr) : null
+      );
+    }
+  }
+  syncGaLocation();
 }
 function readRememberedGaSelection() {
   if (!buildingId) return null;
+  let fromStore = null;
   try {
-    const raw = sessionStorage.getItem(gaSelStorageKey(buildingId));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : null;
+    const raw = localStorage.getItem(gaSelStorageKey(buildingId)) || sessionStorage.getItem(gaSelStorageKey(buildingId));
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") fromStore = parsed;
+    }
   } catch {
-    return null;
   }
+  const urlVariant = (params.get("variant_id") || "").trim() || null;
+  const urlVg = (params.get("vg_id") || "").trim() || null;
+  const urlVr = (params.get("vr_id") || "").trim() || null;
+  if (!urlVariant && !urlVg && !urlVr && !fromStore) return null;
+  return {
+    variantId: urlVariant || fromStore?.variantId || null,
+    vgId: urlVg || fromStore?.vgId || null,
+    vrId: urlVr || fromStore?.vrId || null
+  };
+}
+async function findVgIdForVr(vrId) {
+  if (!auth() || !vrId || !vgs.length) return null;
+  for (const g of vgs) {
+    const ret = await invokeString("API_ListVerblijfsruimten", [auth().token, g.verblijfsgebied_id]);
+    if (typeof ret === "string" && ret.startsWith("ERROR")) continue;
+    try {
+      const data = parseJsonOk2(ret);
+      if ((data.verblijfsruimten || []).some((r) => r.verblijfsruimte_id === vrId)) {
+        return g.verblijfsgebied_id;
+      }
+    } catch {
+    }
+  }
+  return null;
 }
 function vgVrNrSummary(vgId) {
-  const rooms = roomsForVg(vgId);
+  const rooms = floormapRoomsForVg(vgId);
   const nrs = rooms.map((r) => String(r.vr_nr || "").trim()).filter(Boolean).sort((a, b) => a.localeCompare(b, void 0, { numeric: true }));
   if (!nrs.length) return "";
   return nrs.map((n) => /^VR/i.test(n) ? n : `VR${n}`).join(", ");
@@ -1565,12 +2181,191 @@ function roomFitsSelectedVg(room) {
   if (vgNr != null && room.vg_nr != null && Number(room.vg_nr) !== vgNr) return false;
   return true;
 }
+function clearSectionPreviewCaches(bid) {
+  if (sectionPreviewBuildingId === bid) return;
+  sectionPreviewUrlCache.clear();
+  sectionPreviewPdfByDoc.clear();
+  sectionPreviewPdfLoads.clear();
+  sectionPreviewBuildingId = bid;
+}
+function toSectionPreviewMeta(sec) {
+  const id = String(sec.id || "").trim();
+  const document_id = String(sec.document_id || "").trim();
+  if (!id || !document_id) return null;
+  const viewRaw = sec.view_rotate ?? sec.viewRotate ?? 0;
+  return {
+    id,
+    document_id,
+    page_index: Math.max(0, Number(sec.page_index) || 0),
+    label: String(sec.label || "").trim(),
+    region_kind: String(sec.region_kind || "").toUpperCase(),
+    x_min: Number(sec.x_min) || 0,
+    y_min: Number(sec.y_min) || 0,
+    x_max: Number(sec.x_max) || 1,
+    y_max: Number(sec.y_max) || 1,
+    view_rotate: Number(viewRaw) || 0
+  };
+}
+function ensureGaPdfjsWorker() {
+  const pdfjsLib = window.pdfjsLib;
+  if (!pdfjsLib) throw new Error("PDF.js not loaded");
+  if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  }
+}
+async function loadSectionPreviewPdf(documentId) {
+  ensureGaPdfjsWorker();
+  const cached = sectionPreviewPdfByDoc.get(documentId);
+  if (cached) return cached;
+  let pending = sectionPreviewPdfLoads.get(documentId);
+  if (!pending) {
+    pending = (async () => {
+      const res = await fetch(`/api/drawings/download?document_id=${encodeURIComponent(documentId)}`, {
+        credentials: "include",
+        headers: apiAuthHeaders(auth().token)
+      });
+      if (!res.ok) throw new Error(`PDF laden mislukt (HTTP ${res.status})`);
+      const buf = await res.arrayBuffer();
+      const doc = await window.pdfjsLib.getDocument({ data: buf }).promise;
+      sectionPreviewPdfByDoc.set(documentId, doc);
+      sectionPreviewPdfLoads.delete(documentId);
+      return doc;
+    })();
+    sectionPreviewPdfLoads.set(documentId, pending);
+  }
+  return pending;
+}
+async function sectionPreviewDataUrl(sec) {
+  const hit = sectionPreviewUrlCache.get(sec.id);
+  if (hit) return hit;
+  if (!auth()?.token) return null;
+  try {
+    const pdf = await loadSectionPreviewPdf(sec.document_id);
+    const pageNum = Math.min(pdf.numPages, Math.max(1, sec.page_index + 1));
+    const page = await pdf.getPage(pageNum);
+    const pageRotate = typeof page.rotate === "number" ? page.rotate : 0;
+    const viewRotate = Number(sec.view_rotate) || 0;
+    const rotation = (pageRotate + viewRotate) % 360;
+    const baseVp = page.getViewport({ scale: 1, rotation });
+    const cropWNorm = Math.max(1e-3, sec.x_max - sec.x_min);
+    const cropPxW = cropWNorm * baseVp.width;
+    const renderScale = Math.min(2.2, Math.max(1, SECTION_PREVIEW_W * 1.5 / cropPxW));
+    const viewport = page.getViewport({ scale: renderScale, rotation });
+    const off = document.createElement("canvas");
+    off.width = Math.floor(viewport.width);
+    off.height = Math.floor(viewport.height);
+    const octx = off.getContext("2d");
+    if (!octx) return null;
+    octx.setTransform(1, 0, 0, 1, 0, 0);
+    await page.render({ canvasContext: octx, viewport }).promise;
+    const x0 = Math.floor(sec.x_min * off.width);
+    const y0 = Math.floor(sec.y_min * off.height);
+    const x1 = Math.ceil(sec.x_max * off.width);
+    const y1 = Math.ceil(sec.y_max * off.height);
+    const cw = Math.max(1, x1 - x0);
+    const ch = Math.max(1, y1 - y0);
+    const thumb = document.createElement("canvas");
+    thumb.width = SECTION_PREVIEW_W;
+    thumb.height = SECTION_PREVIEW_H;
+    const tctx = thumb.getContext("2d");
+    if (!tctx) return null;
+    tctx.fillStyle = "#fff";
+    tctx.fillRect(0, 0, SECTION_PREVIEW_W, SECTION_PREVIEW_H);
+    const fit = Math.min(SECTION_PREVIEW_W / cw, SECTION_PREVIEW_H / ch);
+    const dw = cw * fit;
+    const dh = ch * fit;
+    tctx.drawImage(
+      off,
+      x0,
+      y0,
+      cw,
+      ch,
+      (SECTION_PREVIEW_W - dw) / 2,
+      (SECTION_PREVIEW_H - dh) / 2,
+      dw,
+      dh
+    );
+    const dataUrl = thumb.toDataURL("image/jpeg", 0.85);
+    sectionPreviewUrlCache.set(sec.id, dataUrl);
+    return dataUrl;
+  } catch (err) {
+    console.warn("GA section preview failed", sec.id, err);
+    return null;
+  }
+}
+function currentSectionForPreview() {
+  const vr = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
+  const room = vr ? roomFromVr(vr) : selectedFreeRoom();
+  if (!room?.section_id) {
+    return {
+      section: null,
+      caption: selectedVrId ? "Geselecteerde VR heeft geen plattegrondsectie" : "Selecteer een VR of vrije ruimte"
+    };
+  }
+  const section = floormapSectionsById.get(room.section_id) || null;
+  const roomBit = room.vr_nr ? vrLabelFromNr(room.vr_nr) : room.label || "ruimte";
+  const secBit = section?.label || room.section_label || "sectie";
+  return {
+    section,
+    caption: section ? `${secBit} \xB7 ${roomBit}` : `Sectie niet geladen \xB7 ${roomBit}`
+  };
+}
+function updateSectionPreview() {
+  if (!sectionPreviewImgEl || !sectionPreviewEmptyEl || !sectionPreviewCaptionEl) return;
+  const { section, caption } = currentSectionForPreview();
+  sectionPreviewCaptionEl.textContent = caption;
+  const req = ++sectionPreviewReq;
+  if (sectionPreviewLinkEl) {
+    if (section && buildingId) {
+      sectionPreviewLinkEl.href = `/floormap.html?building_id=${encodeURIComponent(buildingId)}&section_id=${encodeURIComponent(section.id)}`;
+      sectionPreviewLinkEl.classList.remove("hidden");
+    } else {
+      sectionPreviewLinkEl.classList.add("hidden");
+    }
+  }
+  if (!section) {
+    sectionPreviewImgEl.hidden = true;
+    sectionPreviewImgEl.removeAttribute("src");
+    sectionPreviewImgEl.classList.remove("is-loading");
+    sectionPreviewEmptyEl.textContent = caption;
+    sectionPreviewEmptyEl.classList.remove("hidden");
+    return;
+  }
+  const cached = sectionPreviewUrlCache.get(section.id);
+  sectionPreviewEmptyEl.classList.add("hidden");
+  sectionPreviewImgEl.hidden = false;
+  sectionPreviewImgEl.alt = section.label || "Plattegrondsectie";
+  if (cached) {
+    sectionPreviewImgEl.src = cached;
+    sectionPreviewImgEl.classList.remove("is-loading");
+    return;
+  }
+  sectionPreviewImgEl.classList.add("is-loading");
+  sectionPreviewImgEl.removeAttribute("src");
+  void sectionPreviewDataUrl(section).then((url) => {
+    if (req !== sectionPreviewReq) return;
+    sectionPreviewImgEl.classList.remove("is-loading");
+    if (!url) {
+      sectionPreviewImgEl.hidden = true;
+      sectionPreviewEmptyEl.textContent = "Voorbeeld niet beschikbaar";
+      sectionPreviewEmptyEl.classList.remove("hidden");
+      return;
+    }
+    sectionPreviewImgEl.src = url;
+    sectionPreviewImgEl.hidden = false;
+    sectionPreviewEmptyEl.classList.add("hidden");
+  });
+}
 async function loadGeometryOptions() {
   if (!buildingId || !auth()) return;
+  clearSectionPreviewCaches(buildingId);
   const sectionRows = bppPhase1Enabled() ? (await bppListFloormapSections(invokeString, auth().token, buildingId)).sections : (await apiGet(`/api/floormap/sections?building_id=${encodeURIComponent(buildingId)}`)).sections;
   const rooms = [];
   floormapRoomsById = /* @__PURE__ */ new Map();
+  floormapSectionsById = /* @__PURE__ */ new Map();
   for (const sec of sectionRows || []) {
+    const meta = toSectionPreviewMeta(sec);
+    if (meta) floormapSectionsById.set(meta.id, meta);
     const kind = String(sec.region_kind || "").toUpperCase();
     if (kind !== "FLOORMAP") continue;
     const sub = bppPhase1Enabled() ? await bppListDrawingSubsections(invokeString, auth().token, sec.id) : await apiGet(`/api/floormap/subsections?section_id=${encodeURIComponent(sec.id)}`);
@@ -1613,6 +2408,7 @@ async function loadGeometryOptions() {
   renderVrs();
   const cur = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
   if (cur) fillVrEdit(cur);
+  else updateSectionPreview();
   renderVlakken();
   if (selectedVlakId) await refreshVrCalc();
   else blankResultsUntilVlakSelected();
@@ -1694,30 +2490,62 @@ function fillRoomSelect(preferSubId) {
 function materialGroupKey(f) {
   if (!f.ga_ready) return null;
   const kind = f.quantity_kind === "length" ? "length" : "area";
-  if (f.material_id) return `id:${f.material_id}|${kind}`;
+  const gg = facadeGevelgroepNr(f);
+  if (f.material_id) return `id:${f.material_id}|${kind}|g${gg}`;
   const name = (f.material_name || "").trim().toLowerCase();
   const cat = (f.master_category || "").trim().toLowerCase();
   if (!name && !cat) return null;
   const ra = f.ra_dba != null && Number.isFinite(f.ra_dba) ? String(f.ra_dba) : "";
-  return `name:${cat}|${name}|${ra}|${kind}`;
+  return `name:${cat}|${name}|${ra}|${kind}|g${gg}`;
 }
 function filterFacadeGroupsByOrientatie(groups, wantOri) {
   const want = normalizeOrientatie(wantOri);
   if (!want) return groups;
   return groups.filter((g) => groupOrientatie(g) === want);
 }
-function groupFacadesForPick(facades, usedIds) {
+function facadeGevelgroepNr(f) {
+  const n = Number(f?.gevelgroep_nr);
+  return n === 2 || n === 3 ? n : 1;
+}
+function gevelgroepNrOf2(g) {
+  if (!g) return 1;
+  const n = Number(g.groep_nr);
+  if (n === 1 || n === 2 || n === 3) return n;
+  const fromLabel = Number(g.label);
+  if (fromLabel === 1 || fromLabel === 2 || fromLabel === 3) return fromLabel;
+  const fromSort = Number(g.sort_order);
+  if (fromSort === 1 || fromSort === 2) return fromSort + 1;
+  return 1;
+}
+function componentGroepNrsPresentForOri(ori) {
+  const want = normalizeOrientatie(ori ?? vlakOrientatieEl?.value);
+  const set = /* @__PURE__ */ new Set();
+  if (!want) return [];
+  for (const f of vrFacades) {
+    if (facadeOrientatie(f) !== want) continue;
+    set.add(facadeGevelgroepNr(f));
+  }
+  return [...set].sort((a, b) => a - b);
+}
+function componentGroepNrsForOri(_ori) {
+  return [1, 2, 3];
+}
+function shouldBundleFacadesForOri(_ori) {
+  return true;
+}
+function groupFacadesForPick(facades, usedIds, opts) {
+  const bundle = opts?.bundleSameMaterial !== false;
   const groups = /* @__PURE__ */ new Map();
   const singles = [];
   for (const f of facades) {
-    const key = materialGroupKey(f);
-    if (!key) {
+    const key2 = materialGroupKey(f);
+    if (!bundle || !key2) {
       singles.push(f);
       continue;
     }
-    const list = groups.get(key) || [];
+    const list = groups.get(key2) || [];
     list.push(f);
-    groups.set(key, list);
+    groups.set(key2, list);
   }
   const out = [];
   const pushGroup = (members, materialKey) => {
@@ -1738,7 +2566,12 @@ function groupFacadesForPick(facades, usedIds) {
       });
       return;
     }
-    const pool = available;
+    const pool = [...available].sort((a, b) => {
+      const ac = facadeIsComposeOp(a) ? 0 : 1;
+      const bc = facadeIsComposeOp(b) ? 0 : 1;
+      if (ac !== bc) return ac - bc;
+      return effectiveFacadeAreaM2(b) - effectiveFacadeAreaM2(a);
+    });
     const kind = pool[0].quantity_kind === "length" ? "length" : "area";
     let areaSum = null;
     let lenSum = null;
@@ -1754,21 +2587,22 @@ function groupFacadesForPick(facades, usedIds) {
         if (Number.isFinite(a)) areaSum += a;
       }
     }
+    const primary = pool[0];
     out.push({
-      primaryId: pool[0].id,
+      primaryId: primary.id,
       memberIds: pool.map((m) => m.id),
       members: pool,
       quantity_kind: kind,
       area_m2: areaSum != null ? Math.round(areaSum * 100) / 100 : null,
       length_m: lenSum != null ? Math.round(lenSum * 100) / 100 : null,
-      label: pool[0].label || "",
+      label: primary.label || "",
       materialKey,
       ga_ready: pool.every((m) => m.ga_ready),
       used: false,
-      orientatie: groupOrientatie({ members: pool, orientatie: facadeOrientatie(pool[0]) })
+      orientatie: groupOrientatie({ members: pool, orientatie: facadeOrientatie(primary) })
     });
   };
-  for (const [key, members] of groups) {
+  for (const [key2, members] of groups) {
     const byOri = /* @__PURE__ */ new Map();
     for (const m of members) {
       const o = facadeOrientatie(m) || "";
@@ -1777,11 +2611,11 @@ function groupFacadesForPick(facades, usedIds) {
       byOri.set(o, list);
     }
     for (const [, oriMembers] of byOri) {
-      pushGroup(oriMembers, key);
+      pushGroup(oriMembers, key2);
     }
   }
   for (const f of singles) {
-    pushGroup([f], null);
+    pushGroup([f], materialGroupKey(f));
   }
   out.sort((a, b) => {
     if (a.used !== b.used) return a.used ? 1 : -1;
@@ -1797,24 +2631,186 @@ function correctionsForOrientatie(ori) {
   const c = code && room?.orientatie_correcties ? room.orientatie_correcties[code] : null;
   if (c) {
     return {
-      cl: String(Number(c.cl_db) || 0),
+      cl: String(Math.round(Number(c.cl_db) || 0)),
       cg: String(Number(c.cg_db) || 0)
     };
   }
   return { cl: "0", cg: "0" };
 }
-function applyClCgFromOrientatie(ori) {
-  const c = correctionsForOrientatie(ori);
+function gevelgroepenForOri(ori) {
+  const want = normalizeOrientatie(ori);
+  if (!want) return [];
+  return gevelgroepen.filter((g) => normalizeOrientatie(g.orientatie) === want).slice().sort((a, b) => gevelgroepNrOf2(a) - gevelgroepNrOf2(b) || a.label.localeCompare(b.label, "nl"));
+}
+function findGevelgroep(id) {
+  const want = String(id || "").trim();
+  if (!want) return null;
+  return gevelgroepen.find((g) => g.gevelgroep_id === want) || null;
+}
+function findGevelgroepByNr(ori, nr) {
+  const want = nr === 2 || nr === 3 ? nr : 1;
+  return gevelgroepenForOri(ori).find((g) => gevelgroepNrOf2(g) === want) || null;
+}
+function fillPickGroepSelect(ori, preferNr) {
+  if (!vlakPickGroepEl) return;
+  const code = normalizeOrientatie(ori ?? vlakOrientatieEl?.value);
+  const nrs = componentGroepNrsForOri(code);
+  const keep = preferNr === 2 || preferNr === 3 || preferNr === 1 ? preferNr : selectedPickGroepNr;
+  vlakPickGroepEl.innerHTML = "";
+  for (const n of nrs) {
+    const o = document.createElement("option");
+    o.value = String(n);
+    o.textContent = String(n);
+    vlakPickGroepEl.appendChild(o);
+  }
+  const pick = nrs.includes(keep) ? keep : nrs[0] || 1;
+  vlakPickGroepEl.value = String(pick);
+  selectedPickGroepNr = pick;
+  if (vlakPickGroepHintEl) {
+    const present = componentGroepNrsPresentForOri(code);
+    vlakPickGroepHintEl.textContent = present.length ? `Op deze ori staan groepen ${present.join(", ")} (geveltekening). Kies een groep \u2014 de materiaallijst toont alleen die componenten.` : "Groep 1 is standaard. Zet groep 2/3 op de geveltekening bij bel-etage e.d.";
+  }
+  const g = findGevelgroepByNr(code, pick);
+  selectedGevelgroepId = g?.gevelgroep_id || null;
+}
+function readFormClCg(ori) {
+  const def = correctionsForOrientatie(ori ?? vlakOrientatieEl?.value);
+  const clRaw = vlakClEl?.value.trim() ?? "";
+  const cgRaw = vlakCgEl?.value.trim() ?? "";
+  const clN = clRaw === "" ? NaN : Number(clRaw);
+  const cgN = cgRaw === "" ? NaN : Number(cgRaw);
+  return {
+    cl: Number.isFinite(clN) ? String(Math.round(clN)) : String(Math.round(Number(def.cl) || 0)),
+    cg: Number.isFinite(cgN) ? String(cgN) : def.cg
+  };
+}
+function correctionsForVlak(v) {
+  const g = findGevelgroep(v.gevelgroep_id);
+  if (g) {
+    return { cl: Number(g.cl_db) || 0, cg: Number(g.cg_db) || 0 };
+  }
+  const def = correctionsForOrientatie(v.orientatie);
+  const cl = Number(v.cl_db);
+  const cg = Number(v.cg_db);
+  return {
+    cl: Number.isFinite(cl) ? cl : Number(def.cl) || 0,
+    cg: Number.isFinite(cg) ? cg : Number(def.cg) || 0
+  };
+}
+function syncVlakCorrHint(ori) {
+  if (!vlakCorrHintEl) return;
+  const code = normalizeOrientatie(ori ?? vlakOrientatieEl?.value);
+  const def = correctionsForOrientatie(code);
+  const cur = readFormClCg(code);
+  const clN = Number(cur.cl);
+  const cgN = Number(cur.cg);
+  const defCl = Number(def.cl) || 0;
+  const defCg = Number(def.cg) || 0;
+  const same = Math.abs(clN - defCl) < 1e-9 && Math.abs(cgN - defCg) < 1e-9;
+  const g = findGevelgroep(selectedGevelgroepId) || findGevelgroepByNr(code, selectedPickGroepNr);
+  if (!code) {
+    vlakCorrHintEl.textContent = "";
+    return;
+  }
+  const groepBit = `Groep ${selectedPickGroepNr}`;
+  vlakCorrHintEl.textContent = same ? `${groepBit}: CL/Cg = ori-default ${code} (${round1(defCl)} / ${round1(defCg)} dB).` : `${groepBit}: CL/Cg afwijkend van ori ${code} (${round1(defCl)} / ${round1(defCg)} dB) \u2014 alle vlakken in deze groep.`;
+}
+function applyClCgFromGevelgroep(g, ori) {
+  const code = normalizeOrientatie(ori ?? g?.orientatie ?? vlakOrientatieEl?.value);
+  const c = g ? { cl: String(Math.round(Number(g.cl_db) || 0)), cg: String(Number(g.cg_db) || 0) } : correctionsForOrientatie(code);
   if (vlakClEl) {
-    vlakClEl.value = c.cl;
-    vlakClEl.readOnly = true;
-    vlakClEl.title = "CL vast per gevelori\xEBntatie (plattegrond) \u2014 niet live te wijzigen";
+    vlakClEl.value = String(Math.round(Number(c.cl) || 0));
+    vlakClEl.readOnly = false;
+    vlakClEl.title = "CL voor de gekozen gevelgroep (hele dB).";
   }
   if (vlakCgEl) {
     vlakCgEl.value = c.cg;
-    vlakCgEl.readOnly = true;
-    vlakCgEl.title = "Cg vast per gevelori\xEBntatie (plattegrond) \u2014 niet live te wijzigen";
+    vlakCgEl.readOnly = false;
+    vlakCgEl.title = "Cg voor de gekozen gevelgroep.";
   }
+  syncVlakCorrHint(code);
+}
+function applyClCgFromOrientatie(ori) {
+  const code = normalizeOrientatie(ori);
+  fillPickGroepSelect(code, selectedPickGroepNr);
+  const g = findGevelgroepByNr(code, selectedPickGroepNr);
+  selectedGevelgroepId = g?.gevelgroep_id || null;
+  applyClCgFromGevelgroep(g, code);
+}
+async function loadGevelgroepen() {
+  gevelgroepen = [];
+  if (!selectedVrId || !auth()) {
+    fillPickGroepSelect();
+    return;
+  }
+  const ret = await invokeString("API_ListGevelgroepen", [auth().token, selectedVrId]);
+  if (ret.startsWith("ERROR")) {
+    fillPickGroepSelect(vlakOrientatieEl?.value, selectedPickGroepNr);
+    return;
+  }
+  const data = parseJsonOk2(ret);
+  gevelgroepen = (data.gevelgroepen || []).map((g) => ({
+    ...g,
+    cl_db: Number(g.cl_db) || 0,
+    cg_db: Number(g.cg_db) || 0,
+    sort_order: Number(g.sort_order) || 0,
+    groep_nr: gevelgroepNrOf2(g),
+    vlak_count: Number(g.vlak_count) || 0
+  }));
+  fillPickGroepSelect(vlakOrientatieEl?.value, selectedPickGroepNr);
+}
+function resolveFocusOrientatie(preferred) {
+  const fromPreferred = normalizeOrientatie(preferred);
+  if (fromPreferred) return fromPreferred;
+  const fromForm = normalizeOrientatie(vlakOrientatieEl?.value);
+  if (fromForm) return fromForm;
+  const fromGg = normalizeOrientatie(findGevelgroep(selectedGevelgroepId)?.orientatie);
+  if (fromGg) return fromGg;
+  if (selectedVlakId) {
+    const v = vlakken.find((x) => x.vlak_id === selectedVlakId);
+    const fromVlak = normalizeOrientatie(v?.orientatie);
+    if (fromVlak) return fromVlak;
+  }
+  return "";
+}
+async function persistFormGevelgroep(ori, corrOverride) {
+  if (!auth() || !selectedVrId) throw new Error("Geen VR geselecteerd");
+  const fromSelected = findGevelgroep(selectedGevelgroepId);
+  const code = resolveFocusOrientatie(ori || fromSelected?.orientatie);
+  if (!code) throw new Error("Geen ori\xEBntatie \u2014 kies eerst een gevelori\xEBntatie");
+  const formCorr = corrOverride ?? readFormClCg(code);
+  const nr = selectedPickGroepNr === 2 || selectedPickGroepNr === 3 ? selectedPickGroepNr : 1;
+  const existing = (fromSelected && normalizeOrientatie(fromSelected.orientatie) === code ? fromSelected : null) || findGevelgroepByNr(code, nr);
+  const ret = await invokeString("API_SaveGevelgroep", [
+    auth().token,
+    selectedVrId,
+    existing?.gevelgroep_id || "",
+    code,
+    String(nr),
+    formCorr.cl,
+    formCorr.cg,
+    String(nr - 1)
+  ]);
+  if (ret.startsWith("ERROR")) throw new Error(ret);
+  const data = parseJsonOk2(ret);
+  selectedGevelgroepId = data.gevelgroep_id;
+  selectedPickGroepNr = nr;
+  if (vlakOrientatieEl && normalizeOrientatie(vlakOrientatieEl.value) !== code) {
+    ensureOrientatieOption(code);
+    vlakOrientatieEl.value = code;
+  }
+  await loadGevelgroepen();
+  fillPickGroepSelect(code, nr);
+  applyClCgFromGevelgroep(findGevelgroep(selectedGevelgroepId), code);
+  return selectedGevelgroepId;
+}
+function nudgeCorrField(el, delta) {
+  if (!el) return;
+  const cur = Number(el.value);
+  const base = Number.isFinite(cur) ? cur : 0;
+  const next = base + delta;
+  el.value = Math.abs(delta) >= 1 && Number.isInteger(delta) ? String(Math.round(next)) : String(Math.round(next * 10) / 10);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
 }
 function vlakPropsComplete() {
   if (selectedVlakId) return true;
@@ -1833,20 +2829,21 @@ function syncVlakMaterialGate() {
   const expected = expectedOrientatiesForSelectedVr();
   const noPlattegrondOri = !expected.length;
   const used = usedFacadePickIds();
-  const freeMats = groupFacadesForPick(vrFacades, used).filter(
-    (g) => g.ga_ready && !g.used && Boolean(groupOrientatie(g)) && materialHasFreeOrientatie2(g.materialKey)
+  const focusOri = normalizeOrientatie(vlakOrientatieEl?.value);
+  const bundle = shouldBundleFacadesForOri(focusOri);
+  const freeMats = groupFacadesForPick(vrFacades, used, { bundleSameMaterial: bundle }).filter(
+    (g) => g.ga_ready && !g.used && Boolean(groupOrientatie(g)) && (bundle ? materialHasFreeOrientatie2(g.materialKey) : true)
   );
   const noFreeMat = !editing && vrFacades.length > 0 && freeMats.length === 0;
   const propsOk = editing || vlakPropsComplete();
   const ready = propsOk && !noPlattegrondOri && (!noFreeMat || editing);
-  applyClCgFromOrientatie(vlakOrientatieEl?.value);
+  syncVlakCorrHint(vlakOrientatieEl?.value);
   syncOrientatieDisplay();
   const lockFacade = editing;
   vlakFacadeEl.disabled = lockFacade || !ready;
   vlakComponentFieldset?.classList.toggle("is-gated", !ready && !editing);
   vlakFacadeEl.classList.toggle("ga-facade-select--locked", lockFacade);
   if (vlakPropsGateHintEl) {
-    const focusOri = normalizeOrientatie(vlakOrientatieEl?.value);
     if (editing) {
       const incomplete = Boolean(focusOri) && !vlakkenMatchFacadeStotaal(focusOri);
       vlakPropsGateHintEl.textContent = incomplete ? "Je bewerkt een bestaand vlak \u2014 de materiaallijst is vergrendeld. Klik \xABAnnuleer bewerken\xBB om een ander materiaal toe te voegen tot 100% Stotaal voor deze ori\xEBntatie." : "";
@@ -1860,10 +2857,10 @@ function syncVlakMaterialGate() {
     } else {
       const wantOri = focusOri;
       const assignedForOri = wantOri ? vlakkenForOrientatie(wantOri) : [];
-      const leftover = wantOri ? groupFacadesForPick(vrFacades, used).filter(
-        (g) => g.ga_ready && !g.used && groupOrientatie(g) === wantOri && materialHasFreeOrientatie2(g.materialKey)
+      const leftover = wantOri ? groupFacadesForPick(vrFacades, used, { bundleSameMaterial: bundle }).filter(
+        (g) => g.ga_ready && !g.used && groupOrientatie(g) === wantOri && (bundle ? materialHasFreeOrientatie2(g.materialKey) : true)
       ) : [];
-      vlakPropsGateHintEl.textContent = wantOri && assignedForOri.length && leftover.length === 0 ? `Alle materialen voor ${wantOri} zijn toebedeeld \u2014 zie toegevoegde vlakken.` : "Kies een nog niet gekoppeld materiaal van de geveltekening. Zelfde materiaal wordt opgeteld; zo vul je Stotaal tot 100%.";
+      vlakPropsGateHintEl.textContent = wantOri && assignedForOri.length && leftover.length === 0 ? `Alle materialen voor ${wantOri} zijn toebedeeld \u2014 zie toegevoegde vlakken.` : "Kies een nog niet gekoppeld materiaal. Zelfde materiaal binnen deze gevelgroep wordt opgeteld tot 100% Stotaal.";
     }
   }
   if (!ready) {
@@ -1872,6 +2869,7 @@ function syncVlakMaterialGate() {
       vlakSaveBtn.disabled = true;
       vlakSaveBtn.title = vlakFacadeEl.title;
     }
+    syncListToVlakButton();
     return;
   }
   vlakFacadeEl.title = "Materiaal en RA staan op de gevelcomponent; wijzig die op de geveltekening";
@@ -1880,6 +2878,30 @@ function syncVlakMaterialGate() {
     vlakSaveBtn.disabled = !hasFac && !editing;
     vlakSaveBtn.title = hasFac || editing ? "" : "Selecteer een gevelcomponent";
   }
+  syncListToVlakButton();
+}
+function availableFacadePickGroups() {
+  const wantOri = normalizeOrientatie(vlakOrientatieEl?.value);
+  if (!wantOri) return [];
+  const used = usedFacadePickIds();
+  const pickNr = selectedPickGroepNr === 2 || selectedPickGroepNr === 3 ? selectedPickGroepNr : 1;
+  const bundle = shouldBundleFacadesForOri(wantOri);
+  return groupFacadesForPick(vrFacades, used, { bundleSameMaterial: bundle }).filter((g) => {
+    if (!g.ga_ready || g.used) return false;
+    if (groupOrientatie(g) !== wantOri) return false;
+    if (!g.materialKey) return false;
+    if (!g.members.every((m) => facadeGevelgroepNr(m) === pickNr)) return false;
+    if (bundle && materialOrientatieTaken2(g.materialKey, wantOri, null)) return false;
+    return true;
+  });
+}
+function syncListToVlakButton() {
+  if (!vlakListToVlakBtn) return;
+  const editing = Boolean(selectedVlakId);
+  const n = availableFacadePickGroups().length;
+  vlakListToVlakBtn.disabled = editing || n < 1;
+  vlakListToVlakBtn.classList.toggle("hidden", editing);
+  vlakListToVlakBtn.title = editing ? "Alleen bij toevoegen \u2014 annuleer bewerken" : n ? `${n} materiaal(en) uit de lijst als vlakken toevoegen` : "Geen vrije materialen in de pickerlijst";
 }
 function expectedOrientatiesForSelectedVr() {
   const vr = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
@@ -1927,16 +2949,22 @@ function rememberVrOriPresent(vrId, list) {
   vrOriPresentById.set(id, orisPresentInVlakken(list));
   vrVlakkenById.set(id, list.slice());
 }
-function createOriStatusLed(ori, ready) {
+function createOriStatusLed(ori, detail) {
   const led = document.createElement("span");
   led.className = "scale-calibrated-led";
-  led.classList.add(ready ? "is-on" : "is-warn");
+  led.classList.add(detail === "complete" ? "is-on" : "is-warn");
   led.setAttribute("role", "status");
   const name = ORIENTATIE_LABELS[ori] || ori;
-  const title = ready ? `${ori} (${name}): materialen gekoppeld` : `${ori} (${name}): nog niet berekend`;
+  const title = detail === "complete" ? `${ori} (${name}): 100% Stotaal` : detail === "partial" ? `${ori} (${name}): materialen gekoppeld, nog geen 100% Stotaal` : `${ori} (${name}): nog niet gespecificeerd`;
   led.title = title;
   led.setAttribute("aria-label", title);
   return led;
+}
+function oriLedStateForSelectedVr(ori) {
+  const code = normalizeOrientatie(ori);
+  if (!code) return "empty";
+  if (!vlakkenForOrientatie(code).length) return "empty";
+  return vlakkenMatchFacadeStotaal(code) ? "complete" : "partial";
 }
 function appendVrOriLedStrip(parent, vr) {
   const room = roomFromVr(vr);
@@ -1946,10 +2974,16 @@ function appendVrOriLedStrip(parent, vr) {
   const strip = document.createElement("span");
   strip.className = "ga-ori-led-strip";
   strip.setAttribute("aria-label", "Ori\xEBntatie-status");
+  const isSelected = vr.verblijfsruimte_id === selectedVrId;
   for (const code of expected) {
     const chip = document.createElement("span");
     chip.className = "ga-ori-led-chip";
-    chip.appendChild(createOriStatusLed(code, present.has(code)));
+    if (isSelected) {
+      chip.appendChild(createOriStatusLed(code, oriLedStateForSelectedVr(code)));
+    } else {
+      const has = present.has(code);
+      chip.appendChild(createOriStatusLed(code, has ? "partial" : "empty"));
+    }
     const t = document.createElement("span");
     t.className = "ga-ori-led-code";
     t.textContent = code;
@@ -2005,8 +3039,7 @@ function syncVlakPickDropdown() {
     }
     vlakPickEl.setAttribute("aria-disabled", "false");
     for (const code of expected) {
-      const assigned = vlakkenForOrientatie(code);
-      const ready = assigned.length > 0;
+      const st = oriLedStateForSelectedVr(code);
       const li = document.createElement("li");
       li.className = "drawing-list-item ga-ori-pick-item";
       const btn = document.createElement("button");
@@ -2016,10 +3049,10 @@ function syncVlakPickDropdown() {
       btn.dataset.value = `ori:${code}`;
       const inner = document.createElement("span");
       inner.className = "drawing-list-select-inner";
-      inner.appendChild(createOriStatusLed(code, ready));
+      inner.appendChild(createOriStatusLed(code, st));
       const label = document.createElement("span");
       label.className = "drawing-list-select-label";
-      label.textContent = ready ? `${code} \xB7 ${ORIENTATIE_LABELS[code] || code}` : `${code} \xB7 ${ORIENTATIE_LABELS[code] || code} \xB7 nog niet gespecificeerd`;
+      label.textContent = st === "complete" ? `${code} \xB7 ${ORIENTATIE_LABELS[code] || code} \xB7 100%` : st === "partial" ? `${code} \xB7 ${ORIENTATIE_LABELS[code] || code} \xB7 incompleet` : `${code} \xB7 ${ORIENTATIE_LABELS[code] || code} \xB7 nog niet gespecificeerd`;
       inner.appendChild(label);
       btn.appendChild(inner);
       btn.addEventListener("click", () => {
@@ -2073,18 +3106,20 @@ function prepareVlakForOrientatie(ori) {
   syncOrientatieSelectOptions();
   ensureOrientatieOption(code);
   if (vlakOrientatieEl) vlakOrientatieEl.value = code;
+  selectedPickGroepNr = 1;
+  fillPickGroepSelect(code, 1);
   applyClCgFromOrientatie(code);
   vlakGakEl.checked = true;
   fillFacadeSelect();
   syncVlakMaterialGate();
   updateVlakOriCompletenessHint();
   syncOrientatieDisplay();
-  if (vlakSaveBtn) vlakSaveBtn.textContent = "Vlak toevoegen";
+  if (vlakSaveBtn) vlakSaveBtn.textContent = "Vlak vullen";
   vlakCancelBtn?.classList.add("hidden");
   const assigned = vlakkenForOrientatie(code);
   const oriLabel = ORIENTATIE_LABELS[code] || code;
   if (vlakEditHintEl) {
-    vlakEditHintEl.textContent = assigned.length ? `Ori\xEBntatie ${oriLabel} \u2014 resterende materialen bij 2; vastgelegde vlakken in de scrollbox hieronder.` : `Voeg een vlak toe voor ${oriLabel} \u2014 kies hieronder een gevelcomponent.`;
+    vlakEditHintEl.textContent = assigned.length ? `Ori\xEBntatie ${oriLabel} \xB7 groep ${selectedPickGroepNr} \u2014 resterende materialen bij 2; vastgelegde vlakken hieronder.` : `Voeg een vlak toe voor ${oriLabel} \xB7 groep ${selectedPickGroepNr}.`;
   }
   renderVlakken();
   blankResultsUntilVlakSelected(
@@ -2185,15 +3220,15 @@ function liveVlakQtyInContext(v, facades, allVlakken) {
   }
   const fac = findFacadeInList(v, facades);
   if (!fac) return { kind, qty: stored };
-  const key = materialGroupKeyInList(fac);
+  const key2 = materialGroupKeyInList(fac);
   const ori = facadeOrientatie(fac);
-  const peers = key ? facades.filter((f) => materialGroupKeyInList(f) === key && facadeOrientatie(f) === ori) : [fac];
+  const peers = key2 ? facades.filter((f) => materialGroupKeyInList(f) === key2 && facadeOrientatie(f) === ori) : [fac];
   let shareCount = 0;
-  if (key) {
+  if (key2) {
     for (const other of allVlakken) {
       if (!(other.facade_subsection_id || "").trim()) continue;
       const of = findFacadeInList(other, facades);
-      if (of && materialGroupKeyInList(of) === key && facadeOrientatie(of) === ori) {
+      if (of && materialGroupKeyInList(of) === key2 && facadeOrientatie(of) === ori) {
         shareCount += 1;
       }
     }
@@ -2213,7 +3248,7 @@ function liveVlakQtyInContext(v, facades, allVlakken) {
   let sum = 0;
   let any = false;
   for (const p of sources) {
-    const a = p.area_m2 != null && Number.isFinite(Number(p.area_m2)) ? Number(p.area_m2) : 0;
+    const a = effectiveFacadeAreaM2(p, facades);
     if (a > 0) {
       sum += a;
       any = true;
@@ -2254,6 +3289,11 @@ function mapEligibleToVrFacades(eligible) {
       boolean_op: s.boolean_op || null,
       repeat_count: s.repeat_count != null && Number.isFinite(Number(s.repeat_count)) ? Math.max(1, Math.min(99, Math.round(Number(s.repeat_count)))) : 1,
       orientatie: normalizeOrientatie(s.orientatie) || null,
+      kozijn_role: s.kozijn_role != null ? String(s.kozijn_role).trim() || null : null,
+      gevelgroep_nr: (() => {
+        const n = Number(s.gevelgroep_nr);
+        return n === 2 || n === 3 ? n : 1;
+      })(),
       from_seal: fromSeal,
       source_subsection_id: sourceId || null,
       constituents: Array.isArray(s.constituents) ? s.constituents.map((c) => ({
@@ -2278,6 +3318,67 @@ function vrNrForVrId(vrId) {
   if (room?.vr_nr) return String(room.vr_nr);
   const m = String(vr.omschrijving || "").match(/^VR\s+([^\s·]+)/i);
   return m ? m[1] : null;
+}
+function vrMatchesFlowNr(vr, want) {
+  const nr = (() => {
+    const room = roomFromVr(vr);
+    if (room?.vr_nr) return String(room.vr_nr);
+    const m = String(vr.omschrijving || "").match(/^VR\s+([^\s·]+)/i);
+    return m ? m[1] : null;
+  })();
+  return flowVrNrsEqual(nr, want);
+}
+async function findVrIdByFlowNr(vrNr) {
+  const want = normalizeFlowVrNr(vrNr);
+  if (!want || !auth() || !vgs.length) return null;
+  for (const r of vrs) {
+    if (vrMatchesFlowNr(r, want) && selectedVgId) {
+      return { vgId: selectedVgId, vrId: r.verblijfsruimte_id };
+    }
+  }
+  for (const g of vgs) {
+    const ret = await invokeString("API_ListVerblijfsruimten", [
+      auth().token,
+      g.verblijfsgebied_id
+    ]);
+    if (typeof ret === "string" && ret.startsWith("ERROR")) continue;
+    try {
+      const data = parseJsonOk2(ret);
+      for (const r of data.verblijfsruimten || []) {
+        if (vrMatchesFlowNr(r, want)) {
+          return { vgId: g.verblijfsgebied_id, vrId: r.verblijfsruimte_id };
+        }
+      }
+    } catch {
+    }
+  }
+  return null;
+}
+async function applyFlowVrPreference(vrNr) {
+  const want = normalizeFlowVrNr(vrNr);
+  if (!want) return false;
+  const hit = await findVrIdByFlowNr(want);
+  if (!hit) return false;
+  if (selectedVgId !== hit.vgId) {
+    selectedVgId = hit.vgId;
+    renderVgs();
+    await loadVrs(hit.vrId);
+  } else if (selectedVrId !== hit.vrId) {
+    await loadVrs(hit.vrId);
+  }
+  const room = (() => {
+    const vr = vrs.find((r) => r.verblijfsruimte_id === hit.vrId);
+    return vr ? roomFromVr(vr) : null;
+  })();
+  if (buildingId) {
+    persistFlowVr(
+      buildingId,
+      want,
+      room?.vg_nr != null && Number.isFinite(Number(room.vg_nr)) ? Number(room.vg_nr) : null
+    );
+  }
+  rememberGaSelection();
+  return selectedVrId === hit.vrId;
 }
 async function copyVlakkenFromSource(sourceVrId, sourceOri, targetOri, anchorId) {
   if (!auth() || !selectedVrId) throw new Error("Selecteer eerst een VR");
@@ -2322,7 +3423,6 @@ async function copyVlakkenFromSource(sourceVrId, sourceOri, targetOri, anchorId)
     vrFacades.filter((f) => f.ga_ready && facadeOrientatie(f) === dst).map((f) => f.id)
   );
   targetPoolIds.add(anchor);
-  const oriCorr = correctionsForOrientatie(dst);
   const used = usedFacadePickIds();
   const takenKeys = /* @__PURE__ */ new Set();
   for (const v of vlakkenForOrientatie(dst)) {
@@ -2345,20 +3445,22 @@ async function copyVlakkenFromSource(sourceVrId, sourceOri, targetOri, anchorId)
   });
   for (const v of ordered) {
     const srcFac = findFacadeInList(v, sourceFacades);
-    const key = srcFac ? materialGroupKey(srcFac) : null;
+    const key2 = srcFac ? materialGroupKey(srcFac) : null;
     const matLabel = srcFac?.material_name || v.omschrijving || (v.quantity_kind === "length" ? "kierdichting" : "materiaal");
-    if (!key) {
+    if (!key2) {
       unmatched.push(matLabel);
       continue;
     }
-    if (takenKeys.has(key)) {
+    if (takenKeys.has(key2)) {
       skippedExist += 1;
       continue;
     }
     const wantLen = v.quantity_kind === "length" || srcFac?.quantity_kind === "length";
     const srcCompose = srcFac ? facadeIsComposeOp(srcFac) : false;
-    const candidates = groupFacadesForPick(vrFacades, used).filter((g) => {
-      if (!g.ga_ready || g.used || g.materialKey !== key) return false;
+    const candidates = groupFacadesForPick(vrFacades, used, {
+      bundleSameMaterial: shouldBundleFacadesForOri(dst)
+    }).filter((g) => {
+      if (!g.ga_ready || g.used || g.materialKey !== key2) return false;
       if (groupOrientatie(g) !== dst) return false;
       const isLen = g.quantity_kind === "length";
       if (isLen !== Boolean(wantLen)) return false;
@@ -2387,28 +3489,60 @@ async function copyVlakkenFromSource(sourceVrId, sourceOri, targetOri, anchorId)
     const rounded = Math.round(qty * 100) / 100;
     const facadeId = facadeSourceId(fac);
     const name = (v.omschrijving || "").trim() || fac.material_name || fac.label || "Vlak";
+    const srcCorr = correctionsForVlak(v);
+    const dstDef = correctionsForOrientatie(dst);
+    const clCopy = Number.isFinite(Number(v.cl_db)) ? String(srcCorr.cl) : dstDef.cl;
+    const cgCopy = Number.isFinite(Number(v.cg_db)) ? String(srcCorr.cg) : dstDef.cg;
+    const srcNr = facadeGevelgroepNr(
+      findFacadeInList(v, sourceFacades) || { gevelgroep_nr: 1 }
+    );
+    const dstLabel = String(srcNr === 2 || srcNr === 3 ? srcNr : 1);
+    let dstGgId = "";
+    const matchGg = findGevelgroepByNr(dst, Number(dstLabel)) || gevelgroepenForOri(dst).find(
+      (g) => Math.abs((Number(g.cl_db) || 0) - (Number(clCopy) || 0)) < 1e-9 && Math.abs((Number(g.cg_db) || 0) - (Number(cgCopy) || 0)) < 1e-9
+    );
+    if (matchGg) {
+      dstGgId = matchGg.gevelgroep_id;
+    } else {
+      const ggRet = await invokeString("API_SaveGevelgroep", [
+        auth().token,
+        selectedVrId,
+        "",
+        dst,
+        dstLabel,
+        clCopy,
+        cgCopy,
+        String(gevelgroepenForOri(dst).length)
+      ]);
+      if (!ggRet.startsWith("ERROR")) {
+        const ggData = parseJsonOk2(ggRet);
+        dstGgId = ggData.gevelgroep_id;
+        await loadGevelgroepen();
+      }
+    }
     const ret = await invokeString("API_SaveVlak", [
       auth().token,
       selectedVrId,
       "",
       name,
       wantLen ? "0" : String(rounded),
-      oriCorr.cl,
-      oriCorr.cg,
+      clCopy,
+      cgCopy,
       v.meenemen_gak !== false ? "true" : "false",
       "0",
       facadeId,
       wantLen ? "length" : "area",
       wantLen ? String(rounded) : "",
       dst,
-      "true"
+      "true",
+      dstGgId
     ]);
     if (ret.startsWith("ERROR")) {
       unmatched.push(`${matLabel} (${ret.replace(/^ERROR:\s*/i, "")})`);
       continue;
     }
     copied += 1;
-    takenKeys.add(key);
+    takenKeys.add(key2);
     used.add(pick.primaryId);
     for (const mid of pick.memberIds) used.add(mid);
   }
@@ -2544,14 +3678,18 @@ function fillFacadeSelect() {
   const expected = expectedOrientatiesForSelectedVr();
   const canShowMaterials = propsReady && Boolean(expected.length);
   const wantOri = normalizeOrientatie(vlakOrientatieEl?.value);
-  const allGroups = groupFacadesForPick(vrFacades, used);
+  const bundle = shouldBundleFacadesForOri(wantOri);
+  const allGroups = groupFacadesForPick(vrFacades, used, { bundleSameMaterial: bundle });
   const readyGroups = allGroups.filter((g) => g.ga_ready);
+  const pickNr = selectedPickGroepNr === 2 || selectedPickGroepNr === 3 ? selectedPickGroepNr : 1;
   let available = readyGroups.filter((g) => {
     if (g.used) return false;
     const compOri = groupOrientatie(g);
     if (!compOri) return false;
     const matKey = g.materialKey;
     if (!matKey) return false;
+    if (!g.members.every((m) => facadeGevelgroepNr(m) === pickNr)) return false;
+    if (!bundle) return true;
     return !materialOrientatieTaken2(matKey, compOri, selectedVlakId || null);
   });
   if (!wantOri) {
@@ -2566,9 +3704,9 @@ function fillFacadeSelect() {
     const cur = vlakken.find((v) => v.vlak_id === selectedVlakId);
     const fac = cur ? findFacadeForVlak(cur) : null;
     const facId = fac?.id || cur?.facade_subsection_id || prev || "";
-    const g = fac ? groupFacadesForPick(vrFacades, /* @__PURE__ */ new Set()).find(
+    const g = fac ? groupFacadesForPick(vrFacades, /* @__PURE__ */ new Set(), { bundleSameMaterial: false }).find(
       (x) => x.primaryId === fac.id || x.memberIds.includes(fac.id)
-    ) : facId ? groupFacadesForPick(vrFacades, /* @__PURE__ */ new Set()).find(
+    ) : facId ? groupFacadesForPick(vrFacades, /* @__PURE__ */ new Set(), { bundleSameMaterial: false }).find(
       (x) => x.primaryId === facId || x.memberIds.includes(facId)
     ) : void 0;
     vlakFacadeEl.innerHTML = "";
@@ -2633,7 +3771,7 @@ function fillFacadeSelect() {
   } else if (!available.length) {
     ph.textContent = !wantOri ? "\u2014 kies eerst een ori\xEBntatie hierboven \u2014" : assignedForOri.length ? `\u2014 alle materialen voor ${wantOri} zijn toebedeeld \u2014 zie toegevoegde vlakken \u2014` : readyForOri.length ? `\u2014 geen vrij materiaal meer voor ${wantOri} \u2014` : readyGroups.length ? `\u2014 geen componenten met ori\xEBntatie ${wantOri} (leg ori vast op geveltekening) \u2014` : incompleteN ? "\u2014 geen complete componenten (materiaal + ori\xEBntatie op gevel vereist) \u2014" : "\u2014 geen componenten voor deze VR \u2014";
   } else {
-    ph.textContent = wantOri ? `\u2014 kies materiaal voor ${ORIENTATIE_LABELS[wantOri] || wantOri} \u2014` : "\u2014 kies een materiaal (zelfde materiaal wordt opgeteld) \u2014";
+    ph.textContent = wantOri ? bundle ? `\u2014 kies materiaal voor ${ORIENTATIE_LABELS[wantOri] || wantOri} \xB7 groep ${pickNr} \u2014` : `\u2014 kies component voor ${ORIENTATIE_LABELS[wantOri] || wantOri} \xB7 groep ${pickNr} \u2014` : "\u2014 kies een materiaal (zelfde materiaal wordt opgeteld) \u2014";
   }
   vlakFacadeEl.appendChild(ph);
   const shown = canShowMaterials ? [...available] : [];
@@ -2670,6 +3808,7 @@ function fillFacadeSelect() {
   onFacadePick(false);
   updateFacadeHint();
   syncVlakMaterialGate();
+  syncListToVlakButton();
   updateVlakInventory();
 }
 function updateVlakInventory() {
@@ -2681,50 +3820,58 @@ function updateVlakInventory() {
     return;
   }
   const focusOri = normalizeOrientatie(vlakOrientatieEl?.value);
+  const focusGg = selectedPickGroepNr === 2 || selectedPickGroepNr === 3 ? selectedPickGroepNr : 1;
   const focusVlakken = focusOri ? vlakkenForOrientatie(focusOri) : [];
-  if (focusOri && focusVlakken.length === 0) {
-    if (vlakCoverageEl) vlakCoverageEl.hidden = true;
-    const oriLabel = ORIENTATIE_LABELS[focusOri] || focusOri;
-    vlakInventoryEl.textContent = `Ori\xEBntatie ${oriLabel}: nog geen toegevoegde vlakken.`;
-    syncRecalcEnabled();
-    return;
-  }
-  const stotaal = focusOri ? facadeStotaalM2(focusOri) : 0;
-  const deel = focusOri ? vlakkenDeeloppervlakM2(focusOri) : 0;
-  const oriBit = focusOri ? ` (${focusOri})` : "";
-  const tol = 0.02;
-  const complete = stotaal > 0 && Math.abs(stotaal - deel) <= tol;
+  const focusVlakkenGroep = focusVlakken.filter((v) => vlakGevelgroepNr(v) === focusGg);
+  const stotaal = focusOri ? facadeStotaalM2(focusOri, focusGg) : 0;
+  const deel = focusOri ? vlakkenDeeloppervlakM2(focusOri, focusGg) : 0;
+  const materialSum = focusOri ? gevelMaterialSumM2(vrFacadesAsCoverageRows(), focusOri, focusGg) : 0;
+  const oriBit = focusOri ? ` (${focusOri} \xB7 groep ${focusGg})` : "";
+  const tol = stotaal > 0 ? Math.max(0.05, Math.round(stotaal * 0.01 * 100) / 100) : 0.05;
+  const hasVlakken = focusVlakkenGroep.length > 0 && deel > 0;
+  const materialOver = hasVlakken && stotaal > 0 && materialSum > stotaal + tol;
+  const complete = stotaal > 0 && hasVlakken && !materialOver && Math.abs(stotaal - deel) <= tol;
   const over = stotaal > 0 && deel > stotaal + tol;
   let pct = 0;
-  if (stotaal > 0) {
+  if (stotaal > 0 && hasVlakken) {
     pct = complete ? 100 : Math.max(0, Math.round(deel / stotaal * 1e3) / 10);
   }
   if (vlakCoverageEl && vlakCoveragePctEl && vlakCoverageBarEl && vlakCoverageMetaEl) {
-    if (!(stotaal > 0) && !focusVlakken.length) {
+    if (!focusOri) {
       vlakCoverageEl.hidden = true;
     } else {
       vlakCoverageEl.hidden = false;
       vlakCoverageEl.classList.remove("is-complete", "is-partial", "is-over");
       if (!(stotaal > 0)) {
-        vlakCoveragePctEl.textContent = "\u2014";
+        vlakCoveragePctEl.textContent = "0%";
         vlakCoverageBarEl.style.width = "0%";
-        vlakCoverageMetaEl.textContent = focusOri ? `Nog geen complete geveloppervlakten (Stotaal) voor ori\xEBntatie ${focusOri}.` : "Kies een ori\xEBntatie om Stotaal-dekking te zien.";
-      } else if (facadeOpeningsUncutFromWall(focusOri)) {
-        const rawSum = facadeReadyAreaFacades(focusOri).reduce((a, f) => a + Number(f.area_m2), 0);
+        vlakCoverageMetaEl.textContent = focusVlakkenGroep.length ? `Groep ${focusGg}: nog geen Stotaal (geveloppervlakten) voor ori\xEBntatie ${focusOri}.` : `Groep ${focusGg}: 0% \u2014 nog geen vlakken toegekend.`;
+      } else if (!hasVlakken) {
         vlakCoverageEl.classList.add("is-partial");
-        vlakCoveragePctEl.textContent = `${pct}%`;
-        vlakCoverageBarEl.style.width = `${Math.min(100, pct)}%`;
-        vlakCoverageMetaEl.textContent = `Stotaal ${stotaal.toFixed(2)} m\xB2${oriBit} is de gevelcontour (nu ${deel.toFixed(2)} m\xB2 muur toegekend). Kozijn/glas zitten nog in die contour (los getekend ${rawSum.toFixed(2)} m\xB2) \u2014 maak \xB1 (gevel \u2212 kozijn) zodat muur + hout + glas optellen tot Stotaal.`;
-      } else if (complete) {
-        vlakCoverageEl.classList.add("is-complete");
-        vlakCoveragePctEl.textContent = "100%";
-        vlakCoverageBarEl.style.width = "100%";
-        vlakCoverageMetaEl.textContent = `Volledige dekking${oriBit}: ${deel.toFixed(2)} / ${stotaal.toFixed(2)} m\xB2 \u2014 materialen tellen op tot 100% van dit gevelvlak.`;
+        vlakCoveragePctEl.textContent = "0%";
+        vlakCoverageBarEl.style.width = "0%";
+        const tekenBit = materialSum > stotaal + tol ? ` Tekening heeft nog ${materialSum.toFixed(2)} m\xB2 materialen (contour ${stotaal.toFixed(2)} m\xB2) \u2014 pas na \xABLijst naar vlak\xBB meet dit in de dekking.` : "";
+        vlakCoverageMetaEl.textContent = `0 / ${stotaal.toFixed(2)} m\xB2 gedekt${oriBit} \u2014 nog geen vlakken.${tekenBit}`;
       } else if (over) {
         vlakCoverageEl.classList.add("is-over");
         vlakCoveragePctEl.textContent = `${pct}%`;
         vlakCoverageBarEl.style.width = "100%";
         vlakCoverageMetaEl.textContent = `Te veel${oriBit}: ${deel.toFixed(2)} / ${stotaal.toFixed(2)} m\xB2 \u2014 deeloppervlakten overschrijden Stotaal (${(deel - stotaal).toFixed(2)} m\xB2 te veel).`;
+      } else if (materialOver) {
+        vlakCoverageEl.classList.add("is-over");
+        vlakCoveragePctEl.textContent = `${pct}%`;
+        vlakCoverageBarEl.style.width = `${Math.min(100, pct)}%`;
+        vlakCoverageMetaEl.textContent = `Vlakken ${deel.toFixed(2)} / ${stotaal.toFixed(2)} m\xB2${oriBit}, maar tekening ${materialSum.toFixed(2)} m\xB2 > contour \u2014 controleer hi\xEBrarchie (gevel \u2283 kozijn \u2283 ruit) of muurdelen samenvoegen.`;
+      } else if (facadeOpeningsUncutFromWall(focusOri, focusGg)) {
+        vlakCoverageEl.classList.add("is-partial");
+        vlakCoveragePctEl.textContent = `${pct}%`;
+        vlakCoverageBarEl.style.width = `${Math.min(100, pct)}%`;
+        vlakCoverageMetaEl.textContent = `Stotaal ${stotaal.toFixed(2)} m\xB2${oriBit}: ${deel.toFixed(2)} m\xB2 op vlakken. Openingen nog niet in hi\xEBrarchie (tekening ${materialSum.toFixed(2)} m\xB2) \u2014 kozijn-tool of handmatige \xB1.`;
+      } else if (complete) {
+        vlakCoverageEl.classList.add("is-complete");
+        vlakCoveragePctEl.textContent = "100%";
+        vlakCoverageBarEl.style.width = "100%";
+        vlakCoverageMetaEl.textContent = `Volledige dekking${oriBit}: ${deel.toFixed(2)} / ${stotaal.toFixed(2)} m\xB2 \u2014 materialen tellen op tot 100% van deze gevelgroep.`;
       } else {
         vlakCoverageEl.classList.add("is-partial");
         vlakCoveragePctEl.textContent = `${pct}%`;
@@ -2735,25 +3882,31 @@ function updateVlakInventory() {
     }
   }
   const used = usedFacadePickIds();
-  const groups = groupFacadesForPick(vrFacades, used).filter(
-    (g) => g.ga_ready && Boolean(groupOrientatie(g))
-  );
+  const bundleInv = shouldBundleFacadesForOri(focusOri);
+  const groups = groupFacadesForPick(vrFacades, used, {
+    bundleSameMaterial: bundleInv
+  }).filter((g) => {
+    if (!g.ga_ready || !groupOrientatie(g)) return false;
+    if (!focusOri) return true;
+    if (groupOrientatie(g) !== focusOri) return false;
+    return g.members.every((m) => facadeGevelgroepNr(m) === focusGg);
+  });
   const linked = groups.filter(
-    (g) => g.used || !materialHasFreeOrientatie2(g.materialKey)
+    (g) => g.used || bundleInv && !materialHasFreeOrientatie2(g.materialKey)
   ).length;
   const free = groups.filter(
-    (g) => !g.used && materialHasFreeOrientatie2(g.materialKey)
+    (g) => !g.used && (bundleInv ? materialHasFreeOrientatie2(g.materialKey) : true)
   ).length;
   const expected = expectedOrientatiesForSelectedVr();
   const missingOri = expected.filter((o) => !orientatieTakenOnVr2(o, null));
   const bits = [
-    `Geveltekening: ${groups.length} materiaal-groep(en)`,
+    bundleInv ? `Geveltekening: ${groups.length} materiaal-groep(en)` : `Geveltekening: ${groups.length} component(en) apart (multi-groep)`,
     `${linked} als vlak gekoppeld`,
     free ? `${free} nog toe te kennen` : "geen vrij materiaal"
   ];
   if (focusOri) {
     bits.unshift(
-      `ori ${focusOri}: ${focusVlakken.length} vlak${focusVlakken.length === 1 ? "" : "ken"}`
+      `ori ${focusOri} \xB7 groep ${focusGg}: ${focusVlakkenGroep.length} vlak${focusVlakkenGroep.length === 1 ? "" : "ken"}`
     );
   }
   if (expected.length) {
@@ -2763,8 +3916,10 @@ function updateVlakInventory() {
   }
   if (focusOri && stotaal > 0) {
     bits.unshift(
-      complete ? `ori ${focusOri}: 100% Stotaal` : `ori ${focusOri}: ${pct}% van Stotaal`
+      !hasVlakken ? `ori ${focusOri} \xB7 groep ${focusGg}: 0% \u2014 geen vlakken` : over ? `ori ${focusOri} \xB7 groep ${focusGg}: ${pct}% \u2014 vlakken > Stotaal` : complete ? `ori ${focusOri} \xB7 groep ${focusGg}: 100% Stotaal` : `ori ${focusOri} \xB7 groep ${focusGg}: ${pct}% van Stotaal`
     );
+  } else if (focusOri && !focusVlakkenGroep.length) {
+    bits.unshift(`ori ${ORIENTATIE_LABELS[focusOri] || focusOri} \xB7 groep ${focusGg}: nog geen vlakken`);
   }
   vlakInventoryEl.textContent = bits.join(" \xB7 ");
   syncRecalcEnabled();
@@ -2796,27 +3951,30 @@ async function loadFacadesForSelectedVr() {
       `/api/floormap/vr-components?building_id=${encodeURIComponent(buildingId)}&vr_nr=${encodeURIComponent(vrNr)}`
     );
     vrFacades = mapEligibleToVrFacades(data.eligible || []);
+    fillPickGroepSelect(vlakOrientatieEl?.value, selectedPickGroepNr);
     fillFacadeSelect();
     if (vlakFacadeHintEl) {
       const n = vrFacades.length;
       const ready = vrFacades.filter((f) => f.ga_ready).length;
       const excl = data.counts?.excluded_as_source ?? 0;
       const used = usedFacadePickIds();
-      const pickGroups = groupFacadesForPick(vrFacades, used).filter(
-        (g) => g.ga_ready && Boolean(groupOrientatie(g))
-      );
+      const focusOriHint = normalizeOrientatie(vlakOrientatieEl?.value);
+      const bundleHint = shouldBundleFacadesForOri(focusOriHint);
+      const pickGroups = groupFacadesForPick(vrFacades, used, {
+        bundleSameMaterial: bundleHint
+      }).filter((g) => g.ga_ready && Boolean(groupOrientatie(g)));
       const merged = pickGroups.filter((g) => g.members.length > 1).length;
       const pickN = pickGroups.filter(
-        (g) => !g.used && materialHasFreeOrientatie2(g.materialKey)
+        (g) => !g.used && (bundleHint ? materialHasFreeOrientatie2(g.materialKey) : true)
       ).length;
       const already = pickGroups.filter(
-        (g) => g.used || !materialHasFreeOrientatie2(g.materialKey)
+        (g) => g.used || bundleHint && !materialHasFreeOrientatie2(g.materialKey)
       ).length;
       const incomplete = n - ready;
       const reusedMat = pickGroups.filter(
-        (g) => !g.used && g.materialKey && orisUsedForMaterial2(g.materialKey).length > 0 && materialHasFreeOrientatie2(g.materialKey)
+        (g) => !g.used && g.materialKey && orisUsedForMaterial2(g.materialKey).length > 0 && (bundleHint ? materialHasFreeOrientatie2(g.materialKey) : true)
       ).length;
-      vlakFacadeHintEl.textContent = n === 0 ? `Geen gevelcomponenten voor VR ${vrNr}${excl ? ` (${excl} vervangen door zelfde-materiaal setbewerking)` : ""}.` : `VR ${vrNr}: ${ready} component(en) met materiaal + ori\xEBntatie \xB7 ${pickN} materiaal-groep(en) kiesbaar` + (reusedMat ? ` \xB7 ${reusedMat}\xD7 zelfde materiaal opnieuw (andere ori\xEBntatie)` : "") + (already ? ` \xB7 ${already} al gekoppeld` : "") + (merged ? ` \xB7 ${merged}\xD7 zelfde materiaal opgeteld` : "") + (incomplete ? ` \xB7 ${incomplete} zonder materiaal (niet selecteerbaar)` : "") + (excl ? ` \xB7 ${excl} vervangen (zelfde materiaal)` : "") + `. Meerdere materialen per ori\xEBntatie; zelfde materiaal wordt opgeteld.`;
+      vlakFacadeHintEl.textContent = n === 0 ? `Geen gevelcomponenten voor VR ${vrNr}${excl ? ` (${excl} vervangen door zelfde-materiaal setbewerking)` : ""}.` : `VR ${vrNr}: ${ready} component(en) met materiaal + ori\xEBntatie \xB7 ${pickN} ${bundleHint ? "materiaal-groep(en)" : "component(en)"} kiesbaar` + (reusedMat && bundleHint ? ` \xB7 ${reusedMat}\xD7 zelfde materiaal opnieuw (andere ori\xEBntatie)` : "") + (already ? ` \xB7 ${already} al gekoppeld` : "") + (merged ? ` \xB7 ${merged}\xD7 zelfde materiaal opgeteld` : "") + (incomplete ? ` \xB7 ${incomplete} zonder materiaal (niet selecteerbaar)` : "") + (excl ? ` \xB7 ${excl} vervangen (zelfde materiaal)` : "") + (bundleHint ? `. Meerdere materialen per ori\xEBntatie; zelfde materiaal wordt opgeteld.` : `. Meerdere gevelgroepen: componenten apart \u2014 verdeel over groepen met eigen CL.`);
     }
   } catch (err) {
     vrFacades = [];
@@ -2901,10 +4059,11 @@ function updateRoomPreview() {
   if (!r) {
     roomPreviewEl.textContent = "Geen vrije ruimte geselecteerd";
     roomPreviewEl.classList.add("is-empty");
-    return;
+  } else {
+    roomPreviewEl.textContent = formatRoomSummary(r);
+    roomPreviewEl.classList.remove("is-empty");
   }
-  roomPreviewEl.textContent = formatRoomSummary(r);
-  roomPreviewEl.classList.remove("is-empty");
+  if (!selectedVrId) updateSectionPreview();
 }
 function syncVlakQtyUi(kind, value, fromFacade = false) {
   const isLen = kind === "length";
@@ -2932,7 +4091,6 @@ function onFacadePick(forceName = false) {
     vlakNameEl.value = opt.dataset.label || "Vlak";
   }
   if (!selectedVlakId) {
-    applyClCgFromOrientatie(vlakOrientatieEl?.value);
     syncOrientatieDisplay();
     syncVlakMaterialGate();
   }
@@ -2961,6 +4119,21 @@ async function loadVariants() {
   const preferVg = pendingImportSubId ? null : remembered?.vgId || null;
   const preferVr = pendingImportSubId ? null : remembered?.vrId || null;
   await loadVgs(preferVg, preferVr);
+  const flowNr = normalizeFlowVrNr(pendingImportVrNr) || normalizeFlowVrNr(params.get("vr_nr")) || normalizeFlowVrNr(readFlowVr(buildingId)?.vr_nr);
+  if (flowNr) {
+    await applyFlowVrPreference(flowNr);
+  } else if (selectedVrId && buildingId) {
+    const nr = vrNrForVrId(selectedVrId);
+    if (nr) {
+      const vrRow = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
+      const room = vrRow ? roomFromVr(vrRow) : null;
+      persistFlowVr(
+        buildingId,
+        nr,
+        room?.vg_nr != null && Number.isFinite(Number(room.vg_nr)) ? Number(room.vg_nr) : null
+      );
+    }
+  }
 }
 function fillVariantForm(v) {
   variantNameEl.value = v.omschrijving;
@@ -3105,7 +4278,8 @@ async function loadVgs(preferVgId, preferVrId) {
   vrOriPresentById.clear();
   vrVlakkenById.clear();
   vrCopyLabelById.clear();
-  const keepVg = preferVgId || selectedVgId;
+  let keepVg = preferVgId || selectedVgId;
+  const keepVr = preferVrId || selectedVrId;
   selectedVgId = null;
   selectedVrId = null;
   if (!selectedVariantId || !auth()) {
@@ -3118,12 +4292,27 @@ async function loadVgs(preferVgId, preferVrId) {
   const ret = await invokeString("API_ListVerblijfsgebieden", [auth().token, selectedVariantId]);
   const data = parseJsonOk2(ret);
   vgs = sortByLabelAz(data.verblijfsgebieden || [], vgDisplayTitle);
+  const moved = await syncVrVgMembershipFromFloormap();
   await syncVgTitlesFromFloormap();
   vgs = sortByLabelAz(vgs, vgDisplayTitle);
+  if (moved > 0) {
+    setConn(
+      "ok",
+      moved === 1 ? "VG-indeling bijgewerkt van plattegrond (1 VR verplaatst)" : `VG-indeling bijgewerkt van plattegrond (${moved} VR\u2019s verplaatst)`
+    );
+  }
   if (keepVg && vgs.some((g) => g.verblijfsgebied_id === keepVg)) selectedVgId = keepVg;
   else if (vgs.length) selectedVgId = vgs[0].verblijfsgebied_id;
   renderVgs();
-  await loadVrs(preferVrId ?? null);
+  await loadVrs(keepVr ?? null);
+  if (keepVr && selectedVrId !== keepVr) {
+    const ownerVg = await findVgIdForVr(keepVr);
+    if (ownerVg && ownerVg !== selectedVgId) {
+      selectedVgId = ownerVg;
+      renderVgs();
+      await loadVrs(keepVr);
+    }
+  }
   rememberGaSelection();
 }
 async function syncVgTitlesFromFloormap() {
@@ -3167,7 +4356,8 @@ function renderVgs() {
     btn.className = "drawing-list-select";
     const title = vgDisplayTitle(g);
     const floor = floorLevelForVg(g.verblijfsgebied_id);
-    const n = g.vr_count === 1 ? "1 VR" : `${g.vr_count} VR\u2019s`;
+    const vrShown = floormapRoomsForVg(g.verblijfsgebied_id).length || g.vr_count;
+    const n = vrShown === 1 ? "1 VR" : `${vrShown} VR\u2019s`;
     const floorBit = floor ? ` \xB7 ${levelLabel(floor)}` : "";
     const vrNrs = vgVrNrSummary(g.verblijfsgebied_id);
     const vrBit = vrNrs ? ` \xB7 ${vrNrs}` : "";
@@ -3176,9 +4366,8 @@ function renderVgs() {
     btn.addEventListener("click", () => {
       selectedVgId = g.verblijfsgebied_id;
       selectedVrId = null;
-      rememberGaSelection();
       renderVgs();
-      void loadVrs();
+      void loadVrs().then(() => rememberGaSelection());
     });
     li.appendChild(btn);
     vgListEl.appendChild(li);
@@ -3218,7 +4407,10 @@ async function loadVrs(preferVrId) {
   }
   const ret = await invokeString("API_ListVerblijfsruimten", [auth().token, selectedVgId]);
   const data = parseJsonOk2(ret);
-  vrs = sortByLabelAz(data.verblijfsruimten || [], (r) => r.omschrijving || "");
+  vrs = sortByLabelAz(
+    vrsMatchingFloormapVg(selectedVgId, data.verblijfsruimten || []),
+    (r) => r.omschrijving || ""
+  );
   for (const id of [...freshResultVrIds]) {
     const vr = vrs.find((r) => r.verblijfsruimte_id === id);
     if (!vr || vr.ga_dba == null && vr.lbi_dba == null && vr.gak_dba == null) {
@@ -3236,6 +4428,7 @@ async function loadVrs(preferVrId) {
   } catch {
   }
   renderVrs();
+  rememberGaSelection();
 }
 function renderVrs() {
   vrListEl.innerHTML = "";
@@ -3294,7 +4487,7 @@ function renderVrs() {
     btn.addEventListener("click", () => {
       selectedVrId = r.verblijfsruimte_id;
       selectedVlakId = null;
-      if (vlakSaveBtn) vlakSaveBtn.textContent = "Vlak toevoegen";
+      if (vlakSaveBtn) vlakSaveBtn.textContent = "Vlak vullen";
       vlakCancelBtn?.classList.add("hidden");
       rememberGaSelection();
       fillVrEdit(r);
@@ -3306,7 +4499,10 @@ function renderVrs() {
   }
   const cur = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
   if (cur) fillVrEdit(cur);
-  else vrEditForm.classList.add("hidden");
+  else {
+    vrEditForm.classList.add("hidden");
+    updateSectionPreview();
+  }
 }
 function effectiveVrMetrics(r) {
   const room = roomFromVr(r);
@@ -3326,17 +4522,17 @@ function liveVlakQty(v) {
   if (!facId || !vrFacades.length) return { kind, qty: stored };
   const fac = findFacadeForVlak(v);
   if (!fac) return { kind, qty: stored };
-  const key = materialGroupKey(fac);
+  const key2 = materialGroupKey(fac);
   const ori = facadeOrientatie(fac);
-  const peers = key ? vrFacades.filter(
-    (f) => materialGroupKey(f) === key && facadeOrientatie(f) === ori
+  const peers = key2 ? vrFacades.filter(
+    (f) => materialGroupKey(f) === key2 && facadeOrientatie(f) === ori
   ) : [fac];
   let shareCount = 0;
-  if (key) {
+  if (key2) {
     for (const other of vlakken) {
       if (!(other.facade_subsection_id || "").trim()) continue;
       const of = findFacadeForVlak(other);
-      if (of && materialGroupKey(of) === key && facadeOrientatie(of) === ori) shareCount += 1;
+      if (of && materialGroupKey(of) === key2 && facadeOrientatie(of) === ori) shareCount += 1;
     }
   }
   const sources = shareCount > 1 ? [fac] : peers;
@@ -3382,6 +4578,7 @@ function fillVrEdit(r) {
   r.vloer_m2 = metrics.vloer;
   r.volume_m3 = metrics.volume;
   syncVrVolumeFromInputs();
+  updateSectionPreview();
 }
 function syncVrVolumeFromInputs() {
   const vloer = Number(vrEditVloerEl.value);
@@ -3393,6 +4590,10 @@ function syncVrVolumeFromInputs() {
 async function loadVlakken(opts) {
   vlakken = [];
   if (!selectedVrId || !auth()) {
+    gevelgroepen = [];
+    selectedGevelgroepId = null;
+    selectedPickGroepNr = 1;
+    fillPickGroepSelect();
     renderVlakken();
     await loadFacadesForSelectedVr();
     syncOrientatieSelectOptions();
@@ -3403,6 +4604,7 @@ async function loadVlakken(opts) {
   const data = parseJsonOk2(ret);
   vlakken = data.vlakken || [];
   rememberVrOriPresent(selectedVrId, vlakken);
+  await loadGevelgroepen();
   await loadFacadesForSelectedVr();
   syncOrientatieSelectOptions();
   renderVlakken();
@@ -3418,7 +4620,7 @@ async function loadVlakken(opts) {
       await refreshVrCalc({ persist: false });
     } else {
       selectedVlakId = null;
-      if (vlakSaveBtn) vlakSaveBtn.textContent = "Vlak toevoegen";
+      if (vlakSaveBtn) vlakSaveBtn.textContent = "Vlak vullen";
       vlakCancelBtn?.classList.add("hidden");
       applyVlakFormDefaultsFromExisting();
       fillFacadeSelect();
@@ -3450,7 +4652,11 @@ async function loadVlakken(opts) {
       syncOrientatieDisplay();
     }
     if (!vlakkenMatchFacadeStotaal()) {
-      await clearPersistedVrCalc("");
+      const incompleteOri = normalizeOrientatie(vlakOrientatieEl?.value) || facadeOrisWithArea().find((o) => !vlakkenMatchFacadeStotaal(o)) || "";
+      clearVrResults(
+        incompleteOri ? `Stotaal voor ori\xEBntatie ${incompleteOri} is nog geen 100% \u2014 vul vlakken aan, daarna Herberekenen. Vorige GA;k blijft bewaard tot een geslaagde herberekening.` : "Stotaal-dekking is nog geen 100% \u2014 vul vlakken per ori\xEBntatie aan. Vorige GA;k blijft bewaard tot een geslaagde herberekening.",
+        { keepStored: true }
+      );
     } else {
       blankResultsUntilVlakSelected();
     }
@@ -3589,12 +4795,33 @@ async function clearPersistedVrCalc(hint) {
     setConn("err", `Resultaten niet gewist: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
-function facadeReadyAreaFacades(ori) {
+function facadeToCoverageRow(f) {
+  return {
+    id: f.id,
+    area_m2: f.area_m2,
+    kozijn_role: f.kozijn_role,
+    boolean_op: f.boolean_op,
+    material_id: f.material_id,
+    orientatie: facadeOrientatie(f),
+    gevelgroep_nr: facadeGevelgroepNr(f),
+    quantity_kind: f.quantity_kind,
+    constituents: f.constituents?.map((c) => ({
+      sign: c.sign,
+      area_m2: c.area_m2
+    }))
+  };
+}
+function vrFacadesAsCoverageRows(list = vrFacades) {
+  return list.filter((f) => f.ga_ready && f.quantity_kind !== "length").map(facadeToCoverageRow);
+}
+function facadeReadyAreaFacades(ori, groepNr) {
   const want = normalizeOrientatie(ori);
+  const wantGg = groepNr === 2 || groepNr === 3 ? groepNr : groepNr === 1 ? 1 : null;
   return vrFacades.filter((f) => {
     if (!f.ga_ready || f.quantity_kind === "length") return false;
     if (f.area_m2 == null || !Number.isFinite(Number(f.area_m2))) return false;
     if (want && facadeOrientatie(f) !== want) return false;
+    if (wantGg != null && facadeGevelgroepNr(f) !== wantGg) return false;
     return true;
   });
 }
@@ -3627,26 +4854,35 @@ function facadeOpeningOuterArea1x(sourceId, fallbackArea) {
   }
   return fallbackArea != null && Number.isFinite(Number(fallbackArea)) ? Number(fallbackArea) : 0;
 }
-function effectiveFacadeAreaM2(f) {
+function effectiveFacadeAreaM2(f, facades = vrFacades) {
   const base = f.area_m2 != null && Number.isFinite(Number(f.area_m2)) ? Number(f.area_m2) : 0;
-  if (!facadeIsComposeOp(f) || !f.constituents?.length) return base;
-  const parentRpt = Math.max(1, Number(f.repeat_count) || 1);
-  let area = base;
-  for (const part of f.constituents) {
-    if (part.sign !== "-") continue;
-    const sid = String(part.id || "").trim();
-    if (!sid) continue;
-    const src = vrFacades.find((x) => x.id === sid);
-    const srcRpt = Math.max(1, Number(src?.repeat_count) || 1);
-    const extra = Math.max(0, srcRpt - parentRpt);
-    if (extra <= 0) continue;
-    const hole1 = facadeOpeningOuterArea1x(sid, part.area_m2);
-    if (hole1 > 0) area -= extra * hole1;
+  if (facadeIsComposeOp(f) && f.constituents?.length) {
+    const parentRpt = Math.max(1, Number(f.repeat_count) || 1);
+    let area = base;
+    for (const part of f.constituents) {
+      if (part.sign !== "-") continue;
+      const sid = String(part.id || "").trim();
+      if (!sid) continue;
+      const src = facades.find((x) => x.id === sid);
+      const srcRpt = Math.max(1, Number(src?.repeat_count) || 1);
+      const extra = Math.max(0, srcRpt - parentRpt);
+      if (extra <= 0) continue;
+      const hole1 = facadeOpeningOuterArea1x(sid, part.area_m2);
+      if (hole1 > 0) area -= extra * hole1;
+    }
+    return Math.round(area * 100) / 100;
   }
-  return Math.round(area * 100) / 100;
+  const ori = facadeOrientatie(f);
+  if (!ori) return Math.round(base * 100) / 100;
+  return gevelHierarchyEffectiveAreaM2(
+    vrFacadesAsCoverageRows(facades),
+    ori,
+    facadeGevelgroepNr(f),
+    facadeToCoverageRow(f)
+  );
 }
-function facadeUncutOpeningIds(ori) {
-  const ready = facadeReadyAreaFacades(ori);
+function facadeUncutOpeningIds(ori, groepNr) {
+  const ready = facadeReadyAreaFacades(ori, groepNr);
   const composes = ready.filter(facadeIsComposeOp);
   const constituentIds = /* @__PURE__ */ new Set();
   for (const c of composes) {
@@ -3668,23 +4904,38 @@ function facadeUncutOpeningIds(ori) {
   for (const h of hosts) uncut.delete(h.id);
   return uncut;
 }
-function facadeOpeningsUncutFromWall(ori) {
+function facadeOpeningsUncutFromWall(ori, groepNr) {
   const want = normalizeOrientatie(ori);
+  const gg = groepNr === 2 || groepNr === 3 ? groepNr : 1;
+  const rows = vrFacadesAsCoverageRows();
+  if (want && gevelHierarchyApplies(rows, want, gg)) {
+    return gevelMaterialExceedsContour(rows, want, gg);
+  }
+  if (want && gevelMaterialExceedsContour(rows, want, gg)) {
+    return true;
+  }
   const oris = want ? [want] : facadeOrisWithArea();
   for (const o of oris) {
-    const uncut = facadeUncutOpeningIds(o);
+    if (gevelHierarchyApplies(rows, o, gg)) continue;
+    const uncut = facadeUncutOpeningIds(o, groepNr);
     if (!uncut.size) continue;
-    if (facadeReadyAreaFacades(o).some((f) => uncut.has(f.id))) return true;
+    if (facadeReadyAreaFacades(o, groepNr).some((f) => uncut.has(f.id))) return true;
   }
   return false;
 }
-function facadeStotaalM2(ori) {
+function facadeStotaalM2(ori, groepNr) {
   const want = normalizeOrientatie(ori);
   if (!want) return 0;
-  const ready = facadeReadyAreaFacades(want);
+  const gg = groepNr === 2 || groepNr === 3 ? groepNr : 1;
+  const rows = vrFacadesAsCoverageRows();
+  const contour = gevelContourStotaalM2(rows, want, gg);
+  if (contour > 0) {
+    return contour;
+  }
+  const ready = facadeReadyAreaFacades(want, groepNr);
   let sum = 0;
   for (const f of ready) sum += effectiveFacadeAreaM2(f);
-  const uncut = facadeUncutOpeningIds(want);
+  const uncut = facadeUncutOpeningIds(want, groepNr);
   if (uncut.size) {
     for (const f of ready) {
       if (uncut.has(f.id)) sum -= effectiveFacadeAreaM2(f);
@@ -3692,33 +4943,52 @@ function facadeStotaalM2(ori) {
   }
   return Math.round(sum * 100) / 100;
 }
-function vlakkenDeeloppervlakM2(ori) {
+function vlakkenDeeloppervlakM2(ori, groepNr) {
   const want = normalizeOrientatie(ori);
+  const wantGg = groepNr === 2 || groepNr === 3 ? groepNr : groepNr === 1 ? 1 : null;
   let sum = 0;
   for (const v of vlakken) {
     const vOri = normalizeOrientatie(v.orientatie);
     if (want && vOri !== want) continue;
+    if (wantGg != null && vlakGevelgroepNr(v) !== wantGg) continue;
     const live = liveVlakQty(v);
     if (live.kind !== "area") continue;
     const fac = findFacadeForVlak(v);
+    const facId = (v.facade_subsection_id || "").trim();
+    if (facId && !fac) continue;
     if (fac && vOri) {
-      const uncut = facadeUncutOpeningIds(vOri);
+      const uncut = facadeUncutOpeningIds(vOri, wantGg);
       if (uncut.has(fac.id)) continue;
     }
     if (Number.isFinite(live.qty) && live.qty > 0) sum += live.qty;
   }
   return Math.round(sum * 100) / 100;
 }
+function gevelGroepsWithMaterialForOri(ori) {
+  const out = /* @__PURE__ */ new Set();
+  for (const r of vrFacadesAsCoverageRows()) {
+    if (String(r.orientatie || "").trim().toUpperCase() !== ori) continue;
+    out.add(gevelgroepNrOf(r));
+  }
+  return [...out].sort((a, b) => a - b);
+}
+function stotaalAreaTol(stotaal) {
+  return stotaal > 0 ? Math.max(0.05, Math.round(stotaal * 0.01 * 100) / 100) : 0.05;
+}
 function vlakkenMatchFacadeStotaal(ori) {
   const want = normalizeOrientatie(ori);
   const oris = want ? [want] : facadeOrisWithArea();
   if (!oris.length) return false;
+  const rows = vrFacadesAsCoverageRows();
   for (const o of oris) {
+    for (const gg of gevelGroepsWithMaterialForOri(o)) {
+      if (gevelMaterialExceedsContour(rows, o, gg)) return false;
+    }
     if (facadeOpeningsUncutFromWall(o)) return false;
     const stotaal = facadeStotaalM2(o);
     if (!(stotaal > 0)) return false;
     const deel = vlakkenDeeloppervlakM2(o);
-    if (Math.abs(stotaal - deel) > 0.02) return false;
+    if (Math.abs(stotaal - deel) > stotaalAreaTol(stotaal)) return false;
   }
   return true;
 }
@@ -3727,7 +4997,7 @@ function syncRecalcEnabled() {
   const ok = Boolean(selectedVrId) && vlakken.length > 0 && vlakkenMatchFacadeStotaal();
   recalcBtn.disabled = !ok;
   const incompleteOri = facadeOrisWithArea().find((o) => !vlakkenMatchFacadeStotaal(o));
-  recalcBtn.title = ok ? "Herbereken GA / GA;k voor deze VR" : !selectedVrId ? "Selecteer eerst een VR" : !vlakken.length ? "Voeg eerst vlakken toe" : incompleteOri && facadeOpeningsUncutFromWall(incompleteOri) ? `Eerst openingen uit de gevelcontour snijden op ori ${incompleteOri} (\xB1 op de geveltekening)` : incompleteOri ? `Eerst alle materialen toekennen tot 100% Stotaal voor ori ${incompleteOri}` : "Eerst alle materialen toekennen tot 100% Stotaal per ori\xEBntatie";
+  recalcBtn.title = ok ? "Herbereken GA / GA;k voor deze VR" : !selectedVrId ? "Selecteer eerst een VR" : !vlakken.length ? "Voeg eerst vlakken toe" : incompleteOri && facadeOpeningsUncutFromWall(incompleteOri) ? `Eerst openingen in hi\xEBrarchie (gevel \u2283 kozijn \u2283 ruit) of \xB1 op ori ${incompleteOri}` : incompleteOri ? `Eerst alle materialen toekennen tot 100% Stotaal voor ori ${incompleteOri}` : "Eerst alle materialen toekennen tot 100% Stotaal per ori\xEBntatie";
 }
 async function refreshVrCalc(opts) {
   const epoch = ++calcRevealEpoch;
@@ -3747,30 +5017,47 @@ async function refreshVrCalc(opts) {
   if (!vlakkenMatchFacadeStotaal()) {
     const incompleteOri = normalizeOrientatie(vlakOrientatieEl?.value) || facadeOrisWithArea().find((o) => !vlakkenMatchFacadeStotaal(o)) || "";
     const msg = incompleteOri ? `Geen GA;k: Stotaal voor ori\xEBntatie ${incompleteOri} is nog geen 100% \u2014 vul de vlakken aan of maak \xB1 (gevel \u2212 kozijn).` : "Geen GA;k: Stotaal-dekking is nog geen 100% \u2014 vul de vlakken per ori\xEBntatie aan.";
-    await clearPersistedVrCalc(msg);
+    clearVrResults(msg, { keepStored: true });
     setConn("err", msg);
     return;
   }
+  const editingVlak = selectedVlakId ? vlakken.find((x) => x.vlak_id === selectedVlakId) || null : null;
+  const useForm = Boolean(opts?.useFormCorrections);
+  const focusOriForForm = normalizeOrientatie(
+    editingVlak?.orientatie || vlakOrientatieEl?.value
+  );
+  const liveGgId = String(
+    selectedGevelgroepId || editingVlak?.gevelgroep_id || findGevelgroepByNr(focusOriForForm, selectedPickGroepNr)?.gevelgroep_id || ""
+  ).trim();
+  const liveFormCorr = useForm && focusOriForForm ? readFormClCg(focusOriForForm) : null;
+  const liveFormLabel = String(selectedPickGroepNr);
+  const livePickNr = selectedPickGroepNr === 2 || selectedPickGroepNr === 3 ? selectedPickGroepNr : 1;
   const calcVlakken = vlakken.map((v) => {
     const fac = findFacadeForVlak(v) || void 0;
     const live = liveVlakQty(v);
     const kind = live.kind;
     const qty = live.qty;
-    const editingThis = Boolean(selectedVlakId && v.vlak_id === selectedVlakId);
+    const editingThis = Boolean(editingVlak && v.vlak_id === editingVlak.vlak_id);
     const oriCode = normalizeOrientatie(v.orientatie);
-    const room = roomFromVr(vr);
-    const oriCorr = oriCode && room?.orientatie_correcties?.[oriCode] ? room.orientatie_correcties[oriCode] : null;
+    const vGgId = String(v.gevelgroep_id || "").trim();
+    const vGgNr = gevelgroepNrOf2(findGevelgroep(vGgId));
+    const sameGroupLive = Boolean(liveFormCorr) && Boolean(focusOriForForm) && oriCode === focusOriForForm && (liveGgId ? vGgId === liveGgId : vGgNr === livePickNr);
+    const stored = correctionsForVlak(v);
+    const formGg = sameGroupLive && liveGgId ? liveGgId : vGgId;
+    const gg = findGevelgroep(formGg);
     return {
       label: v.omschrijving,
       orientatie: oriCode || v.orientatie || "",
+      gevelgroep_id: formGg || null,
+      gevelgroep_label: sameGroupLive ? liveFormLabel : gg ? String(gevelgroepNrOf2(gg)) : null,
       ra_dba: fac?.ra_dba != null ? Number(fac.ra_dba) : NaN,
       quantity_kind: kind,
       area_m2: kind === "area" ? qty : null,
       length_m: kind === "length" ? qty : null,
-      // While editing, form checkbox drives Stot / GA;k immediately.
+      // While editing, form checkbox / group CL/Cg drive the live preview.
       meenemen_gak: editingThis ? vlakGakEl.checked : v.meenemen_gak !== false,
-      cl_db: oriCorr ? Number(oriCorr.cl_db) || 0 : Number(v.cl_db) || 0,
-      cg_db: oriCorr ? Number(oriCorr.cg_db) || 0 : Number(v.cg_db) || 0
+      cl_db: sameGroupLive && liveFormCorr ? Number(liveFormCorr.cl) || 0 : stored.cl,
+      cg_db: sameGroupLive && liveFormCorr ? Number(liveFormCorr.cg) || 0 : stored.cg
     };
   });
   const missingRa = calcVlakken.filter((v) => !Number.isFinite(v.ra_dba));
@@ -3780,7 +5067,6 @@ async function refreshVrCalc(opts) {
     setConn("err", msg);
     return;
   }
-  const useForm = Boolean(opts?.useFormCorrections);
   const metrics = effectiveVrMetrics(vr);
   if (!(metrics.volume > 0)) {
     const msg = metrics.vloer <= 0 ? "Geen GA;k: vloeroppervlak ontbreekt (0 m\xB2). Zet de schaal op de plattegrond, herbereken maten voor deze VR, daarna opnieuw Herberekenen GA / GA;k." : "Geen GA;k: volume is 0 \u2014 controleer vloeroppervlak en hoogte bij de VR.";
@@ -3843,13 +5129,31 @@ async function refreshVrCalc(opts) {
     return;
   }
   const statusBit = useForm ? " \xB7 (live Stot \u2014 niet opgeslagen)" : resultsDirty ? " \xB7 niet opgeslagen" : shouldPersist ? " \xB7 opgeslagen" : " \xB7 berekend";
+  const pickFocusFacade = () => {
+    const focusOri = normalizeOrientatie(vlakOrientatieEl?.value);
+    if (!result.facades?.length) return null;
+    if (!focusOri) return result.facades.length === 1 ? result.facades[0] : null;
+    const focusGg = String(selectedGevelgroepId || "").trim();
+    const sel = selectedVlakId ? vlakken.find((x) => x.vlak_id === selectedVlakId) : null;
+    const form = sel ? readFormClCg(sel.orientatie) : null;
+    const corr = form ? { cl: Number(form.cl) || 0, cg: Number(form.cg) || 0 } : null;
+    const matchCorr = (f) => !corr || Math.abs(f.cl_db - corr.cl) < 1e-9 && Math.abs(f.cg_db - corr.cg) < 1e-9;
+    if (focusGg) {
+      const byGg = result.facades.find(
+        (f) => f.orientatie === focusOri && String(f.gevelgroep_id || "") === focusGg
+      );
+      if (byGg) return byGg;
+    }
+    return result.facades.find((f) => f.orientatie === focusOri && matchCorr(f)) || result.facades.find((f) => f.orientatie === focusOri) || null;
+  };
   if (vrResultsHintEl) {
     const req = result.gak_required_dba != null ? ` \xB7 GA;k \u2265 ${fmtRes(result.gak_required_dba)} dB (Lb\u2212${grens})` : "";
-    const focusOri = normalizeOrientatie(vlakOrientatieEl?.value);
-    const focusFacade = focusOri && result.facades?.length ? result.facades.find((f) => f.orientatie === focusOri) || null : result.facades?.length === 1 ? result.facades[0] : null;
-    const facadeBit = result.facades && result.facades.length > 1 ? ` \xB7 ${result.facades.length} gevels (CL/Cg per ori in D2m)` : ` \xB7 CL/Cg in D2m (${round1(result.cl_db)} / ${round1(result.cg_db)} dB)`;
-    const gevelBit = focusFacade ? ` \xB7 gevel ${focusFacade.orientatie}: Ruimte=${fmtRes(focusFacade.ruimte_db)} CL=${round1(focusFacade.cl_db)}` : "";
-    const totBit = result.facades && result.facades.length > 1 && result.d2m_nt != null ? ` \xB7 D2m,tot=${fmtRes(result.d2m_nt)} dB` : "";
+    const focusFacade = pickFocusFacade();
+    const oriGroups = new Set((result.facades || []).map((f) => f.orientatie)).size;
+    const facadeBit = result.facades && result.facades.length > oriGroups ? ` \xB7 ${result.facades.length} gevelgroepen (CL/Cg per groep)` : result.facades && result.facades.length > 1 ? ` \xB7 ${result.facades.length} gevels (CL in ruimtesom)` : ` \xB7 CL/Cg ${round1(result.cl_db)} / ${round1(result.cg_db)} dB (CL \u2192 ruimtesom)`;
+    const ggLab = focusFacade?.gevelgroep_label ? ` \xAB${focusFacade.gevelgroep_label}\xBB` : "";
+    const gevelBit = focusFacade ? ` \xB7 gevel ${focusFacade.orientatie}${ggLab}: GA_vlak=${fmtRes(focusFacade.ga_dba)} CL=${round1(focusFacade.cl_db)}` : "";
+    const totBit = result.facades && result.facades.length > 1 && result.d2m_nt != null ? ` \xB7 D2m,tot(ref)=${fmtRes(result.d2m_nt)} dB` : "";
     vrResultsHintEl.textContent = `Cr=${result.cr_db} dB${facadeBit}${gevelBit}${totBit} \xB7 C3\u2192GA;k \xB7 grens Lbi;k \u2264 ${grens} dB${req}${statusBit}`;
     vrResultsHintEl.classList.remove("hidden");
   }
@@ -3857,15 +5161,15 @@ async function refreshVrCalc(opts) {
     resSEl.textContent = `${fmtRes(result.s_m2)} / ${fmtRes(result.stot_m2)} m\xB2`;
   }
   {
-    const focusOri = normalizeOrientatie(vlakOrientatieEl?.value);
-    const focusFacade = focusOri && result.facades?.length ? result.facades.find((f) => f.orientatie === focusOri) || null : result.facades?.length === 1 ? result.facades[0] : null;
+    const focusFacade = pickFocusFacade();
     const rp = focusFacade?.r_prime ?? result.r_prime;
     const dGevel = focusFacade?.d2m_nt ?? result.d2m_nt;
+    const ggLab = focusFacade?.gevelgroep_label ? ` \xB7 ${focusFacade.gevelgroep_label}` : "";
     if (resRpLabelEl) {
-      resRpLabelEl.textContent = focusFacade ? `R' (gevel ${focusFacade.orientatie})` : "R' (gevel)";
+      resRpLabelEl.textContent = focusFacade ? `R' (gevel ${focusFacade.orientatie}${ggLab})` : "R' (gevel)";
     }
     if (resDLabelEl) {
-      resDLabelEl.innerHTML = focusFacade ? `D<sub>2m,nT</sub> (gevel ${focusFacade.orientatie})` : "D<sub>2m,nT</sub> (gevel)";
+      resDLabelEl.innerHTML = focusFacade ? `D<sub>2m,nT</sub> (gevel ${focusFacade.orientatie}${ggLab})` : "D<sub>2m,nT</sub> (gevel)";
     }
     if (resRpEl) resRpEl.textContent = `${fmtRes(rp)} dB`;
     if (resDEl) resDEl.textContent = `${fmtRes(dGevel)} dB`;
@@ -3930,6 +5234,8 @@ function applyVlakFormDefaultsFromExisting(keepOri) {
   const current = normalizeOrientatie(keepOri || vlakOrientatieEl?.value);
   const code = (current && expected.includes(current) ? current : "") || missing[0] || expected[0] || "";
   if (vlakOrientatieEl) vlakOrientatieEl.value = code;
+  const keepGg = selectedPickGroepNr === 2 || selectedPickGroepNr === 3 ? selectedPickGroepNr : 1;
+  fillPickGroepSelect(code, keepGg);
   applyClCgFromOrientatie(code);
   vlakGakEl.checked = true;
   fillFacadeSelect();
@@ -3941,7 +5247,7 @@ function clearVlakEdit(keepOri) {
   selectedVlakId = null;
   vlakNameEl.value = "";
   applyVlakFormDefaultsFromExisting(keepOri);
-  if (vlakSaveBtn) vlakSaveBtn.textContent = "Vlak toevoegen";
+  if (vlakSaveBtn) vlakSaveBtn.textContent = "Vlak vullen";
   vlakCancelBtn?.classList.add("hidden");
   if (vlakEditHintEl) {
     const code = normalizeOrientatie(keepOri || vlakOrientatieEl?.value);
@@ -3961,18 +5267,11 @@ function fillVlakEdit(v) {
     if (ori) ensureOrientatieOption(ori);
     vlakOrientatieEl.value = ori;
   }
-  const fromOri = correctionsForOrientatie(ori);
-  const vrRow = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
-  const room = vrRow ? roomFromVr(vrRow) : null;
-  const hasOriMap = Boolean(ori && room?.orientatie_correcties?.[ori]);
-  if (vlakClEl) {
-    vlakClEl.value = hasOriMap ? fromOri.cl : String(Number(v.cl_db) || 0);
-    vlakClEl.readOnly = true;
-  }
-  if (vlakCgEl) {
-    vlakCgEl.value = hasOriMap ? fromOri.cg : String(Number(v.cg_db) || 0);
-    vlakCgEl.readOnly = true;
-  }
+  selectedGevelgroepId = String(v.gevelgroep_id || "").trim() || null;
+  const g = findGevelgroep(selectedGevelgroepId);
+  selectedPickGroepNr = g ? gevelgroepNrOf2(g) : 1;
+  fillPickGroepSelect(ori, selectedPickGroepNr);
+  applyClCgFromGevelgroep(g, ori);
   vlakGakEl.checked = v.meenemen_gak !== false;
   fillFacadeSelect();
   const live = liveVlakQty(v);
@@ -4029,14 +5328,8 @@ function renderVlakken() {
     const live = liveVlakQty(v);
     const qtyTxt = live.kind === "length" ? `l=${live.qty.toFixed(2)} m` : `S=${live.qty.toFixed(2)} m\xB2`;
     const mat = vlakMaterialLabel(v);
-    const oriCorr = correctionsForOrientatie(v.orientatie);
-    const vrRow = vrs.find((r) => r.verblijfsruimte_id === selectedVrId);
-    const room = vrRow ? roomFromVr(vrRow) : null;
-    const oriCode = normalizeOrientatie(v.orientatie);
-    const hasOriMap = Boolean(oriCode && room?.orientatie_correcties?.[oriCode]);
-    const clShow = hasOriMap ? Number(oriCorr.cl) || 0 : Number(v.cl_db) || 0;
-    const cgShow = hasOriMap ? Number(oriCorr.cg) || 0 : Number(v.cg_db) || 0;
-    const corrTxt = `CL=${round1(clShow)} \xB7 Cg=${round1(cgShow)} (ori)`;
+    const storedCorr = correctionsForVlak(v);
+    const corrTxt = `CL=${round1(storedCorr.cl)} \xB7 Cg=${round1(storedCorr.cg)}`;
     info.textContent = `${mat} \xB7 ${qtyTxt} \xB7 ${corrTxt} \xB7 Stot=${v.meenemen_gak ? "ja" : "nee"}`;
     info.title = "Open dit vlak om te bewerken";
     info.addEventListener("click", () => {
@@ -4055,16 +5348,15 @@ function renderVlakken() {
         if (!auth()) return;
         const ret = await invokeString("API_DeleteVlak", [auth().token, v.vlak_id]);
         if (ret.startsWith("ERROR")) throw new Error(ret);
-        await clearPersistedVrCalc("");
         if (selectedVlakId === v.vlak_id) {
           selectedVlakId = null;
           vlakNameEl.value = "";
           applyVlakFormDefaultsFromExisting(focusOri);
-          if (vlakSaveBtn) vlakSaveBtn.textContent = "Vlak toevoegen";
+          if (vlakSaveBtn) vlakSaveBtn.textContent = "Vlak vullen";
           vlakCancelBtn?.classList.add("hidden");
         }
         await loadVlakken();
-        if (!vlakkenMatchFacadeStotaal()) {
+        if (!vlakken.length) {
           await clearPersistedVrCalc("");
         }
       })().catch((e) => setConn("err", String(e)));
@@ -4073,16 +5365,46 @@ function renderVlakken() {
     li.appendChild(actions);
     host.appendChild(li);
   };
+  const groups = gevelgroepenForOri(focusOri);
+  const byGg = /* @__PURE__ */ new Map();
+  for (const v of focusVlakken) {
+    const key2 = String(v.gevelgroep_id || "").trim() || "_";
+    const list = byGg.get(key2) || [];
+    list.push(v);
+    byGg.set(key2, list);
+  }
+  const orderedKeys = [];
+  for (const g of groups) {
+    if (byGg.has(g.gevelgroep_id)) orderedKeys.push(g.gevelgroep_id);
+  }
+  for (const key2 of byGg.keys()) {
+    if (!orderedKeys.includes(key2)) orderedKeys.push(key2);
+  }
   const wrap = document.createElement("li");
   wrap.className = "ga-vlak-ori-group";
   const title = document.createElement("p");
   title.className = "ga-vlak-ori-group-title";
-  title.textContent = `${focusOri} \xB7 ${ORIENTATIE_LABELS[focusOri] || focusOri} \xB7 ${focusVlakken.length} vlak${focusVlakken.length === 1 ? "" : "ken"}`;
+  const groepN = orderedKeys.length;
+  title.textContent = `${focusOri} \xB7 ${ORIENTATIE_LABELS[focusOri] || focusOri} \xB7 ${focusVlakken.length} vlak${focusVlakken.length === 1 ? "" : "ken"}${groepN > 1 ? ` \xB7 ${groepN} groepen` : ""}`;
   wrap.appendChild(title);
-  const inner = document.createElement("ul");
-  inner.className = "drawing-list";
-  for (const v of focusVlakken) appendVlakRow(inner, v);
-  wrap.appendChild(inner);
+  for (const key2 of orderedKeys) {
+    const members = byGg.get(key2) || [];
+    if (!members.length) continue;
+    const g = findGevelgroep(key2 === "_" ? null : key2);
+    const corr = g ? { cl: Number(g.cl_db) || 0, cg: Number(g.cg_db) || 0 } : correctionsForVlak(members[0]);
+    const sub = document.createElement("div");
+    sub.className = "ga-vlak-gevelgroep";
+    const subTitle = document.createElement("p");
+    subTitle.className = "ga-vlak-gevelgroep-title";
+    const nr = g ? gevelgroepNrOf2(g) : 1;
+    subTitle.textContent = `Groep ${nr} \xB7 CL=${Math.round(corr.cl)} \xB7 Cg=${round1(corr.cg)} \xB7 ${members.length} vlak${members.length === 1 ? "" : "ken"}`;
+    sub.appendChild(subTitle);
+    const inner = document.createElement("ul");
+    inner.className = "drawing-list";
+    for (const v of members) appendVlakRow(inner, v);
+    sub.appendChild(inner);
+    wrap.appendChild(sub);
+  }
   vlakListEl.appendChild(wrap);
 }
 async function refreshBuildingMeta() {
@@ -4129,6 +5451,7 @@ async function openBuilding(id) {
   buildingId = id.trim();
   buildingIdEl.value = buildingId;
   syncFloormapLink();
+  syncProcessDockVisibility();
   if (!buildingId) {
     modelPanelEl.classList.add("hidden");
     setBuildingMetaText("\u2014");
@@ -4143,6 +5466,7 @@ async function openBuilding(id) {
   await loadGeometryOptions();
   await loadVariants();
   modelPanelEl.classList.remove("hidden");
+  syncProcessDockVisibility();
   setBuildingMetaText(buildingMetaLine());
   if (projectIdBarEl) {
     projectIdBarEl.open = false;
@@ -4151,9 +5475,7 @@ async function openBuilding(id) {
   projectMenu?.rememberCurrent();
   projectMenu?.refreshTitle();
   setConn("ok", "Verbonden");
-  const url = new URL(location.href);
-  url.searchParams.set("building_id", buildingId);
-  history.replaceState(null, "", url.toString());
+  syncGaLocation();
   await applyFloormapImport();
 }
 async function saveProjectCheckpoint() {
@@ -4162,7 +5484,7 @@ async function saveProjectCheckpoint() {
   const keepVg = selectedVgId;
   const keepVr = selectedVrId;
   const keepVlak = selectedVlakId;
-  setConn("busy", "Alle VR\u2019s herberekenen en opslaan\u2026");
+  setConn("busy", "Alle VR\u2019s herberekenen (alle gevelori\xEBntaties)\u2026");
   let saved = 0;
   let skipped = 0;
   let failed = 0;
@@ -4180,17 +5502,19 @@ async function saveProjectCheckpoint() {
       for (const vr of list) {
         selectedVrId = vr.verblijfsruimte_id;
         selectedVlakId = null;
+        const label = vrShortLabel(vr);
+        setConn("busy", `Herberekenen ${label} (alle gevelori\u2019s)\u2026`);
         try {
           await loadVlakken({ resetForm: true });
           if (!vlakken.length) {
             skipped += 1;
-            skipReasons.push(`${vrShortLabel(vr)}: geen vlakken`);
+            skipReasons.push(`${label}: geen vlakken`);
             continue;
           }
           if (!vlakkenMatchFacadeStotaal()) {
             skipped += 1;
             const bad = facadeOrisWithArea().find((o) => !vlakkenMatchFacadeStotaal(o)) || "?";
-            skipReasons.push(`${vrShortLabel(vr)}: ori ${bad} geen 100% Stotaal`);
+            skipReasons.push(`${label}: ori ${bad} geen 100% Stotaal`);
             continue;
           }
           await refreshVrCalc({ persist: true, reveal: true });
@@ -4198,12 +5522,12 @@ async function saveProjectCheckpoint() {
           if (cur && vrHasStoredResults(cur)) saved += 1;
           else {
             skipped += 1;
-            skipReasons.push(`${vrShortLabel(vr)}: berekening niet opgeslagen`);
+            skipReasons.push(`${label}: berekening niet opgeslagen`);
           }
         } catch (err) {
           failed += 1;
           skipReasons.push(
-            `${vrShortLabel(vr)}: ${err instanceof Error ? err.message : String(err)}`
+            `${label}: ${err instanceof Error ? err.message : String(err)}`
           );
         }
       }
@@ -4217,12 +5541,14 @@ async function saveProjectCheckpoint() {
     } else {
       await loadVgs();
     }
-    const detail = skipReasons.length ? ` \xB7 ${skipReasons.slice(0, 3).join("; ")}${skipReasons.length > 3 ? "\u2026" : ""}` : "";
-    const msg = `VR-resultaten bijgewerkt \xB7 ${saved} opgeslagen${skipped ? ` \xB7 ${skipped} overgeslagen` : ""}${failed ? ` \xB7 ${failed} mislukt` : ""}${detail}`;
-    setConn(failed ? "err" : skipped && !saved ? "err" : "ok", msg);
-    return { saved, skipped, failed };
+    const reasonBit = skipReasons.length ? ` \xB7 ${skipReasons.slice(0, 4).join("; ")}${skipReasons.length > 4 ? "\u2026" : ""}` : "";
+    const message = failed || skipped && !saved ? `Herberekening gevelori\u2019s mislukt \xB7 ${saved} opgeslagen${skipped ? ` \xB7 ${skipped} overgeslagen` : ""}${failed ? ` \xB7 ${failed} mislukt` : ""}${reasonBit}` : skipped ? `Herberekening gevelori\u2019s klaar \xB7 ${saved} VR\u2019s opgeslagen \xB7 ${skipped} overgeslagen${reasonBit}` : `Herberekening gevelori\u2019s geslaagd \xB7 ${saved} VR\u2019s opgeslagen (alle ori\u2019s)`;
+    const state = failed > 0 || saved === 0 && skipped > 0 ? "err" : "ok";
+    setConn(state, message);
+    return { saved, skipped, failed, reasons: skipReasons, message };
   } catch (err) {
-    setConn("err", err instanceof Error ? err.message : String(err));
+    const msg = err instanceof Error ? err.message : String(err);
+    setConn("err", `Herberekening gevelori\u2019s mislukt: ${msg}`);
     throw err;
   }
 }
@@ -4261,6 +5587,7 @@ function clearImportQueryParams() {
   url.searchParams.delete("vg_nr");
   url.searchParams.delete("vr_nr");
   history.replaceState(null, "", url.toString());
+  syncGaLocation();
 }
 async function applyFloormapImport() {
   const subId = pendingImportSubId;
@@ -4380,10 +5707,10 @@ queueBtn.addEventListener("click", () => {
 });
 (() => {
   if (!projectIdBarEl) return;
-  const key = "app-gevelwering-ga-project-id-collapsed";
-  if (localStorage.getItem(key) === "1") projectIdBarEl.open = false;
+  const key2 = "app-gevelwering-ga-project-id-collapsed";
+  if (localStorage.getItem(key2) === "1") projectIdBarEl.open = false;
   projectIdBarEl.addEventListener("toggle", () => {
-    localStorage.setItem(key, projectIdBarEl.open ? "0" : "1");
+    localStorage.setItem(key2, projectIdBarEl.open ? "0" : "1");
   });
 })();
 vgRoomEl.addEventListener("change", () => {
@@ -4575,6 +5902,68 @@ vgDelBtn.addEventListener("click", () => {
     await loadVgs();
   })().catch((e) => setConn("err", String(e)));
 });
+async function saveVlakFromPick(opts) {
+  if (!auth() || !selectedVrId) throw new Error("Selecteer een VR");
+  const editingId = opts.editingId || "";
+  const fac = opts.primaryId;
+  if (!fac && !editingId) throw new Error("Selecteer een gevelcomponent");
+  const oriVal = normalizeOrientatie(opts.oriVal);
+  if (!oriVal) throw new Error("Kies eerst een gevelori\xEBntatie in de listbox");
+  const expectedOris = expectedOrientatiesForSelectedVr();
+  if (!expectedOris.length) {
+    throw new Error(
+      "Geen gevelori\xEBntaties op de plattegrond \u2014 vink die eerst aan bij Opgeslagen ruimten"
+    );
+  }
+  if (!expectedOris.includes(oriVal)) {
+    throw new Error(
+      `Ori\xEBntatie ${oriVal} staat niet in de plattegrond-definitie (${expectedOris.join(", ")})`
+    );
+  }
+  const matKey = (opts.materialKey || "").trim() || null;
+  if (!editingId) {
+    if (!(opts.materialId || "").trim()) {
+      throw new Error(
+        "Deze component heeft nog geen materiaal \u2014 koppel het op de geveltekening, daarna hier als vlak toevoegen"
+      );
+    }
+    const usedIds = usedFacadePickIds();
+    if (usedIds.has(fac)) {
+      throw new Error("Deze gevelcomponent is al als vlak gekoppeld");
+    }
+    if (matKey && materialOrientatieTaken2(matKey, oriVal, editingId || null)) {
+      throw new Error(
+        `Dit materiaal heeft al een vlak met ori\xEBntatie ${oriVal}.`
+      );
+    }
+  } else if (matKey && materialOrientatieTaken2(matKey, oriVal, editingId || null)) {
+    throw new Error(
+      `Dit materiaal heeft al een vlak met ori\xEBntatie ${oriVal}.`
+    );
+  }
+  const isLen = opts.quantity_kind === "length";
+  const qty = isLen ? String(opts.length_m != null ? opts.length_m : 0) : String(opts.area_m2 != null ? opts.area_m2 : 0);
+  const pickFac = fac ? vrFacades.find((f) => f.id === fac) : void 0;
+  const facadeId = pickFac ? facadeSourceId(pickFac) : fac || "";
+  const ret = await invokeString("API_SaveVlak", [
+    auth().token,
+    selectedVrId,
+    editingId,
+    opts.label.trim() || "Vlak",
+    isLen ? "0" : qty,
+    opts.clVal,
+    opts.cgVal,
+    opts.meenemenGak ? "true" : "false",
+    "0",
+    facadeId,
+    isLen ? "length" : "area",
+    isLen ? qty : "",
+    oriVal,
+    opts.preferStored ? "true" : "",
+    opts.ggId
+  ]);
+  if (ret.startsWith("ERROR")) throw new Error(ret);
+}
 vlakForm.addEventListener("submit", (ev) => {
   ev.preventDefault();
   void (async () => {
@@ -4589,108 +5978,105 @@ vlakForm.addEventListener("submit", (ev) => {
       oriVal = normalizeOrientatie(vlakOrientatieEl?.value) || normalizeOrientatie(vlakken.find((v) => v.vlak_id === editingId)?.orientatie);
     } else {
       oriVal = normalizeOrientatie(vlakOrientatieEl?.value);
-      if (!oriVal) {
-        throw new Error("Kies eerst een gevelori\xEBntatie in de listbox");
-      }
-    }
-    const expectedOris = expectedOrientatiesForSelectedVr();
-    if (!expectedOris.length) {
-      throw new Error(
-        "Geen gevelori\xEBntaties op de plattegrond \u2014 vink die eerst aan bij Opgeslagen ruimten"
-      );
-    }
-    if (!expectedOris.includes(normalizeOrientatie(oriVal))) {
-      throw new Error(
-        `Ori\xEBntatie ${normalizeOrientatie(oriVal)} staat niet in de plattegrond-definitie (${expectedOris.join(", ")})`
-      );
-    }
-    const matKeyForGuard = (() => {
-      if (fac) {
-        const optKey = (opt?.dataset.materialKey || "").trim();
-        if (optKey) return optKey;
-        return materialGroupKey(vrFacades.find((f) => f.id === fac) || {});
-      }
-      if (editingId) {
-        const cur = vlakken.find((v) => v.vlak_id === editingId);
-        const facId = cur?.facade_subsection_id;
-        if (!facId) return null;
-        const curV = vlakken.find((x) => x.vlak_id === editingId);
-        const facOpt = curV ? findFacadeForVlak(curV) : null;
-        return materialGroupKey(facOpt || {});
-      }
-      return null;
-    })();
-    if (!editingId) {
-      const hasMat = Boolean((opt?.dataset.materialId || "").trim());
-      if (!hasMat) {
-        throw new Error(
-          "Deze component heeft nog geen materiaal \u2014 koppel het op de geveltekening, daarna hier als vlak toevoegen"
-        );
-      }
-      const usedIds = usedFacadePickIds();
-      if (usedIds.has(fac)) {
-        throw new Error("Deze gevelcomponent is al als vlak gekoppeld");
-      }
-      const groups = groupFacadesForPick(vrFacades, usedIds);
-      const pickGroup = groups.find((g) => g.primaryId === fac || g.memberIds.includes(fac));
-      if (pickGroup?.used) {
-        throw new Error(
-          "Geen vrije gevelcomponent meer voor dit materiaal \u2014 teken een extra component of kies een ander materiaal"
-        );
-      }
-    }
-    if (matKeyForGuard) {
-      const taken = materialOrientatieTaken2(matKeyForGuard, oriVal, editingId);
-      if (taken) {
-        const oriLabel = normalizeOrientatie(oriVal) || "(geen)";
-        throw new Error(
-          `Dit materiaal heeft al een vlak met ori\xEBntatie ${oriLabel} (\u201C${taken.omschrijving}\u201D). Kies een andere ori\xEBntatie.`
-        );
-      }
-      if (orisUsedForMaterial2(matKeyForGuard, editingId).length && !normalizeOrientatie(oriVal)) {
-        throw new Error(
-          "Dit materiaal is al als vlak gebruikt \u2014 voeg het toe voor een andere (vrije) plattegrond-ori\xEBntatie"
-        );
-      }
+      if (!oriVal) throw new Error("Kies eerst een gevelori\xEBntatie in de listbox");
     }
     const isLen = (opt?.dataset.quantityKind || vlakAreaEl.dataset.quantityKind) === "length";
-    const qty = vlakAreaEl.value || "0";
-    const pickFac = fac ? vrFacades.find((f) => f.id === fac) : void 0;
-    const facadeId = pickFac ? facadeSourceId(pickFac) : fac || "";
-    const oriCorr = correctionsForOrientatie(oriVal);
-    applyClCgFromOrientatie(oriVal);
-    const clVal = oriCorr.cl;
-    const cgVal = oriCorr.cg;
-    const ret = await invokeString("API_SaveVlak", [
-      auth().token,
-      selectedVrId,
-      editingId || "",
-      vlakNameEl.value.trim() || "Vlak",
-      isLen ? "0" : qty,
-      clVal,
-      cgVal,
-      vlakGakEl.checked ? "true" : "false",
-      "0",
-      facadeId,
-      isLen ? "length" : "area",
-      isLen ? qty : "",
+    const qtyN = Number(vlakAreaEl.value || "0");
+    const ggId = await persistFormGevelgroep(oriVal);
+    const formCorr = readFormClCg(oriVal);
+    await saveVlakFromPick({
+      editingId,
+      primaryId: fac,
+      quantity_kind: isLen ? "length" : "area",
+      area_m2: isLen ? null : qtyN,
+      length_m: isLen ? qtyN : null,
+      label: vlakNameEl.value.trim() || opt?.dataset.label || "Vlak",
+      materialKey: opt?.dataset.materialKey || null,
+      materialId: opt?.dataset.materialId || null,
       oriVal,
-      editingId ? vlakken.find((x) => x.vlak_id === editingId)?.prefer_stored_qty ? "true" : "" : ""
-    ]);
-    if (ret.startsWith("ERROR")) throw new Error(ret);
+      ggId,
+      clVal: formCorr.cl,
+      cgVal: formCorr.cg,
+      meenemenGak: vlakGakEl.checked,
+      preferStored: editingId ? Boolean(vlakken.find((x) => x.vlak_id === editingId)?.prefer_stored_qty) : false
+    });
     const wasEdit = Boolean(editingId);
     await loadVlakken();
     clearVlakEdit(oriVal);
-    await refreshVrCalc({ persist: true });
-    if (!selectedVlakId) {
-      blankResultsUntilVlakSelected(
-        "Vlak opgeslagen. Open een vlak in de lijst om de berekening te tonen."
+    const stotaalOk = vlakkenMatchFacadeStotaal();
+    if (stotaalOk) {
+      await refreshVrCalc({ persist: true });
+      if (!selectedVlakId) {
+        blankResultsUntilVlakSelected(
+          "Vlak opgeslagen. Open een vlak in de lijst om de berekening te tonen."
+        );
+      }
+      setConn(
+        "ok",
+        wasEdit ? `Vlak bijgewerkt (gevelgroep CL/Cg \u2192 GA;k)` : `Vlak gevuld \xB7 ori\xEBntatie ${normalizeOrientatie(oriVal)} \xB7 groep ${selectedPickGroepNr}`
+      );
+    } else {
+      const incompleteOri = normalizeOrientatie(oriVal) || facadeOrisWithArea().find((o) => !vlakkenMatchFacadeStotaal(o)) || "";
+      setConn(
+        "err",
+        `Vlak opgeslagen, maar Stotaal${incompleteOri ? ` voor ori ${incompleteOri}` : ""} is nog geen 100% \u2014 GA;k niet herberekend (vorige resultaten blijven staan). Vul materialen aan of snijd openingen (\xB1).`
       );
     }
-    setConn(
-      "ok",
-      wasEdit ? `Vlak bijgewerkt (CL/Cg \u2192 GA;k)` : `Vlak toegevoegd \xB7 ori\xEBntatie ${normalizeOrientatie(oriVal)} (uit plattegrond)`
-    );
+  })().catch((e) => setConn("err", String(e)));
+});
+vlakListToVlakBtn?.addEventListener("click", () => {
+  void (async () => {
+    if (!auth() || !selectedVrId) throw new Error("Selecteer een VR");
+    if (selectedVlakId) throw new Error("Annuleer eerst bewerken");
+    assertVlakPropsOrThrow();
+    const oriVal = normalizeOrientatie(vlakOrientatieEl?.value);
+    if (!oriVal) throw new Error("Kies eerst een gevelori\xEBntatie");
+    const groups = availableFacadePickGroups();
+    if (!groups.length) throw new Error("Geen vrije materialen in de pickerlijst");
+    const ggId = await persistFormGevelgroep(oriVal);
+    const formCorr = readFormClCg(oriVal);
+    let ok = 0;
+    const errors = [];
+    for (const g of groups) {
+      try {
+        const primary = g.members[0];
+        await saveVlakFromPick({
+          primaryId: g.primaryId,
+          quantity_kind: g.quantity_kind === "length" ? "length" : "area",
+          area_m2: g.area_m2,
+          length_m: g.length_m,
+          label: primary?.material_name || g.label || "Vlak",
+          materialKey: g.materialKey,
+          materialId: primary?.material_id || null,
+          oriVal,
+          ggId,
+          clVal: formCorr.cl,
+          cgVal: formCorr.cg,
+          meenemenGak: true
+        });
+        ok += 1;
+        await loadVlakken({ resetForm: false, openFirstVlak: false });
+      } catch (e) {
+        errors.push(e instanceof Error ? e.message : String(e));
+      }
+    }
+    clearVlakEdit(oriVal);
+    await loadVlakken({ resetForm: true, openFirstVlak: false });
+    const stotaalOk = vlakkenMatchFacadeStotaal();
+    if (ok && stotaalOk) {
+      await refreshVrCalc({ persist: true });
+      if (!selectedVlakId) {
+        blankResultsUntilVlakSelected(
+          `${ok} vlak(ken) uit de lijst. Open een vlak om de berekening te tonen.`
+        );
+      }
+    }
+    const bits = [`${ok} vlak(ken) uit lijst \u2192 groep ${selectedPickGroepNr}`];
+    if (errors.length) bits.push(`${errors.length} mislukt: ${errors[0]}`);
+    if (ok && !stotaalOk) {
+      bits.push("Stotaal nog geen 100% \u2014 GA;k niet herberekend (vorige resultaten blijven staan)");
+    }
+    setConn(ok && stotaalOk ? "ok" : "err", bits.join(" \xB7 "));
   })().catch((e) => setConn("err", String(e)));
 });
 vlakCancelBtn?.addEventListener("click", () => {
@@ -4727,11 +6113,106 @@ vlakGakEl.addEventListener("change", () => {
   resultsDirty = true;
   setConn("ok", vlakGakEl.checked ? "Meenemen in GA;k \u2014 nog opslaan" : "Niet in Stot/GA;k \u2014 nog opslaan");
 });
+var corrPersistTimer = null;
+var corrPersistGen = 0;
+var onVlakCorrInput = () => {
+  syncVlakCorrHint();
+  const oriAtEdit = resolveFocusOrientatie();
+  const capturedCorr = readFormClCg(oriAtEdit);
+  const capturedGgId = selectedGevelgroepId;
+  const capturedNr = selectedPickGroepNr === 2 || selectedPickGroepNr === 3 ? selectedPickGroepNr : 1;
+  const g = findGevelgroep(capturedGgId) || findGevelgroepByNr(oriAtEdit, capturedNr);
+  if (g) {
+    g.cl_db = Math.round(Number(capturedCorr.cl) || 0);
+    g.cg_db = Number(capturedCorr.cg) || 0;
+  }
+  renderVlakken();
+  if (oriAtEdit || selectedVlakId) {
+    void refreshVrCalc({ useFormCorrections: true, persist: false });
+  }
+  resultsDirty = true;
+  setConn("busy", "CL/Cg opslaan\u2026");
+  if (corrPersistTimer != null) clearTimeout(corrPersistTimer);
+  const gen = ++corrPersistGen;
+  corrPersistTimer = setTimeout(() => {
+    corrPersistTimer = null;
+    void (async () => {
+      if (!auth() || !selectedVrId) {
+        setConn("ok", "CL/Cg aangepast \u2014 log in en selecteer een VR om op te slaan");
+        return;
+      }
+      const ori = resolveFocusOrientatie(oriAtEdit) || normalizeOrientatie(findGevelgroep(capturedGgId)?.orientatie);
+      if (!ori && !capturedGgId) {
+        setConn("ok", "CL/Cg aangepast \u2014 kies een ori\xEBntatie om op te slaan");
+        return;
+      }
+      if (capturedGgId) selectedGevelgroepId = capturedGgId;
+      selectedPickGroepNr = capturedNr;
+      try {
+        await persistFormGevelgroep(ori, capturedCorr);
+        if (gen !== corrPersistGen) return;
+        await loadVlakken({ resetForm: false, openFirstVlak: false });
+        if (gen !== corrPersistGen) return;
+        const savedOri = resolveFocusOrientatie(ori);
+        setConn(
+          "ok",
+          `CL/Cg opgeslagen voor ${ORIENTATIE_LABELS[savedOri] || savedOri || "?"} \xB7 groep ${selectedPickGroepNr} \u2014 herbereken voor GA;k`
+        );
+      } catch (e) {
+        if (gen !== corrPersistGen) return;
+        setConn("err", e instanceof Error ? e.message : String(e));
+      }
+    })();
+  }, 350);
+};
+vlakClEl?.addEventListener("input", onVlakCorrInput);
+vlakCgEl?.addEventListener("input", onVlakCorrInput);
+vlakClDownBtn?.addEventListener("click", () => nudgeCorrField(vlakClEl, -1));
+vlakClUpBtn?.addEventListener("click", () => nudgeCorrField(vlakClEl, 1));
+vlakCgDownBtn?.addEventListener("click", () => nudgeCorrField(vlakCgEl, -0.1));
+vlakCgUpBtn?.addEventListener("click", () => nudgeCorrField(vlakCgEl, 0.1));
+vlakCorrResetBtn?.addEventListener("click", () => {
+  const code = normalizeOrientatie(vlakOrientatieEl?.value);
+  const def = correctionsForOrientatie(code);
+  if (vlakClEl) vlakClEl.value = def.cl;
+  if (vlakCgEl) vlakCgEl.value = def.cg;
+  onVlakCorrInput();
+  setConn("ok", "CL/Cg teruggezet op ori-default (groep)");
+});
+vlakPickGroepEl?.addEventListener("change", () => {
+  const nr = Number(vlakPickGroepEl.value) || 1;
+  selectedPickGroepNr = nr === 2 || nr === 3 ? nr : 1;
+  const code = normalizeOrientatie(vlakOrientatieEl?.value);
+  const g = findGevelgroepByNr(code, selectedPickGroepNr);
+  selectedGevelgroepId = g?.gevelgroep_id || null;
+  applyClCgFromGevelgroep(g, code);
+  selectedVlakId = null;
+  vlakNameEl.value = "";
+  if (vlakSaveBtn) vlakSaveBtn.textContent = "Vlak vullen";
+  vlakCancelBtn?.classList.add("hidden");
+  fillFacadeSelect();
+  syncVlakMaterialGate();
+  updateVlakInventory();
+  renderVlakken();
+  blankResultsUntilVlakSelected(
+    code ? `Groep ${selectedPickGroepNr} \xB7 ${ORIENTATIE_LABELS[code] || code} \u2014 kies materiaal bij 2.` : void 0
+  );
+  setConn("ok", `Gevelgroep ${selectedPickGroepNr} \u2014 componenten gefilterd`);
+});
 recalcBtn?.addEventListener("click", () => {
   void (async () => {
     if (!auth() || !selectedVrId) {
       setConn("err", "Selecteer eerst een VR");
       return;
+    }
+    if (corrPersistTimer != null) {
+      clearTimeout(corrPersistTimer);
+      corrPersistTimer = null;
+    }
+    const focusOri = resolveFocusOrientatie();
+    const formCorrAtClick = readFormClCg(focusOri);
+    if (focusOri || selectedGevelgroepId) {
+      await persistFormGevelgroep(focusOri || void 0, formCorrAtClick);
     }
     if (!vlakken.length) {
       setConn("err", "Voeg eerst vlakken toe tot 100% Stotaal");
@@ -4751,32 +6232,33 @@ recalcBtn?.addEventListener("click", () => {
       const v = vlakken.find((x) => x.vlak_id === selectedVlakId);
       if (v) {
         const live = liveVlakQty(v);
-        const oriVal = vlakOrientatieEl?.value || v.orientatie || "";
-        const oriCorr = correctionsForOrientatie(oriVal);
-        applyClCgFromOrientatie(oriVal);
+        const oriVal = resolveFocusOrientatie(v.orientatie) || v.orientatie || "";
+        const ggId = selectedGevelgroepId || await persistFormGevelgroep(oriVal, readFormClCg(oriVal));
+        const formCorr = readFormClCg(oriVal);
         const syncRet = await invokeString("API_SaveVlak", [
           auth().token,
           selectedVrId,
           v.vlak_id,
           vlakNameEl.value.trim() || v.omschrijving || "Vlak",
           live.kind === "area" ? String(live.qty) : "0",
-          oriCorr.cl,
-          oriCorr.cg,
+          formCorr.cl,
+          formCorr.cg,
           vlakGakEl.checked ? "true" : "false",
           String(v.sort_order || 0),
           v.facade_subsection_id || "",
           live.kind,
           live.kind === "length" ? String(live.qty) : "",
           oriVal,
-          v.prefer_stored_qty ? "true" : ""
+          v.prefer_stored_qty ? "true" : "",
+          ggId
         ]);
         if (syncRet.startsWith("ERROR")) throw new Error(syncRet);
-        await loadVlakken();
         clearVlakEdit();
       }
     }
+    await loadVlakken({ resetForm: false, openFirstVlak: false });
     await refreshVrCalc({ persist: true, reveal: true });
-    setConn("ok", "GA / GA;k herberekend (CL/Cg per ori in D2m, gevels gecombineerd)");
+    setConn("ok", "GA / GA;k herberekend (alle gevelgroepen in D2m, gecombineerd)");
   })().catch((e) => setConn("err", String(e)));
 });
 function setAnalyzeEnabled(on) {
@@ -5012,16 +6494,19 @@ async function saveProjectReport(force = false) {
   if (!auth() || !buildingId) throw new Error("Log in en selecteer een gebouw");
   if (!selectedVariantId) throw new Error("Selecteer eerst een variant");
   const status = reportKindEl?.value === "definitief" ? "definitief" : "concept";
-  if (reportHintEl) reportHintEl.textContent = "Eerst alle VR\u2019s herberekenen\u2026";
+  setConn("busy", "Rapport: alle gevelori\u2019s herberekenen\u2026");
+  if (reportHintEl) reportHintEl.textContent = "Eerst alle VR\u2019s herberekenen (alle gevelori\u2019s)\u2026";
   const checkpoint = await saveProjectCheckpoint();
   if (checkpoint.saved === 0 && (checkpoint.skipped > 0 || checkpoint.failed > 0)) {
-    throw new Error(
-      "Rapport niet gemaakt: geen VR met opgeslagen GA;k. Vul per VR alle gevelori\xEBntaties tot 100% Stotaal en probeer opnieuw."
-    );
+    const reasonBit = checkpoint.reasons.length ? ` ${checkpoint.reasons.slice(0, 5).join("; ")}${checkpoint.reasons.length > 5 ? "\u2026" : ""}` : " Vul per VR alle gevelori\xEBntaties tot 100% Stotaal.";
+    const msg = `Rapport niet gemaakt: geen VR met opgeslagen GA;k.${reasonBit}`;
+    if (reportHintEl) reportHintEl.textContent = msg;
+    setConn("err", msg);
+    throw new Error(msg);
   }
-  if (reportHintEl) {
-    reportHintEl.textContent = checkpoint.skipped || checkpoint.failed ? `Rapport wordt gegenereerd\u2026 (${checkpoint.saved} VR\u2019s actueel, ${checkpoint.skipped + checkpoint.failed} overgeslagen)` : "Rapport wordt gegenereerd\u2026";
-  }
+  const genHint = checkpoint.failed || checkpoint.skipped ? `Rapport genereren\u2026 (${checkpoint.saved} VR\u2019s actueel \xB7 ${checkpoint.skipped + checkpoint.failed} overgeslagen)` : `Rapport genereren\u2026 (herberekening gevelori\u2019s geslaagd \xB7 ${checkpoint.saved} VR\u2019s)`;
+  setConn("busy", genHint);
+  if (reportHintEl) reportHintEl.textContent = genHint;
   const res = await fetch("/api/reports/generate", {
     method: "POST",
     credentials: "include",
@@ -5037,10 +6522,14 @@ async function saveProjectReport(force = false) {
   try {
     parsed = await res.json();
   } catch {
-    throw new Error(`Rapport opslaan mislukt (HTTP ${res.status})`);
+    const msg = `Rapport opslaan mislukt (HTTP ${res.status})`;
+    setConn("err", msg);
+    throw new Error(msg);
   }
   if (!res.ok || !parsed.ok) {
-    throw new Error(parsed.error || `Rapport opslaan mislukt (HTTP ${res.status})`);
+    const msg = parsed.error || `Rapport opslaan mislukt (HTTP ${res.status})`;
+    setConn("err", msg);
+    throw new Error(msg);
   }
   const pdfName = parsed.pdf_filename || parsed.filename_pdf || null;
   if (parsed.identical && parsed.skipped) {
@@ -5058,7 +6547,8 @@ Toch een nieuw bestand schrijven?`
   }
   const pathHint = parsed.relative_path || pdfName || parsed.filename || "";
   const folder = parsed.project_folder ? ` \xB7 map ${parsed.project_folder}` : "";
-  const okMsg = `Rapport opgeslagen (PDF): ${pathHint}${folder}`;
+  const recomputeBit = checkpoint.failed || checkpoint.skipped ? ` \xB7 herberekening: ${checkpoint.saved} VR\u2019s ok` : ` \xB7 alle gevelori\u2019s herberekend (${checkpoint.saved} VR\u2019s)`;
+  const okMsg = `Rapport opgeslagen (PDF): ${pathHint}${folder}${recomputeBit}`;
   if (reportHintEl) reportHintEl.textContent = okMsg;
   setConn("ok", okMsg);
   return pdfName || parsed.filename || null;
@@ -5153,4 +6643,23 @@ if (fileMenuRoot) {
   });
   fileMenuRoot.hidden = true;
 }
+initProcessDockChrome();
+{
+  const stored = loadAuth(AUTH_KEY);
+  if (stored?.token) showPanel(stored);
+}
 session.connect();
+async function refreshGaFromFloormap() {
+  if (!buildingId || !auth()?.token || modelPanelEl.classList.contains("hidden")) return;
+  await loadGeometryOptions();
+  await loadVgs(selectedVgId, selectedVrId);
+  setBuildingMetaText(buildingMetaLine());
+}
+window.addEventListener("pageshow", (ev) => {
+  if (!ev.persisted) return;
+  void refreshGaFromFloormap().catch((e) => setConn("err", String(e)));
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  void refreshGaFromFloormap().catch((e) => setConn("err", String(e)));
+});

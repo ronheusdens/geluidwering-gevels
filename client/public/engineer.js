@@ -166,7 +166,7 @@ function initEngineerLayoutSplit(root = document) {
 }
 
 // src/app-version.ts
-var APP_VERSION = "0.72";
+var APP_VERSION = "0.74";
 var APP_NAME = "Stilte advies en meten";
 var USER_DOCS_HREF = "/handleiding.html";
 
@@ -360,10 +360,13 @@ function mountProjectMenu(root, host) {
         const btn = document.createElement("button");
         btn.type = "button";
         const title = projectTitle(p);
-        btn.textContent = p.customer_name ? `${title} \u2014 ${p.customer_name}` : title;
+        const finished = p.project_status === "PROJECT_FINISHED";
+        const who = p.customer_name ? ` \u2014 ${p.customer_name}` : "";
+        btn.textContent = finished ? `${title}${who} \xB7 afgerond` : `${title}${who}`;
         if (p.project_status) {
           btn.title = p.project_status;
         }
+        if (finished) btn.classList.add("project-open-finished");
         btn.addEventListener("click", () => {
           dialogEl.close();
           void openProject2(p.building_id);
@@ -579,6 +582,16 @@ function metresPerNormFromCalibration(lengthMetres, a, b, aspectYx) {
 }
 
 // src/shared/bpp-session.ts
+var MfaChallengeError = class extends Error {
+  constructor(challenge) {
+    super(
+      challenge.needs_totp_setup ? "Authenticator koppelen vereist (Microsoft Authenticator)" : "Authenticator-code vereist"
+    );
+    __publicField(this, "challenge");
+    this.name = "MfaChallengeError";
+    this.challenge = challenge;
+  }
+};
 var BppSession = class {
   constructor(opts) {
     __publicField(this, "ws", null);
@@ -700,22 +713,48 @@ var BppSession = class {
     const bootRet = await this.invokeString("API_Bootstrap", []);
     if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap mislukt: ${bootRet}`);
   }
+  applyAuth(info) {
+    this.auth = info;
+    this.storeAuth(info);
+    this.cb.onLogin(info);
+    return info;
+  }
   async bootstrapAndLogin(username, password) {
     await this.whenOpen();
     await this.loadSharedApi();
     const ret = await this.invokeString("API_Login", [username, password]);
     if (ret.startsWith("ERROR")) throw new Error(ret);
     const parsed = JSON.parse(ret);
+    if (parsed.needs_totp || parsed.needs_totp_setup) {
+      if (!parsed.challenge) throw new Error("MFA challenge ontbreekt");
+      throw new MfaChallengeError({
+        needs_totp: parsed.needs_totp,
+        needs_totp_setup: parsed.needs_totp_setup,
+        challenge: parsed.challenge,
+        username: parsed.username || username,
+        totp_secret: parsed.totp_secret,
+        otpauth_uri: parsed.otpauth_uri,
+        authenticator_app: parsed.authenticator_app,
+        authenticator_hint: parsed.authenticator_hint
+      });
+    }
     if (!parsed.ok || !parsed.token) throw new Error("Inloggen mislukt");
-    const info = {
+    return this.applyAuth({
       token: parsed.token,
       username: parsed.username || username,
       display_name: parsed.display_name || username
-    };
-    this.auth = info;
-    this.storeAuth(info);
-    this.cb.onLogin(info);
-    return info;
+    });
+  }
+  async verifyTotp(challenge, code) {
+    const ret = await this.invokeString("API_VerifyTotp", [challenge, code]);
+    if (ret.startsWith("ERROR")) throw new Error(ret.replace(/^ERROR:\s*/, ""));
+    const parsed = JSON.parse(ret);
+    if (!parsed.ok || !parsed.token) throw new Error("Authenticator-bevestiging mislukt");
+    return this.applyAuth({
+      token: parsed.token,
+      username: parsed.username || "admin",
+      display_name: parsed.display_name || parsed.username || "admin"
+    });
   }
   storeAuth(info) {
     storeAuth(this.authKey, info);
@@ -770,6 +809,8 @@ var BppSession = class {
             const ret = await this.invokeString("API_ValidateSession", [stored.token]);
             if (gen !== this.connectGen) return;
             if (ret.startsWith("ERROR")) {
+              this.auth = null;
+              this.storeAuth(null);
               this.cb.onLogout();
               this.cb.onStatus("Sessie verlopen \u2014 log in", "err");
             } else {
@@ -781,12 +822,18 @@ var BppSession = class {
             this.cb.onLogout();
             this.cb.onStatus("Verbonden \u2014 log in", "ok");
           }
+        } catch (err) {
           if (gen !== this.connectGen) return;
+          this.cb.onStatus(err instanceof Error ? err.message : String(err), "err");
+          if (!this.auth) this.cb.onLogout();
+          return;
+        }
+        if (gen !== this.connectGen) return;
+        try {
           await this.cb.onReady?.();
         } catch (err) {
           if (gen !== this.connectGen) return;
           this.cb.onStatus(err instanceof Error ? err.message : String(err), "err");
-          this.cb.onLogout();
         }
       })();
     });
@@ -818,6 +865,171 @@ var BppSession = class {
     });
   }
 };
+
+// src/shared/conn-load-progress.ts
+function ensureUi(host) {
+  let meta = host.bar.querySelector(".conn-load-meta");
+  let track = host.bar.querySelector(".conn-load-track");
+  let fill = host.bar.querySelector(".conn-load-fill");
+  if (!meta) {
+    meta = document.createElement("span");
+    meta.className = "conn-load-meta";
+    meta.hidden = true;
+    host.bar.appendChild(meta);
+  }
+  if (!track) {
+    track = document.createElement("div");
+    track.className = "conn-load-track";
+    track.hidden = true;
+    track.setAttribute("role", "progressbar");
+    track.setAttribute("aria-valuemin", "0");
+    track.setAttribute("aria-valuemax", "100");
+    fill = document.createElement("div");
+    fill.className = "conn-load-fill";
+    track.appendChild(fill);
+    host.bar.appendChild(track);
+  }
+  if (!fill) {
+    fill = document.createElement("div");
+    fill.className = "conn-load-fill";
+    track.appendChild(fill);
+  }
+  return { meta, track, fill };
+}
+function formatElapsed(ms) {
+  const s = Math.max(0, Math.floor(ms / 1e3));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return m > 0 ? `${m}:${String(r).padStart(2, "0")}` : `${r}s`;
+}
+function formatEta(sec) {
+  if (!Number.isFinite(sec) || sec < 0) return "";
+  const s = Math.max(0, Math.ceil(sec));
+  if (s < 1) return "nog <1s";
+  if (s < 60) return `nog ~${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r ? `nog ~${m}m${r}s` : `nog ~${m}m`;
+}
+function startConnLoadProgress(host, initialLabel) {
+  const ui = ensureUi(host);
+  const started = performance.now();
+  let label = initialLabel;
+  let fraction = null;
+  let received = 0;
+  let total = null;
+  let finished = false;
+  let timer = null;
+  const samples = [];
+  host.bar.classList.add("is-loading", "status", "busy");
+  host.bar.classList.remove("ok", "err");
+  ui.meta.hidden = false;
+  ui.track.hidden = false;
+  const paint = () => {
+    if (finished) return;
+    const elapsed = performance.now() - started;
+    host.status.textContent = label;
+    let eta = "";
+    if (total != null && total > 0 && received > 0 && fraction != null && fraction < 0.995) {
+      const now = performance.now();
+      samples.push({ t: now, n: received });
+      while (samples.length > 8) samples.shift();
+      if (samples.length >= 2) {
+        const a = samples[0];
+        const b = samples[samples.length - 1];
+        const dt = (b.t - a.t) / 1e3;
+        const dn = b.n - a.n;
+        if (dt > 0.05 && dn > 0) {
+          const rate = dn / dt;
+          eta = formatEta((total - received) / rate);
+        }
+      }
+    }
+    const pct = fraction != null && Number.isFinite(fraction) ? ` \xB7 ${Math.min(100, Math.max(0, Math.round(fraction * 100)))}%` : "";
+    ui.meta.textContent = [formatElapsed(elapsed), eta].filter(Boolean).join(" \xB7 ") + pct;
+    if (fraction == null) {
+      ui.track.classList.add("is-indeterminate");
+      ui.track.removeAttribute("aria-valuenow");
+      ui.fill.style.width = "";
+    } else {
+      ui.track.classList.remove("is-indeterminate");
+      const pctN = Math.min(100, Math.max(0, fraction * 100));
+      ui.track.setAttribute("aria-valuenow", String(Math.round(pctN)));
+      ui.fill.style.width = `${pctN}%`;
+    }
+  };
+  paint();
+  timer = window.setInterval(paint, 200);
+  return {
+    setLabel(text) {
+      if (finished) return;
+      label = text;
+      paint();
+    },
+    setFraction(frac) {
+      if (finished) return;
+      fraction = frac == null ? null : Math.min(1, Math.max(0, frac));
+      paint();
+    },
+    setBytes(rec, tot) {
+      if (finished) return;
+      received = Math.max(0, rec);
+      total = tot != null && tot > 0 ? tot : null;
+      fraction = total != null ? Math.min(1, received / total) : null;
+      paint();
+    },
+    done() {
+      if (finished) return;
+      finished = true;
+      if (timer != null) {
+        window.clearInterval(timer);
+        timer = null;
+      }
+      host.bar.classList.remove("is-loading");
+      ui.meta.hidden = true;
+      ui.meta.textContent = "";
+      ui.track.hidden = true;
+      ui.track.classList.remove("is-indeterminate");
+      ui.fill.style.width = "0%";
+      ui.track.removeAttribute("aria-valuenow");
+    }
+  };
+}
+async function fetchArrayBufferWithProgress(url, init, onProgress) {
+  const res = await fetch(url, init);
+  if (!res.ok) {
+    throw new Error(`Download mislukt (HTTP ${res.status})`);
+  }
+  const lenHeader = res.headers.get("Content-Length");
+  const total = lenHeader ? Number(lenHeader) : NaN;
+  const totalBytes = Number.isFinite(total) && total > 0 ? total : null;
+  if (!res.body || !onProgress) {
+    const buf = await res.arrayBuffer();
+    onProgress?.(buf.byteLength, totalBytes ?? buf.byteLength);
+    return buf;
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let received = 0;
+  onProgress(0, totalBytes);
+  for (; ; ) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      chunks.push(value);
+      received += value.byteLength;
+      onProgress(received, totalBytes);
+    }
+  }
+  const out = new Uint8Array(received);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  onProgress(received, totalBytes ?? received);
+  return out.buffer;
+}
 
 // src/shared/dom-helpers.ts
 function statusLabel(status) {
@@ -1050,9 +1262,9 @@ async function loadQueue(keepStatus) {
   if (queueListEl) queueListEl.innerHTML = "";
   if (projects.length === 0) {
     if (queueHintEl) {
-      queueHintEl.textContent = "Geen actieve projecten (status: gegevens aangeleverd / in uitvoering / bijna afgerond). Zet de status in admin of laat de opdrachtgever tekeningen indienen. Of gebruik Bestand \u2192 Openen.";
+      queueHintEl.textContent = "Geen projecten met tekeningen/status in uitvoering of afgerond. Zet de status in admin of laat de opdrachtgever tekeningen indienen. Of gebruik Bestand \u2192 Openen.";
     }
-    setStatus(keepStatus?.text ?? "Geen actieve projecten", keepStatus?.kind ?? "ok");
+    setStatus(keepStatus?.text ?? "Geen projecten", keepStatus?.kind ?? "ok");
     return;
   }
   for (const p of projects) {
@@ -1070,7 +1282,9 @@ async function loadQueue(keepStatus) {
     queueSelectEl.value = prev;
   }
   if (queueHintEl) {
-    queueHintEl.textContent = `${projects.length} project(en) \u2014 kies er \xE9\xE9n en klik Openen (of dubbelklik).`;
+    const finished = projects.filter((p) => p.project_status === "PROJECT_FINISHED").length;
+    const active = projects.length - finished;
+    queueHintEl.textContent = finished > 0 ? `${active} actief \xB7 ${finished} afgerond \u2014 kies er \xE9\xE9n en klik Openen (of dubbelklik).` : `${projects.length} project(en) \u2014 kies er \xE9\xE9n en klik Openen (of dubbelklik).`;
   }
   setStatus(keepStatus?.text ?? `${projects.length} project(en)`, keepStatus?.kind ?? "ok");
 }
@@ -1798,7 +2012,7 @@ function renderRegionList() {
   }
   for (const r of regions) {
     const li = document.createElement("li");
-    li.className = "drawing-list-item region-list-item";
+    li.className = "drawing-list-item region-list-item region-list-item--compact";
     li.dataset.regionId = r.id;
     if (r.id === selectedRegionId) li.classList.add("selected");
     const handle = document.createElement("span");
@@ -1810,11 +2024,16 @@ function renderRegionList() {
       li.draggable = true;
     });
     li.appendChild(handle);
+    const main = document.createElement("div");
+    main.className = "region-list-main";
+    const top = document.createElement("div");
+    top.className = "region-list-top";
     const info = document.createElement("button");
     info.type = "button";
-    info.className = "drawing-list-select";
+    info.className = "drawing-list-select region-list-select-compact";
     const scaleNote = regionSupportsScale(r.region_kind) && r.metres_per_norm_unit != null && r.metres_per_norm_unit > 0 ? " \xB7 geschaald" : "";
     info.textContent = `p${r.page_index + 1} \xB7 ${r.label}${scaleNote}`;
+    info.title = "Selecteer sectie / ga naar pagina";
     info.addEventListener("click", () => {
       selectedRegionId = r.id;
       if (r.page_index !== pdfPageNum - 1 && pdfDoc) {
@@ -1831,7 +2050,29 @@ function renderRegionList() {
       updateToolHint();
       drawRegionsOverlay();
     });
-    li.appendChild(info);
+    top.appendChild(info);
+    const actions = document.createElement("span");
+    actions.className = "drawing-list-actions region-list-actions-compact";
+    if (regionSupportsScale(r.region_kind) && activeProject) {
+      const analyze = document.createElement("a");
+      analyze.className = "secondary-link";
+      analyze.href = `/floormap.html?building_id=${encodeURIComponent(activeProject.building_id)}&section_id=${encodeURIComponent(r.id)}`;
+      analyze.textContent = r.region_kind === "FLOORMAP" ? "Ruimten" : "Componenten";
+      analyze.title = r.region_kind === "FLOORMAP" ? "Ruimten analyseren" : "Componenten analyseren";
+      actions.appendChild(analyze);
+    }
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "secondary region-list-delete";
+    btn.textContent = "\xD7";
+    btn.title = "Sectie verwijderen";
+    btn.setAttribute("aria-label", `Verwijder ${r.label}`);
+    btn.addEventListener("click", () => {
+      void deleteRegion(r.id);
+    });
+    actions.appendChild(btn);
+    top.appendChild(actions);
+    main.appendChild(top);
     const editRow = document.createElement("div");
     editRow.className = "region-edit-row";
     const kindSel = document.createElement("select");
@@ -1849,6 +2090,7 @@ function renderRegionList() {
     labelInput.className = "region-list-label";
     labelInput.value = r.label;
     labelInput.placeholder = "Omschrijving";
+    labelInput.title = "Enter = opslaan";
     labelInput.addEventListener("click", (ev) => ev.stopPropagation());
     labelInput.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter") {
@@ -1856,41 +2098,17 @@ function renderRegionList() {
         void updateSavedRegion(r, labelInput.value, kindSel.value);
       }
     });
+    labelInput.addEventListener("change", () => {
+      void updateSavedRegion(r, labelInput.value, kindSel.value);
+    });
     kindSel.addEventListener("click", (ev) => ev.stopPropagation());
     kindSel.addEventListener("change", () => {
       void updateSavedRegion(r, labelInput.value, kindSel.value);
     });
-    const saveBtn = document.createElement("button");
-    saveBtn.type = "button";
-    saveBtn.className = "secondary";
-    saveBtn.textContent = "Opslaan";
-    saveBtn.title = "Omschrijving of soort bijwerken";
-    saveBtn.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      void updateSavedRegion(r, labelInput.value, kindSel.value);
-    });
     editRow.appendChild(labelInput);
     editRow.appendChild(kindSel);
-    editRow.appendChild(saveBtn);
-    li.appendChild(editRow);
-    const actions = document.createElement("span");
-    actions.className = "drawing-list-actions";
-    if (regionSupportsScale(r.region_kind) && activeProject) {
-      const analyze = document.createElement("a");
-      analyze.className = "secondary-link";
-      analyze.href = `/floormap.html?building_id=${encodeURIComponent(activeProject.building_id)}&section_id=${encodeURIComponent(r.id)}`;
-      analyze.textContent = r.region_kind === "FLOORMAP" ? "Ruimten analyseren" : "Componenten analyseren";
-      actions.appendChild(analyze);
-    }
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "secondary";
-    btn.textContent = "Verwijderen";
-    btn.addEventListener("click", () => {
-      void deleteRegion(r.id);
-    });
-    actions.appendChild(btn);
-    li.appendChild(actions);
+    main.appendChild(editRow);
+    li.appendChild(main);
     li.addEventListener("dragstart", (ev) => {
       regionDragId = r.id;
       li.classList.add("is-dragging");
@@ -1960,26 +2178,43 @@ async function loadActiveDocument() {
     return;
   }
   docHintEl.textContent = "Sleep een rechthoek om een sectie te markeren, of klik Secties ontdekken.";
-  const res = await fetch(`/api/drawings/download?document_id=${encodeURIComponent(activeDocumentId)}`, {
-    credentials: "include",
-    headers: apiAuthHeaders(auth().token)
-  });
-  if (!res.ok) {
-    docHintEl.textContent = `PDF laden mislukt (HTTP ${res.status})`;
-    return;
+  const load = startConnLoadProgress(
+    { bar: connBarEl, status: connStatusEl },
+    `Tekening binnenlezen\u2026 ${doc.filename}`
+  );
+  try {
+    load.setLabel("Tekening downloaden\u2026");
+    const buf = await fetchArrayBufferWithProgress(
+      `/api/drawings/download?document_id=${encodeURIComponent(activeDocumentId)}`,
+      {
+        credentials: "include",
+        headers: apiAuthHeaders(auth().token)
+      },
+      (received, total) => load.setBytes(received, total)
+    );
+    const pdfjsLib = window.pdfjsLib;
+    if (!pdfjsLib) {
+      docHintEl.textContent = "PDF.js niet geladen";
+      setStatus("PDF.js niet geladen", "err");
+      return;
+    }
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    load.setLabel("PDF decoderen\u2026");
+    load.setFraction(null);
+    pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
+    pdfTotalPages = pdfDoc.numPages;
+    regionPageInput.value = String(pdfPageNum);
+    load.setLabel("Pagina renderen\u2026");
+    await renderPdfPage();
+    drawRegionsOverlay();
+    load.done();
+    setStatus(`Tekening geladen \u2014 ${doc.filename}`, "ok");
+  } catch (err) {
+    load.done();
+    const msg = err instanceof Error ? err.message : String(err);
+    docHintEl.textContent = msg.replace(/^Download mislukt/, "PDF laden mislukt");
+    setStatus(docHintEl.textContent, "err");
   }
-  const buf = await res.arrayBuffer();
-  const pdfjsLib = window.pdfjsLib;
-  if (!pdfjsLib) {
-    docHintEl.textContent = "PDF.js niet geladen";
-    return;
-  }
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-  pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
-  pdfTotalPages = pdfDoc.numPages;
-  regionPageInput.value = String(pdfPageNum);
-  await renderPdfPage();
-  drawRegionsOverlay();
 }
 async function renderPdfPage() {
   if (!pdfDoc) return;
@@ -2722,6 +2957,15 @@ queueOpenBtn?.addEventListener("click", () => {
 });
 queueSelectEl?.addEventListener("dblclick", () => {
   openSelectedQueueProject();
+});
+queueSelectEl?.addEventListener("click", (ev) => {
+  if (ev.detail >= 2) openSelectedQueueProject();
+});
+queueSelectEl?.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") {
+    ev.preventDefault();
+    openSelectedQueueProject();
+  }
 });
 queueSelectEl?.addEventListener("change", () => {
   if (queueHintEl) {

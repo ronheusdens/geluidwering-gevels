@@ -76,6 +76,15 @@ SQL60="$SQL_DIR/app_gevelwering_0_2_58.sql"
 SQL61="$SQL_DIR/app_gevelwering_0_2_59.sql"
 SQL62="$SQL_DIR/app_gevelwering_0_2_60.sql"
 SQL63="$SQL_DIR/app_gevelwering_0_2_61.sql"
+SQL64="$SQL_DIR/app_gevelwering_0_2_62.sql"
+SQL65="$SQL_DIR/app_gevelwering_0_2_63.sql"
+SQL66="$SQL_DIR/app_gevelwering_0_2_64.sql"
+SQL67="$SQL_DIR/app_gevelwering_0_2_65.sql"
+SQL68="$SQL_DIR/app_gevelwering_0_2_66.sql"
+SQL69="$SQL_DIR/app_gevelwering_0_2_67.sql"
+SQL70="$SQL_DIR/app_gevelwering_0_2_68.sql"
+SQL71="$SQL_DIR/app_gevelwering_0_2_69.sql"
+SQL72="$SQL_DIR/app_gevelwering_0_2_70.sql"
 SMOKE_SAVE_GEOM="$APP_ROOT/scripts/smoke-save-geometry.sh"
 
 BPP_PORT="${BPP_PORT:-18080}"
@@ -272,6 +281,24 @@ echo "Applying DDL $SQL62 (reorder drawing regions) to database ${PG_DB}..."
 psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL62" >/dev/null
 echo "Applying DDL $SQL63 (kozijn aluminium jaren 80) to database ${PG_DB}..."
 psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL63" >/dev/null
+echo "Applying DDL $SQL64 (HSB/houtskelet = samengesteld in opbouw) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL64" >/dev/null
+echo "Applying DDL $SQL65 (fix view_rotate 90/270 CW vs pdf.js) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL65" >/dev/null
+echo "Applying DDL $SQL66 (undo extra view_rotate repair from re-start) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL66" >/dev/null
+echo "Applying DDL $SQL67 (view_rotate: keep section-local points) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL67" >/dev/null
+echo "Applying DDL $SQL68 (gevelgroepen per oriëntatie, CL/Cg per groep) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL68" >/dev/null
+echo "Applying DDL $SQL69 (gevelgroep_nr op componenten → VR-facade list) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL69" >/dev/null
+echo "Applying DDL $SQL70 (kozijn L×b / wood area) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL70" >/dev/null
+echo "Applying DDL $SQL71 (GA eligible kozijn_role) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL71" >/dev/null
+echo "Applying DDL $SQL72 (restore false 0.2.64 view_rotate undo) to database ${PG_DB}..."
+psql -d "$PG_DB" -v ON_ERROR_STOP=1 -f "$SQL72" >/dev/null
 
 echo "Smoke: save-geometry path (hypot / normalize_ring)..."
 chmod +x "$SMOKE_SAVE_GEOM"
@@ -289,26 +316,33 @@ psql -d "$PG_DB" -c \
    ON CONFLICT (key) DO NOTHING;" >/dev/null
 
 # Free port so a previous bppServer cannot keep a stale Postgres session.
-if command -v lsof >/dev/null 2>&1; then
-  old_bpp="$(lsof -tiTCP:"$BPP_PORT" -sTCP:LISTEN 2>/dev/null || true)"
-  if [[ -n "$old_bpp" ]]; then
-    echo "Stopping previous listener(s) on :$BPP_PORT ($old_bpp)..."
-    # shellcheck disable=SC2086
-    kill $old_bpp 2>/dev/null || true
-    sleep 0.3
-  fi
-fi
+SUP_BPP="$APP_ROOT/../stilte/supervise-bpp.sh"
+chmod +x "$SUP_BPP"
+BPP_PID_FILE="${BPP_PID_FILE:-/tmp/stilte-bpp-${BPP_PORT}.pid}"
+BPP_LOG_FILE="${BPP_LOG_FILE:-/tmp/stilte-bpp-${BPP_PORT}.log}"
+"$SUP_BPP" stop --port "$BPP_PORT" --pid-file "$BPP_PID_FILE" >/dev/null || true
 
-echo "Starting bppServer on :$BPP_PORT (BASIC_CWD=$BASIC_CWD, bin=$BIN)..."
-"$BIN" --server --port "$BPP_PORT" &
-BPP_PID=$!
+echo "Starting supervised bppServer on :$BPP_PORT (BASIC_CWD=$BASIC_CWD, bin=$BIN)..."
+"$SUP_BPP" run --port "$BPP_PORT" --bin "$BIN" --pid-file "$BPP_PID_FILE" --log "$BPP_LOG_FILE" &
+BPP_SUP_PID=$!
 
 cleanup() {
-  kill "$BPP_PID" 2>/dev/null || true
+  kill "$BPP_SUP_PID" 2>/dev/null || true
+  "$SUP_BPP" stop --port "$BPP_PORT" --pid-file "$BPP_PID_FILE" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
-sleep 0.4
+# Wait until LISTEN is up (or supervisor died).
+for _i in 1 2 3 4 5 6 7 8 9 10; do
+  if ! kill -0 "$BPP_SUP_PID" 2>/dev/null; then
+    echo "bpp supervisor exited early — see $BPP_LOG_FILE" >&2
+    exit 1
+  fi
+  if command -v lsof >/dev/null 2>&1 && lsof -tiTCP:"$BPP_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.2
+done
 
 echo "Building + serving UI..."
 cd "$CLIENT"

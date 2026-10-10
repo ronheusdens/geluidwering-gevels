@@ -99,16 +99,22 @@ function computeVrGa(input) {
     const qty = kind === "length" ? v.length_m != null ? Number(v.length_m) : NaN : v.area_m2 != null ? Number(v.area_m2) : NaN;
     const ra = Number(v.ra_dba);
     if (!(qty > 0) || !Number.isFinite(ra)) continue;
+    const cl = overrideCl != null ? overrideCl : Number(v.cl_db) || 0;
+    const cg = overrideCg != null ? overrideCg : Number(v.cg_db) || 0;
+    const ori = normalizeOriKey(v.orientatie);
+    const ggId = String(v.gevelgroep_id || "").trim();
     raw.push({
       label: v.label || "",
       kind,
       quantity: qty,
       ra_dba: ra,
       meenemen_gak: v.meenemen_gak !== false,
-      cl_db: overrideCl != null ? overrideCl : Number(v.cl_db) || 0,
-      cg_db: overrideCg != null ? overrideCg : Number(v.cg_db) || 0,
+      cl_db: cl,
+      cg_db: cg,
       area_for_s: kind === "area" ? qty : 0,
-      orientatie: normalizeOriKey(v.orientatie)
+      orientatie: ori,
+      gevelgroep_id: ggId,
+      gevelgroep_label: String(v.gevelgroep_label || "").trim()
     });
   }
   const sAll = raw.reduce((a, e) => a + e.area_for_s, 0);
@@ -127,15 +133,21 @@ function computeVrGa(input) {
       stot_m2: stot
     });
   }
-  const byOri = /* @__PURE__ */ new Map();
+  const byFacadeKey = /* @__PURE__ */ new Map();
   for (const e of raw) {
-    const list = byOri.get(e.orientatie) || [];
+    const key = e.gevelgroep_id ? `g:${e.gevelgroep_id}` : `${e.orientatie}\0${e.cl_db}\0${e.cg_db}`;
+    const list = byFacadeKey.get(key) || [];
     list.push(e);
-    byOri.set(e.orientatie, list);
+    byFacadeKey.set(key, list);
   }
   const facades = [];
   const allElements = [];
-  for (const [ori, group] of byOri) {
+  for (const group of byFacadeKey.values()) {
+    const ori = group[0].orientatie;
+    const cl = group[0].cl_db;
+    const cg = group[0].cg_db;
+    const ggId = group[0].gevelgroep_id || null;
+    const ggLabel = group[0].gevelgroep_label || "";
     const sOri = group.reduce((a, e) => a + e.area_for_s, 0);
     if (!(sOri > 0)) {
       return failResult(grens, {
@@ -145,16 +157,6 @@ function computeVrGa(input) {
         elements: allElements,
         facades
       });
-    }
-    let cl = 0;
-    let cg = 0;
-    let bestArea = -1;
-    for (const e of group) {
-      if (e.area_for_s > bestArea) {
-        bestArea = e.area_for_s;
-        cl = e.cl_db;
-        cg = e.cg_db;
-      }
     }
     const elements = group.map((e) => ({
       label: e.label,
@@ -166,7 +168,8 @@ function computeVrGa(input) {
       cl_db: cl,
       cg_db: cg,
       area_for_s: e.area_for_s,
-      orientatie: ori
+      orientatie: ori,
+      gevelgroep_id: e.gevelgroep_id || null
     }));
     const rPrime = combineRprime(elements.map((e) => e.ras).filter((x) => x != null));
     const ruimte = roomCorrectionDb(V, T, sOri);
@@ -183,17 +186,22 @@ function computeVrGa(input) {
         cg_db: cg
       });
     }
-    const d2m = rPrime + ruimte + cl + cg;
+    const d2m = rPrime + ruimte + cg;
+    const d2mRef = d2m + cl;
     const gaOri = d2m - Cr;
-    const lbiOri = Number.isFinite(Lb) ? Lb - gaOri : null;
+    const gaRef = d2mRef - Cr;
+    const lbiOri = Number.isFinite(Lb) ? Lb - gaRef : null;
     facades.push({
       orientatie: ori,
+      gevelgroep_id: ggId,
+      gevelgroep_label: ggLabel || null,
       s_m2: sOri,
       r_prime: rPrime,
       ruimte_db: ruimte,
       cl_db: cl,
       cg_db: cg,
       d2m_nt: d2m,
+      d2m_nt_ref: d2mRef,
       ga_dba: gaOri,
       lbi_dba: lbiOri,
       elements
@@ -208,7 +216,7 @@ function computeVrGa(input) {
       elements: allElements
     });
   }
-  const d2mTot = combineLevelsDb(facades.map((f) => f.d2m_nt));
+  const d2mTot = combineLevelsDb(facades.map((f) => f.d2m_nt_ref));
   if (d2mTot == null) {
     return failResult(grens, {
       reason: "combinatie van gevels mislukt",
@@ -264,7 +272,13 @@ function minRaDeltaForRprime(elements, elementIndex, needDeltaR) {
   const target = elements[elementIndex];
   if (!target || target.ras == null || !Number.isFinite(target.ras)) return null;
   const ori = target.orientatie;
-  const peers = ori != null ? elements.map((e, i) => ({ e, i })).filter(({ e }) => e.orientatie === ori) : elements.map((e, i) => ({ e, i }));
+  const gg = String(target.gevelgroep_id || "").trim();
+  const peers = ori != null ? elements.map((e, i) => ({ e, i })).filter(({ e }) => {
+    if (e.orientatie !== ori) return false;
+    const eg = String(e.gevelgroep_id || "").trim();
+    if (gg || eg) return eg === gg;
+    return (target.cl_db == null || e.cl_db === target.cl_db) && (target.cg_db == null || e.cg_db === target.cg_db);
+  }) : elements.map((e, i) => ({ e, i }));
   const rasList = peers.map(({ e }) => e.ras).filter((x) => x != null && Number.isFinite(x));
   if (rasList.length !== peers.length) return null;
   const oldSum = rasList.reduce((a, r) => a + 10 ** (-r / 10), 0);

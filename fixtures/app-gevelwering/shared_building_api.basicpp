@@ -1,7 +1,7 @@
 REM =============================================================================
 REM Acoustics P0 — shared building API + service login (DDL 0.2.0)
 REM OOP: PostgreSQLDatabase for connection lifecycle (API_Bootstrap)
-REM Invoke: API_Bootstrap, API_Login, API_ValidateSession, API_Logout,
+REM Invoke: API_Bootstrap, API_Login, API_VerifyTotp, API_ValidateSession, API_Logout,
 REM         API_RequestAccess, API_ChangePassword,
 REM         API_GetCustomerProfile, API_SaveCustomerProfile,
 REM         API_ListBuildings, API_SaveBuildingEntry, API_OpenBuilding, API_DeleteProject,
@@ -17,9 +17,10 @@ REM         API_AdminListCustomers, API_AdminListCustomerProjects, API_AdminUpda
 REM         API_AdminListAccounts, API_AdminUpdateAccount, API_AdminResetAccountPassword, API_AdminDeleteAccount,
 REM         API_AdminListMaterials, API_AdminGetMaterial, API_AdminSaveMaterial, API_AdminDeleteMaterial,
 REM         GA model (DDL 0.2.16+): API_ListVariants, API_SaveVariant, API_DeleteVariant, API_CloneVariant,
-REM         API_ListVerblijfsgebieden, API_CreateVerblijfsgebied, API_SaveVerblijfsgebied, API_DeleteVerblijfsgebied,
-REM         API_ListVerblijfsruimten, API_AddVerblijfsruimte, API_SaveVerblijfsruimte, API_DeleteVerblijfsruimte,
+REM         API_ListVerblijfsgebieden, API_CreateVerblijfsgebied, API_CreateEmptyVerblijfsgebied, API_SaveVerblijfsgebied, API_DeleteVerblijfsgebied,
+REM         API_ListVerblijfsruimten, API_AddVerblijfsruimte, API_SaveVerblijfsruimte, API_MoveVerblijfsruimte, API_DeleteVerblijfsruimte,
 REM         API_ListVlakken, API_SaveVlak, API_DeleteVlak,
+REM         API_ListGevelgroepen, API_SaveGevelgroep, API_DeleteGevelgroep,
 REM         API_ListVlakElementen, API_SaveVlakElement, API_DeleteVlakElement,
 REM         API_ListLinkedSubsections, API_CompareVariants
 REM Note: nested user PROCEDURE calls from API_* are supported (root_program + retained lookup).
@@ -76,9 +77,39 @@ PROCEDURE API_Bootstrap() AS STRING
     RETURN "OK"
 END PROCEDURE
 
+PROCEDURE Auth_SessionJson$(user_id$, username$, display$, email$, must_chg$, token$) AS STRING
+    DIM out$
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true,"
+    out$ = out$ + CHR$(34) + "token" + CHR$(34) + ":" + CHR$(34) + token$ + CHR$(34) + ","
+    out$ = out$ + CHR$(34) + "user_id" + CHR$(34) + ":" + CHR$(34) + user_id$ + CHR$(34) + ","
+    out$ = out$ + CHR$(34) + "username" + CHR$(34) + ":" + CHR$(34) + username$ + CHR$(34) + ","
+    out$ = out$ + CHR$(34) + "display_name" + CHR$(34) + ":" + CHR$(34) + display$ + CHR$(34) + ","
+    out$ = out$ + CHR$(34) + "email" + CHR$(34) + ":" + CHR$(34) + email$ + CHR$(34) + ","
+    IF must_chg$ = "t" OR must_chg$ = "true" OR must_chg$ = "1" THEN
+        out$ = out$ + CHR$(34) + "must_change_password" + CHR$(34) + ":true"
+    ELSE
+        out$ = out$ + CHR$(34) + "must_change_password" + CHR$(34) + ":false"
+    END IF
+    out$ = out$ + "}"
+    RETURN out$
+END PROCEDURE
+
+PROCEDURE Auth_CreateSession$(user_id$) AS STRING
+    DIM sql$, rid%, token$
+    sql$ = "INSERT INTO app_gevelwering.login_session (user_id, token, expires_at) VALUES (" + _
+        "'" + user_id$ + "'::uuid, encode(gen_random_bytes(24), 'hex'), now() + interval '12 hours') " + _
+        "RETURNING token"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN ""
+    END IF
+    token$ = POSTGRES_GET_BY_NAME$(rid%, 0, "token")
+    RETURN token$
+END PROCEDURE
+
 PROCEDURE API_Login(username$, password$) AS STRING
     DIM sql$, rid%, user_id$, display$, token$, out$
-    DIM u$, p$, email$, must_chg$
+    DIM u$, p$, email$, must_chg$, totp_en$, challenge$, secret$, uri$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -91,7 +122,8 @@ PROCEDURE API_Login(username$, password$) AS STRING
     p$ = SUBSTITUTE$(password$, "'", "''")
 
     sql$ = "SELECT id::text AS user_id, COALESCE(display_name, '') AS display_name, " + _
-        "COALESCE(email, '') AS email, must_change_password::text AS must_change_password " + _
+        "COALESCE(email, '') AS email, must_change_password::text AS must_change_password, " + _
+        "COALESCE(totp_enabled, false)::text AS totp_enabled " + _
         "FROM app_gevelwering.service_user " + _
         "WHERE username = '" + u$ + "' AND is_active = true " + _
         "AND password_hash = crypt('" + p$ + "', password_hash)"
@@ -103,32 +135,135 @@ PROCEDURE API_Login(username$, password$) AS STRING
     display$ = POSTGRES_GET_BY_NAME$(rid%, 0, "display_name")
     email$ = POSTGRES_GET_BY_NAME$(rid%, 0, "email")
     must_chg$ = POSTGRES_GET_BY_NAME$(rid%, 0, "must_change_password")
+    totp_en$ = POSTGRES_GET_BY_NAME$(rid%, 0, "totp_enabled")
 
-    sql$ = "INSERT INTO app_gevelwering.login_session (user_id, token, expires_at) VALUES (" + _
-        "'" + user_id$ + "'::uuid, encode(gen_random_bytes(24), 'hex'), now() + interval '12 hours') " + _
-        "RETURNING token"
-    rid% = POSTGRES_QUERY(g_conn%, sql$)
-    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+    REM Two-pass auth for account admin only (password → authenticator TOTP).
+    IF u$ = "admin" THEN
+        IF totp_en$ = "t" OR totp_en$ = "true" OR totp_en$ = "1" THEN
+            sql$ = "INSERT INTO app_gevelwering.login_challenge " + _
+                "(user_id, token, purpose, expires_at) VALUES (" + _
+                "'" + user_id$ + "'::uuid, encode(gen_random_bytes(24), 'hex'), 'mfa', " + _
+                "now() + interval '5 minutes') RETURNING token"
+            rid% = POSTGRES_QUERY(g_conn%, sql$)
+            IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+                RETURN "ERROR: failed to create MFA challenge"
+            END IF
+            challenge$ = POSTGRES_GET_BY_NAME$(rid%, 0, "token")
+            out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":false,"
+            out$ = out$ + CHR$(34) + "needs_totp" + CHR$(34) + ":true,"
+            out$ = out$ + CHR$(34) + "challenge" + CHR$(34) + ":" + CHR$(34) + challenge$ + CHR$(34) + ","
+            out$ = out$ + CHR$(34) + "username" + CHR$(34) + ":" + CHR$(34) + u$ + CHR$(34) + ","
+            out$ = out$ + CHR$(34) + "authenticator_hint" + CHR$(34) + ":" + CHR$(34) + "Microsoft Authenticator" + CHR$(34)
+            out$ = out$ + "}"
+            RETURN out$
+        END IF
+
+        sql$ = "SELECT identity.totp_new_secret() AS secret"
+        rid% = POSTGRES_QUERY(g_conn%, sql$)
+        IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+            RETURN "ERROR: failed to generate authenticator secret"
+        END IF
+        secret$ = POSTGRES_GET_BY_NAME$(rid%, 0, "secret")
+        sql$ = "SELECT identity.totp_otpauth_uri('admin', '" + SUBSTITUTE$(secret$, "'", "''") + "', 'Stilte') AS uri"
+        rid% = POSTGRES_QUERY(g_conn%, sql$)
+        uri$ = POSTGRES_GET_BY_NAME$(rid%, 0, "uri")
+
+        sql$ = "INSERT INTO app_gevelwering.login_challenge " + _
+            "(user_id, token, purpose, totp_secret, expires_at) VALUES (" + _
+            "'" + user_id$ + "'::uuid, encode(gen_random_bytes(24), 'hex'), 'enroll', " + _
+            "'" + SUBSTITUTE$(secret$, "'", "''") + "', now() + interval '15 minutes') RETURNING token"
+        rid% = POSTGRES_QUERY(g_conn%, sql$)
+        IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+            RETURN "ERROR: failed to create enroll challenge"
+        END IF
+        challenge$ = POSTGRES_GET_BY_NAME$(rid%, 0, "token")
+        out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":false,"
+        out$ = out$ + CHR$(34) + "needs_totp_setup" + CHR$(34) + ":true,"
+        out$ = out$ + CHR$(34) + "challenge" + CHR$(34) + ":" + CHR$(34) + challenge$ + CHR$(34) + ","
+        out$ = out$ + CHR$(34) + "username" + CHR$(34) + ":" + CHR$(34) + u$ + CHR$(34) + ","
+        out$ = out$ + CHR$(34) + "totp_secret" + CHR$(34) + ":" + CHR$(34) + secret$ + CHR$(34) + ","
+        out$ = out$ + CHR$(34) + "otpauth_uri" + CHR$(34) + ":" + CHR$(34) + uri$ + CHR$(34) + ","
+        out$ = out$ + CHR$(34) + "authenticator_app" + CHR$(34) + ":" + CHR$(34) + "Microsoft Authenticator" + CHR$(34)
+        out$ = out$ + "}"
+        RETURN out$
+    END IF
+
+    token$ = Auth_CreateSession$(user_id$)
+    IF token$ = "" THEN
         RETURN "ERROR: failed to create login session: " + POSTGRES_GET_ERROR$(g_conn%)
     END IF
-    token$ = POSTGRES_GET_BY_NAME$(rid%, 0, "token")
 
     g_auth_user_id$ = user_id$
     g_auth_token$ = token$
+    RETURN Auth_SessionJson$(user_id$, u$, display$, email$, must_chg$, token$)
+END PROCEDURE
 
-    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true,"
-    out$ = out$ + CHR$(34) + "token" + CHR$(34) + ":" + CHR$(34) + token$ + CHR$(34) + ","
-    out$ = out$ + CHR$(34) + "user_id" + CHR$(34) + ":" + CHR$(34) + user_id$ + CHR$(34) + ","
-    out$ = out$ + CHR$(34) + "username" + CHR$(34) + ":" + CHR$(34) + u$ + CHR$(34) + ","
-    out$ = out$ + CHR$(34) + "display_name" + CHR$(34) + ":" + CHR$(34) + display$ + CHR$(34) + ","
-    out$ = out$ + CHR$(34) + "email" + CHR$(34) + ":" + CHR$(34) + email$ + CHR$(34) + ","
-    IF must_chg$ = "t" OR must_chg$ = "true" OR must_chg$ = "1" THEN
-        out$ = out$ + CHR$(34) + "must_change_password" + CHR$(34) + ":true"
-    ELSE
-        out$ = out$ + CHR$(34) + "must_change_password" + CHR$(34) + ":false"
+PROCEDURE API_VerifyTotp(challenge$, code$) AS STRING
+    DIM sql$, rid%, user_id$, display$, token$, email$, must_chg$, username$
+    DIM ch$, cd$, purpose$, secret$, verified$
+
+    IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
+        RETURN "ERROR: call API_Bootstrap first"
     END IF
-    out$ = out$ + "}"
-    RETURN out$
+    IF challenge$ = "" OR code$ = "" THEN
+        RETURN "ERROR: challenge and authenticator code are required"
+    END IF
+
+    ch$ = SUBSTITUTE$(challenge$, "'", "''")
+    cd$ = SUBSTITUTE$(code$, "'", "''")
+
+    sql$ = "SELECT c.user_id::text AS user_id, c.purpose, COALESCE(c.totp_secret, '') AS challenge_secret, " + _
+        "COALESCE(u.totp_secret, '') AS user_secret, u.username, " + _
+        "COALESCE(u.display_name, '') AS display_name, COALESCE(u.email, '') AS email, " + _
+        "u.must_change_password::text AS must_change_password " + _
+        "FROM app_gevelwering.login_challenge c " + _
+        "JOIN app_gevelwering.service_user u ON u.id = c.user_id " + _
+        "WHERE c.token = '" + ch$ + "' AND c.consumed_at IS NULL " + _
+        "AND c.expires_at > now() AND u.is_active = true AND u.username = 'admin'"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
+        RETURN "ERROR: MFA challenge invalid or expired"
+    END IF
+
+    user_id$ = POSTGRES_GET_BY_NAME$(rid%, 0, "user_id")
+    purpose$ = POSTGRES_GET_BY_NAME$(rid%, 0, "purpose")
+    username$ = POSTGRES_GET_BY_NAME$(rid%, 0, "username")
+    display$ = POSTGRES_GET_BY_NAME$(rid%, 0, "display_name")
+    email$ = POSTGRES_GET_BY_NAME$(rid%, 0, "email")
+    must_chg$ = POSTGRES_GET_BY_NAME$(rid%, 0, "must_change_password")
+    IF purpose$ = "enroll" THEN
+        secret$ = POSTGRES_GET_BY_NAME$(rid%, 0, "challenge_secret")
+    ELSE
+        secret$ = POSTGRES_GET_BY_NAME$(rid%, 0, "user_secret")
+    END IF
+
+    sql$ = "SELECT identity.totp_verify('" + SUBSTITUTE$(secret$, "'", "''") + "', '" + cd$ + "')::text AS ok"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+    verified$ = POSTGRES_GET_BY_NAME$(rid%, 0, "ok")
+    IF verified$ <> "t" AND verified$ <> "true" AND verified$ <> "1" THEN
+        RETURN "ERROR: invalid authenticator code"
+    END IF
+
+    sql$ = "UPDATE app_gevelwering.login_challenge SET consumed_at = now() " + _
+        "WHERE token = '" + ch$ + "' AND consumed_at IS NULL"
+    rid% = POSTGRES_QUERY(g_conn%, sql$)
+
+    IF purpose$ = "enroll" THEN
+        sql$ = "UPDATE app_gevelwering.service_user SET " + _
+            "totp_secret = '" + SUBSTITUTE$(secret$, "'", "''") + "', " + _
+            "totp_enabled = true, totp_confirmed_at = now(), updated_at = now() " + _
+            "WHERE id = '" + user_id$ + "'::uuid"
+        rid% = POSTGRES_QUERY(g_conn%, sql$)
+    END IF
+
+    token$ = Auth_CreateSession$(user_id$)
+    IF token$ = "" THEN
+        RETURN "ERROR: failed to create login session: " + POSTGRES_GET_ERROR$(g_conn%)
+    END IF
+
+    g_auth_user_id$ = user_id$
+    g_auth_token$ = token$
+    RETURN Auth_SessionJson$(user_id$, username$, display$, email$, must_chg$, token$)
 END PROCEDURE
 
 PROCEDURE API_ValidateSession(token$) AS STRING
@@ -426,8 +561,8 @@ PROCEDURE API_AdminListCustomerProjects(session_token$, customer_id$) AS STRING
     RETURN out$
 END PROCEDURE
 
-PROCEDURE API_AdminUpdateProjectStatus(session_token$, building_id$, project_status$, external_ref$) AS STRING
-    DIM sql$, rid%, t$, username$, b_id$, ps$, ref$
+PROCEDURE API_AdminUpdateProjectStatus(session_token$, building_id$, project_status$, external_ref$, label$) AS STRING
+    DIM sql$, rid%, t$, username$, b_id$, ps$, ref$, lab$, out$
 
     IF g_bootstrapped% = 0 OR g_conn% <= 0 THEN
         RETURN "ERROR: call API_Bootstrap first"
@@ -440,6 +575,7 @@ PROCEDURE API_AdminUpdateProjectStatus(session_token$, building_id$, project_sta
     b_id$ = SUBSTITUTE$(building_id$, "'", "''")
     ps$ = SUBSTITUTE$(project_status$, "'", "''")
     ref$ = SUBSTITUTE$(external_ref$, "'", "''")
+    lab$ = SUBSTITUTE$(label$, "'", "''")
 
     IF ps$ <> "INITIAL_REQUEST" AND ps$ <> "PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED" AND ps$ <> "PROJECT_UNDERWAY" AND ps$ <> "PROJECT_NEAR_FINAL" AND ps$ <> "PROJECT_FINISHED" THEN
         RETURN "ERROR: invalid project_status"
@@ -461,16 +597,24 @@ PROCEDURE API_AdminUpdateProjectStatus(session_token$, building_id$, project_sta
 
     sql$ = "UPDATE app_gevelwering.building " + _
         "SET project_status = '" + ps$ + "'::app_gevelwering.project_status, " + _
-        "external_ref = '" + ref$ + "', updated_at = now() " + _
+        "external_ref = '" + ref$ + "', " + _
+        "label = '" + lab$ + "', " + _
+        "updated_at = now() " + _
         "WHERE id = '" + b_id$ + "'::uuid " + _
-        "RETURNING id::text AS id, COALESCE(external_ref,'') AS external_ref"
+        "RETURNING id::text AS id, COALESCE(label,'') AS label, COALESCE(external_ref,'') AS external_ref"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
     IF POSTGRES_NUM_ROWS(rid%) < 1 THEN
         RETURN "ERROR: building not found"
     END IF
 
+    lab$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "label"), CHR$(34), "")
     ref$ = SUBSTITUTE$(POSTGRES_GET_BY_NAME$(rid%, 0, "external_ref"), CHR$(34), "")
-    RETURN "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "building_id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34) + "," + CHR$(34) + "project_status" + CHR$(34) + ":" + CHR$(34) + ps$ + CHR$(34) + "," + CHR$(34) + "external_ref" + CHR$(34) + ":" + CHR$(34) + ref$ + CHR$(34) + "}"
+    out$ = "{" + CHR$(34) + "ok" + CHR$(34) + ":true"
+    out$ = out$ + "," + CHR$(34) + "building_id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "project_status" + CHR$(34) + ":" + CHR$(34) + ps$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "label" + CHR$(34) + ":" + CHR$(34) + lab$ + CHR$(34)
+    out$ = out$ + "," + CHR$(34) + "external_ref" + CHR$(34) + ":" + CHR$(34) + ref$ + CHR$(34) + "}"
+    RETURN out$
 END PROCEDURE
 
 REM --- Admin opdrachtgever accounts (service_user, non-engineer) ---
@@ -1977,7 +2121,7 @@ PROCEDURE API_DeleteProject(session_token$, building_id$) AS STRING
     RETURN "{" + CHR$(34) + "ok" + CHR$(34) + ":true," + CHR$(34) + "deleted_project_id" + CHR$(34) + ":" + CHR$(34) + b_id$ + CHR$(34) + "}"
 END PROCEDURE
 
-REM Engineer/admin: list open projects (broader than review queue) for Bestand → Openen
+REM Engineer/admin: list all projects (incl. afgerond) for Bestand → Openen
 PROCEDURE API_EngineerListProjects(session_token$) AS STRING
     DIM sql$, rid%, n%, i%, out$, t$, username$, is_eng$
     DIM b_id$, b_label$, b_ref$, b_client$, c_name$, project_status$, updated_at$
@@ -2010,8 +2154,9 @@ PROCEDURE API_EngineerListProjects(session_token$) AS STRING
     sql$ = sql$ + "b.project_status::text AS project_status, b.updated_at::text AS updated_at "
     sql$ = sql$ + "FROM app_gevelwering.building b "
     sql$ = sql$ + "JOIN app_gevelwering.customer c ON c.id = b.customer_id "
-    sql$ = sql$ + "WHERE b.project_status <> 'PROJECT_FINISHED'::app_gevelwering.project_status "
-    sql$ = sql$ + "ORDER BY b.updated_at DESC"
+    sql$ = sql$ + "ORDER BY CASE b.project_status "
+    sql$ = sql$ + "WHEN 'PROJECT_FINISHED'::app_gevelwering.project_status THEN 1 ELSE 0 END ASC, "
+    sql$ = sql$ + "b.updated_at DESC"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
     n% = POSTGRES_NUM_ROWS(rid%)
 
@@ -2441,7 +2586,7 @@ PROCEDURE API_EngineerListReviewQueue(session_token$) AS STRING
         RETURN "ERROR: engineer access required"
     END IF
 
-    REM Active engineer work: status from admin/customer path; drawings optional (LEFT JOIN)
+    REM Engineer project list: actief werk + afgerond (onderaan) zodat engineer altijd kan openen
     sql$ = "SELECT b.id::text AS building_id, COALESCE(b.label,'') AS label, COALESCE(b.client_ref,'') AS client_ref, c.name AS customer_name, "
     sql$ = sql$ + "COALESCE(u.username,'') AS username, "
     sql$ = sql$ + "b.project_status::text AS project_status, COUNT(d.id)::text AS drawing_count, "
@@ -2454,9 +2599,12 @@ PROCEDURE API_EngineerListReviewQueue(session_token$) AS STRING
     sql$ = sql$ + "WHERE b.project_status IN ("
     sql$ = sql$ + "'PROJECT_DATA_SUPPLIED_NOT_YET_PROCESSED'::app_gevelwering.project_status, "
     sql$ = sql$ + "'PROJECT_UNDERWAY'::app_gevelwering.project_status, "
-    sql$ = sql$ + "'PROJECT_NEAR_FINAL'::app_gevelwering.project_status) "
-    sql$ = sql$ + "GROUP BY b.id, b.label, b.client_ref, c.name, u.username, b.project_status "
-    sql$ = sql$ + "ORDER BY b.updated_at DESC"
+    sql$ = sql$ + "'PROJECT_NEAR_FINAL'::app_gevelwering.project_status, "
+    sql$ = sql$ + "'PROJECT_FINISHED'::app_gevelwering.project_status) "
+    sql$ = sql$ + "GROUP BY b.id, b.label, b.client_ref, c.name, u.username, b.project_status, b.updated_at "
+    sql$ = sql$ + "ORDER BY CASE b.project_status "
+    sql$ = sql$ + "WHEN 'PROJECT_FINISHED'::app_gevelwering.project_status THEN 1 ELSE 0 END ASC, "
+    sql$ = sql$ + "b.updated_at DESC"
     rid% = POSTGRES_QUERY(g_conn%, sql$)
     n% = POSTGRES_NUM_ROWS(rid%)
 

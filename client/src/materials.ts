@@ -20,7 +20,13 @@ import {
   bppPhase1Enabled,
   bppRemoveMaterialFavorite,
 } from "./bpp-api";
-import { BppSession, type AuthInfo, type Envelope } from "./shared/bpp-session";
+import {
+  BppSession,
+  MfaChallengeError,
+  type AuthInfo,
+  type Envelope,
+  type MfaChallenge,
+} from "./shared/bpp-session";
 import { esc } from "./shared/dom-helpers";
 import { initMaterialsStudioPanel, type MaterialsStudioPanel } from "./materials-studio-panel";
 
@@ -310,9 +316,17 @@ async function syncFavoriteCheckbox(): Promise<void> {
 }
 
 async function setFavoriteForSelection(on: boolean): Promise<void> {
-  if (!contextBuildingId || !auth()?.token) return;
+  if (!auth()?.token) throw new Error("Niet ingelogd — log opnieuw in");
+  if (!contextBuildingId) {
+    throw new Error("Geen projectcontext — open de catalogus via de geveltekening van een project");
+  }
   const mid = (selectedId || idEl.value || "").trim();
-  if (!mid) return;
+  if (!mid) throw new Error("Sla het materiaal eerst op voordat je favoriet zet");
+  const label = (nameEl.value || catalogIdEl?.value || mid).trim();
+  setStatus(
+    on ? `Toevoegen aan meest gebruikt: ${label}…` : `Verwijderen uit meest gebruikt: ${label}…`,
+    "busy",
+  );
   if (on) {
     if (bppPhase1Enabled()) {
       await bppAddMaterialFavorite(invokeString, auth()!.token, contextBuildingId, mid);
@@ -725,6 +739,14 @@ const connStatusEl = document.getElementById("mat-conn-status") as HTMLElement;
 const loginPanelEl = document.getElementById("mat-login-panel") as HTMLElement;
 const loginForm = document.getElementById("mat-login-form") as HTMLFormElement;
 const loginBtn = document.getElementById("mat-login-btn") as HTMLButtonElement;
+const totpForm = document.getElementById("mat-totp-form") as HTMLFormElement;
+const totpBtn = document.getElementById("mat-totp-btn") as HTMLButtonElement;
+const totpCancelBtn = document.getElementById("mat-totp-cancel-btn") as HTMLButtonElement;
+const totpCodeEl = document.getElementById("mat-totp-code") as HTMLInputElement;
+const totpHintEl = document.getElementById("mat-totp-hint") as HTMLElement;
+const totpSetupEl = document.getElementById("mat-totp-setup") as HTMLElement;
+const totpSecretEl = document.getElementById("mat-totp-secret") as HTMLElement;
+let pendingMfa: MfaChallenge | null = null;
 const panelEl = document.getElementById("mat-panel") as HTMLElement;
 const userLabelEl = document.getElementById("mat-user-label") as HTMLElement;
 const logoutBtn = document.getElementById("mat-logout-btn") as HTMLButtonElement;
@@ -851,9 +873,37 @@ function setConnLed(connected: boolean): void {
   connLedEl.classList.toggle("disconnected", !connected);
 }
 
+function resetMatMfaUi(): void {
+  pendingMfa = null;
+  totpForm.classList.add("hidden");
+  totpSetupEl.classList.add("hidden");
+  loginForm.classList.remove("hidden");
+  totpCodeEl.value = "";
+  totpSecretEl.textContent = "—";
+}
+
 function showLogin(): void {
+  resetMatMfaUi();
   loginPanelEl.classList.remove("hidden");
   panelEl.classList.add("hidden");
+}
+
+function beginMatMfa(challenge: MfaChallenge): void {
+  pendingMfa = challenge;
+  loginForm.classList.add("hidden");
+  totpForm.classList.remove("hidden");
+  totpCodeEl.value = "";
+  if (challenge.needs_totp_setup) {
+    totpSetupEl.classList.remove("hidden");
+    totpSecretEl.textContent = challenge.totp_secret || "—";
+    totpHintEl.innerHTML =
+      "Koppel <strong>Microsoft Authenticator</strong> (handmatige sleutel hieronder) en bevestig met de code.";
+  } else {
+    totpSetupEl.classList.add("hidden");
+    totpHintEl.innerHTML =
+      "Open <strong>Microsoft Authenticator</strong> en vul de 6-cijferige code in.";
+  }
+  totpCodeEl.focus();
 }
 
 function showAdmin(info: AuthInfo): void {
@@ -1415,10 +1465,48 @@ loginForm.addEventListener("submit", async (ev) => {
     }
     setStatus("Beheerder ingelogd", "ok");
   } catch (err) {
-    setStatus(err instanceof Error ? err.message : String(err), "err");
+    if (err instanceof MfaChallengeError) {
+      beginMatMfa(err.challenge);
+      setStatus(err.message, "ok");
+    } else {
+      setStatus(err instanceof Error ? err.message : String(err), "err");
+    }
   } finally {
     loginBtn.disabled = false;
   }
+});
+
+totpForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const code = totpCodeEl.value.trim();
+  if (!pendingMfa?.challenge || !/^\d{6}$/.test(code)) {
+    setStatus("Vul een geldige 6-cijferige code in", "err");
+    return;
+  }
+  totpBtn.disabled = true;
+  try {
+    const info = await session.verifyTotp(pendingMfa.challenge, code);
+    if (info.username !== "admin") {
+      setStatus("Materiaaleditor is alleen voor gebruiker 'admin'", "err");
+      return;
+    }
+    resetMatMfaUi();
+    offset = 0;
+    if (activeTab !== "studio") {
+      if (deepMaterialId || deepNew) await applyDeepLink();
+      else await loadList();
+    }
+    setStatus("Beheerder ingelogd (2FA)", "ok");
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+  } finally {
+    totpBtn.disabled = false;
+  }
+});
+
+totpCancelBtn.addEventListener("click", () => {
+  resetMatMfaUi();
+  setStatus("Authenticator-stap geannuleerd", "ok");
 });
 
 logoutBtn.addEventListener("click", async () => {
@@ -1485,16 +1573,27 @@ newBtn.addEventListener("click", () => {
 clearBtn.addEventListener("click", () => clearEditor());
 
 favoriteEl?.addEventListener("change", () => {
-  if (!favoriteEl || !contextBuildingId) return;
+  if (!favoriteEl) return;
+  if (!contextBuildingId) {
+    favoriteEl.checked = false;
+    setStatus(
+      "Geen projectcontext — open de catalogus via «Materiaalcatalogus…» op de geveltekening",
+      "err",
+    );
+    return;
+  }
   if (!selectedId && !idEl.value.trim()) {
     favoriteEl.checked = false;
     setStatus("Sla het materiaal eerst op voordat je favoriet zet", "err");
     return;
   }
+  const label = (nameEl.value || catalogIdEl?.value || "materiaal").trim();
   void setFavoriteForSelection(favoriteEl.checked)
     .then(() =>
       setStatus(
-        favoriteEl.checked ? "Toegevoegd aan meest gebruikt" : "Verwijderd uit meest gebruikt",
+        favoriteEl.checked
+          ? `Toegevoegd aan meest gebruikt: ${label}`
+          : `Verwijderd uit meest gebruikt: ${label}`,
         "ok",
       ),
     )

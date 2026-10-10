@@ -283,6 +283,16 @@ async function bppMaterialFavoritePresetAction(invoke, token, body) {
 }
 
 // src/shared/bpp-session.ts
+var MfaChallengeError = class extends Error {
+  constructor(challenge) {
+    super(
+      challenge.needs_totp_setup ? "Authenticator koppelen vereist (Microsoft Authenticator)" : "Authenticator-code vereist"
+    );
+    __publicField(this, "challenge");
+    this.name = "MfaChallengeError";
+    this.challenge = challenge;
+  }
+};
 var BppSession = class {
   constructor(opts) {
     __publicField(this, "ws", null);
@@ -404,22 +414,48 @@ var BppSession = class {
     const bootRet = await this.invokeString("API_Bootstrap", []);
     if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap mislukt: ${bootRet}`);
   }
+  applyAuth(info) {
+    this.auth = info;
+    this.storeAuth(info);
+    this.cb.onLogin(info);
+    return info;
+  }
   async bootstrapAndLogin(username, password) {
     await this.whenOpen();
     await this.loadSharedApi();
     const ret = await this.invokeString("API_Login", [username, password]);
     if (ret.startsWith("ERROR")) throw new Error(ret);
     const parsed = JSON.parse(ret);
+    if (parsed.needs_totp || parsed.needs_totp_setup) {
+      if (!parsed.challenge) throw new Error("MFA challenge ontbreekt");
+      throw new MfaChallengeError({
+        needs_totp: parsed.needs_totp,
+        needs_totp_setup: parsed.needs_totp_setup,
+        challenge: parsed.challenge,
+        username: parsed.username || username,
+        totp_secret: parsed.totp_secret,
+        otpauth_uri: parsed.otpauth_uri,
+        authenticator_app: parsed.authenticator_app,
+        authenticator_hint: parsed.authenticator_hint
+      });
+    }
     if (!parsed.ok || !parsed.token) throw new Error("Inloggen mislukt");
-    const info = {
+    return this.applyAuth({
       token: parsed.token,
       username: parsed.username || username,
       display_name: parsed.display_name || username
-    };
-    this.auth = info;
-    this.storeAuth(info);
-    this.cb.onLogin(info);
-    return info;
+    });
+  }
+  async verifyTotp(challenge, code) {
+    const ret = await this.invokeString("API_VerifyTotp", [challenge, code]);
+    if (ret.startsWith("ERROR")) throw new Error(ret.replace(/^ERROR:\s*/, ""));
+    const parsed = JSON.parse(ret);
+    if (!parsed.ok || !parsed.token) throw new Error("Authenticator-bevestiging mislukt");
+    return this.applyAuth({
+      token: parsed.token,
+      username: parsed.username || "admin",
+      display_name: parsed.display_name || parsed.username || "admin"
+    });
   }
   storeAuth(info) {
     storeAuth(this.authKey, info);
@@ -474,6 +510,8 @@ var BppSession = class {
             const ret = await this.invokeString("API_ValidateSession", [stored.token]);
             if (gen !== this.connectGen) return;
             if (ret.startsWith("ERROR")) {
+              this.auth = null;
+              this.storeAuth(null);
               this.cb.onLogout();
               this.cb.onStatus("Sessie verlopen \u2014 log in", "err");
             } else {
@@ -485,12 +523,18 @@ var BppSession = class {
             this.cb.onLogout();
             this.cb.onStatus("Verbonden \u2014 log in", "ok");
           }
+        } catch (err) {
           if (gen !== this.connectGen) return;
+          this.cb.onStatus(err instanceof Error ? err.message : String(err), "err");
+          if (!this.auth) this.cb.onLogout();
+          return;
+        }
+        if (gen !== this.connectGen) return;
+        try {
           await this.cb.onReady?.();
         } catch (err) {
           if (gen !== this.connectGen) return;
           this.cb.onStatus(err instanceof Error ? err.message : String(err), "err");
-          this.cb.onLogout();
         }
       })();
     });
@@ -1547,9 +1591,17 @@ async function syncFavoriteCheckbox() {
   }
 }
 async function setFavoriteForSelection(on) {
-  if (!contextBuildingId || !auth()?.token) return;
+  if (!auth()?.token) throw new Error("Niet ingelogd \u2014 log opnieuw in");
+  if (!contextBuildingId) {
+    throw new Error("Geen projectcontext \u2014 open de catalogus via de geveltekening van een project");
+  }
   const mid = (selectedId || idEl.value || "").trim();
-  if (!mid) return;
+  if (!mid) throw new Error("Sla het materiaal eerst op voordat je favoriet zet");
+  const label = (nameEl.value || catalogIdEl?.value || mid).trim();
+  setStatus(
+    on ? `Toevoegen aan meest gebruikt: ${label}\u2026` : `Verwijderen uit meest gebruikt: ${label}\u2026`,
+    "busy"
+  );
   if (on) {
     if (bppPhase1Enabled()) {
       await bppAddMaterialFavorite(invokeString, auth().token, contextBuildingId, mid);
@@ -1897,6 +1949,14 @@ var connStatusEl = document.getElementById("mat-conn-status");
 var loginPanelEl = document.getElementById("mat-login-panel");
 var loginForm = document.getElementById("mat-login-form");
 var loginBtn = document.getElementById("mat-login-btn");
+var totpForm = document.getElementById("mat-totp-form");
+var totpBtn = document.getElementById("mat-totp-btn");
+var totpCancelBtn = document.getElementById("mat-totp-cancel-btn");
+var totpCodeEl = document.getElementById("mat-totp-code");
+var totpHintEl = document.getElementById("mat-totp-hint");
+var totpSetupEl = document.getElementById("mat-totp-setup");
+var totpSecretEl = document.getElementById("mat-totp-secret");
+var pendingMfa = null;
 var panelEl = document.getElementById("mat-panel");
 var userLabelEl = document.getElementById("mat-user-label");
 var logoutBtn = document.getElementById("mat-logout-btn");
@@ -2012,9 +2072,33 @@ function setConnLed(connected) {
   connLedEl.classList.toggle("connected", connected);
   connLedEl.classList.toggle("disconnected", !connected);
 }
+function resetMatMfaUi() {
+  pendingMfa = null;
+  totpForm.classList.add("hidden");
+  totpSetupEl.classList.add("hidden");
+  loginForm.classList.remove("hidden");
+  totpCodeEl.value = "";
+  totpSecretEl.textContent = "\u2014";
+}
 function showLogin() {
+  resetMatMfaUi();
   loginPanelEl.classList.remove("hidden");
   panelEl.classList.add("hidden");
+}
+function beginMatMfa(challenge) {
+  pendingMfa = challenge;
+  loginForm.classList.add("hidden");
+  totpForm.classList.remove("hidden");
+  totpCodeEl.value = "";
+  if (challenge.needs_totp_setup) {
+    totpSetupEl.classList.remove("hidden");
+    totpSecretEl.textContent = challenge.totp_secret || "\u2014";
+    totpHintEl.innerHTML = "Koppel <strong>Microsoft Authenticator</strong> (handmatige sleutel hieronder) en bevestig met de code.";
+  } else {
+    totpSetupEl.classList.add("hidden");
+    totpHintEl.innerHTML = "Open <strong>Microsoft Authenticator</strong> en vul de 6-cijferige code in.";
+  }
+  totpCodeEl.focus();
 }
 function showAdmin(info) {
   loginPanelEl.classList.add("hidden");
@@ -2529,10 +2613,46 @@ loginForm.addEventListener("submit", async (ev) => {
     }
     setStatus("Beheerder ingelogd", "ok");
   } catch (err) {
-    setStatus(err instanceof Error ? err.message : String(err), "err");
+    if (err instanceof MfaChallengeError) {
+      beginMatMfa(err.challenge);
+      setStatus(err.message, "ok");
+    } else {
+      setStatus(err instanceof Error ? err.message : String(err), "err");
+    }
   } finally {
     loginBtn.disabled = false;
   }
+});
+totpForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const code = totpCodeEl.value.trim();
+  if (!pendingMfa?.challenge || !/^\d{6}$/.test(code)) {
+    setStatus("Vul een geldige 6-cijferige code in", "err");
+    return;
+  }
+  totpBtn.disabled = true;
+  try {
+    const info = await session.verifyTotp(pendingMfa.challenge, code);
+    if (info.username !== "admin") {
+      setStatus("Materiaaleditor is alleen voor gebruiker 'admin'", "err");
+      return;
+    }
+    resetMatMfaUi();
+    offset = 0;
+    if (activeTab !== "studio") {
+      if (deepMaterialId || deepNew) await applyDeepLink();
+      else await loadList();
+    }
+    setStatus("Beheerder ingelogd (2FA)", "ok");
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), "err");
+  } finally {
+    totpBtn.disabled = false;
+  }
+});
+totpCancelBtn.addEventListener("click", () => {
+  resetMatMfaUi();
+  setStatus("Authenticator-stap geannuleerd", "ok");
 });
 logoutBtn.addEventListener("click", async () => {
   try {
@@ -2587,15 +2707,24 @@ newBtn.addEventListener("click", () => {
 });
 clearBtn.addEventListener("click", () => clearEditor());
 favoriteEl?.addEventListener("change", () => {
-  if (!favoriteEl || !contextBuildingId) return;
+  if (!favoriteEl) return;
+  if (!contextBuildingId) {
+    favoriteEl.checked = false;
+    setStatus(
+      "Geen projectcontext \u2014 open de catalogus via \xABMateriaalcatalogus\u2026\xBB op de geveltekening",
+      "err"
+    );
+    return;
+  }
   if (!selectedId && !idEl.value.trim()) {
     favoriteEl.checked = false;
     setStatus("Sla het materiaal eerst op voordat je favoriet zet", "err");
     return;
   }
+  const label = (nameEl.value || catalogIdEl?.value || "materiaal").trim();
   void setFavoriteForSelection(favoriteEl.checked).then(
     () => setStatus(
-      favoriteEl.checked ? "Toegevoegd aan meest gebruikt" : "Verwijderd uit meest gebruikt",
+      favoriteEl.checked ? `Toegevoegd aan meest gebruikt: ${label}` : `Verwijderd uit meest gebruikt: ${label}`,
       "ok"
     )
   ).catch((err) => {

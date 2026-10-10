@@ -170,3 +170,33 @@ export function isLengthQuantityRubriek(nrOrName) {
   const rub = rubriekByName(n) || MATERIAL_RUBRIEKEN.find((r) => n.includes("kier"));
   return Boolean(rub && rub.nr === 9);
 }
+
+/**
+ * Kozijn-tekentool: alleen materialen uit subrubriek «Kozijnen»
+ * (rubriek 4 · Lichte paneelconstr.…), niet HSB/panelen/glas e.d.
+ * @param {{ category?: string | null, master_category?: string | null, rubriek_nr?: number | null, name?: string | null } | null | undefined} mat
+ */
+export function isKozijnFrameMaterial(mat) {
+  if (!mat || typeof mat !== "object") return false;
+  const cat = String(mat.category || "").trim().toLowerCase();
+  if (cat.includes("kozijn")) return true;
+  // Fallback: sommige payloads zetten alleen de naam/catalogus-id.
+  const name = String(mat.name || "").trim().toLowerCase();
+  if (/\bkozijnen?\b/.test(name)) return true;
+  return false;
+}
+
+/**
+ * Glas voor «Vul glas»: rubriek Glas of subrubriek/naam met «glas».
+ * @param {{ category?: string | null, master_category?: string | null, rubriek_nr?: number | null, name?: string | null } | null | undefined} mat
+ */
+export function isGlassFrameMaterial(mat) {
+  if (!mat || typeof mat !== "object") return false;
+  if (mat.rubriek_nr != null && Number(mat.rubriek_nr) === 2) return true;
+  const master = String(mat.master_category || "").trim().toLowerCase();
+  if (master === "glas" || master.startsWith("glas")) return true;
+  const cat = String(mat.category || "").trim().toLowerCase();
+  if (cat.includes("glas")) return true;
+  const name = String(mat.name || "").trim().toLowerCase();
+  return /\bglas\b/.test(name);
+}

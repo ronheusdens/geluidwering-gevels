@@ -247,10 +247,13 @@ export function mountProjectMenu(root: HTMLElement, host: ProjectMenuHost): Proj
         const btn = document.createElement("button");
         btn.type = "button";
         const title = projectTitle(p);
-        btn.textContent = p.customer_name ? `${title} — ${p.customer_name}` : title;
+        const finished = p.project_status === "PROJECT_FINISHED";
+        const who = p.customer_name ? ` — ${p.customer_name}` : "";
+        btn.textContent = finished ? `${title}${who} · afgerond` : `${title}${who}`;
         if (p.project_status) {
           btn.title = p.project_status;
         }
+        if (finished) btn.classList.add("project-open-finished");
         btn.addEventListener("click", () => {
           dialogEl.close();
           void openProject(p.building_id);

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Stilte advies en meten — Tekeninganalyse</title>
-  <link rel="stylesheet" href="/styles.css?v=0.72-tools-sidebar" />
+  <link rel="stylesheet" href="/styles.css?v=0.85-process-dock" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body class="engineer-body">
@@ -259,10 +259,7 @@
 
           <aside class="engineer-sidebar">
             <fieldset id="fm-mark-room-fieldset">
-              <legend>Ruimte</legend>
-              <label class="block-label">Omschrijving
-                <input id="fm-room-label" placeholder="bijv. slaapkamer 1" />
-              </label>
+              <legend id="fm-mark-room-legend">Ruimte</legend>
               <div class="vg-vr-row" id="fm-vg-vr-row">
                 <label class="discovery-inline">VG
                   <input id="fm-room-vg" type="number" min="1" step="1" inputmode="numeric" placeholder="1" />
@@ -322,38 +319,57 @@
                 <p class="hint" id="fm-expected-ori-hint">Verplicht bij opslaan. Open een opgeslagen ruimte in de lijst om oriëntaties te wijzigen — het blok hierboven komt dan in beeld. CL/Cg per oriëntatie gaan mee naar GA.</p>
               </div>
               <div id="fm-material-block" class="hidden">
-                <label class="block-label">Meest gebruikt (dit project)
+                <p class="hint" id="fm-picklist-intro">Stel de materialenlijst voor <strong>dit project</strong> samen. Per gevel/project anders — later koppel je alleen uit deze picklist.</p>
+                <label class="block-label" id="fm-material-favorite-label">Project-picklist
                   <select id="fm-material-favorite" disabled>
-                    <option value="">— geen favorieten —</option>
+                    <option value="">— geen materialen in picklist —</option>
                   </select>
                 </label>
-                <div class="actions fm-favorite-actions">
-                  <button type="button" id="fm-favorite-add-btn" class="secondary" disabled title="Voeg het geselecteerde materiaal toe aan meest gebruikt">+ Meest gebruikt</button>
-                  <button type="button" id="fm-favorite-remove-btn" class="secondary" disabled title="Verwijder uit meest gebruikt">−</button>
-                  <button type="button" id="fm-preset-save-btn" class="secondary" disabled title="Huidige favorieten opslaan als benoemde preset">Preset opslaan…</button>
-                  <button type="button" id="fm-preset-apply-btn" class="secondary" disabled title="Preset toepassen op dit project">Preset laden…</button>
+                <div class="actions fm-favorite-actions" id="fm-favorite-actions">
+                  <button type="button" id="fm-favorite-add-btn" class="secondary" disabled title="Voeg het geselecteerde catalogusmateriaal toe aan de project-picklist">+ Aan picklist</button>
+                  <button type="button" id="fm-favorite-remove-btn" class="secondary" disabled title="Verwijder uit picklist">−</button>
+                  <button type="button" id="fm-preset-save-btn" class="secondary" disabled title="Huidige picklist opslaan als benoemde preset">Preset opslaan…</button>
+                  <button type="button" id="fm-preset-apply-btn" class="secondary" disabled title="Preset laden als picklist voor dit project">Preset laden…</button>
                 </div>
-                <label class="block-label">Rubriek
-                  <select id="fm-material-category">
-                    <option value="">— kies rubriek —</option>
-                  </select>
-                </label>
-                <label class="block-label">Subrubriek
-                  <select id="fm-material-subcategory" disabled>
-                    <option value="">0 - Alle subrubrieken</option>
-                  </select>
-                </label>
-                <label class="block-label">Filter naam
-                  <input id="fm-material-filter" type="search" placeholder="zoek in naam / catalogus-id" autocomplete="off" />
-                </label>
-                <label class="block-label">Materiaal (naam)
-                  <select id="fm-material-id" disabled>
-                    <option value="">— kies rubriek eerst —</option>
-                  </select>
-                </label>
-                <div class="actions fm-material-actions">
-                  <button type="button" id="fm-open-mat-btn" class="secondary" title="Opent de volledige materiaalcatalogus">Materiaalcatalogus…</button>
-                  <button type="button" id="fm-custom-mat-toggle" class="secondary" title="Nieuw materiaal toevoegen via de volledige catalogus">Nieuw materiaal…</button>
+                <div id="fm-regel2-kier" class="fm-kier-suggest">
+                  <label class="inline-check">
+                    <input type="checkbox" id="fm-regel2-kier-cb" checked />
+                    Kierdichting voor dit vlak (omtrek)
+                  </label>
+                  <p class="hint" id="fm-regel2-kier-hint">
+                    <strong>Verwerkingsregel 2:</strong> rond een kozijn wordt kierdichting automatisch
+                    toegevoegd bij stap 3 (materiaal koppelen), met het type hieronder. Verschijnt in
+                    stap 5 (GA-materiaallijst) als length-bijdrage.
+                  </p>
+                  <label class="block-label">Kierdichtingsmateriaal
+                    <select id="fm-regel2-kier-mat">
+                      <option value="">D02408 (standaard)</option>
+                    </select>
+                  </label>
+                </div>
+                <div id="fm-material-catalog-browse">
+                  <label class="block-label">Rubriek
+                    <select id="fm-material-category">
+                      <option value="">— kies rubriek —</option>
+                    </select>
+                  </label>
+                  <label class="block-label">Subrubriek
+                    <select id="fm-material-subcategory" disabled>
+                      <option value="">0 - Alle subrubrieken</option>
+                    </select>
+                  </label>
+                  <label class="block-label">Filter naam
+                    <input id="fm-material-filter" type="search" placeholder="zoek in naam / catalogus-id" autocomplete="off" />
+                  </label>
+                  <label class="block-label">Materiaal (naam)
+                    <select id="fm-material-id" disabled>
+                      <option value="">— kies rubriek eerst —</option>
+                    </select>
+                  </label>
+                  <div class="actions fm-material-actions">
+                    <button type="button" id="fm-open-mat-btn" class="secondary" title="Opent de volledige materiaalcatalogus">Materiaalcatalogus…</button>
+                    <button type="button" id="fm-custom-mat-toggle" class="secondary" title="Nieuw materiaal toevoegen via de volledige catalogus">Nieuw materiaal…</button>
+                  </div>
                 </div>
                 <section class="fm-replace-mat panel-inset" id="fm-replace-mat" aria-label="Materiaal vervangen in project">
                   <label class="inline-check">
@@ -395,21 +411,24 @@
                     <span class="fm-spectrum-val fm-spectrum-val--total" id="fm-ra">—</span>
                   </div>
                 </div>
-                <p class="hint">Materiaal is optioneel bij opslaan (oranje led in de lijst = materiaal/oriëntatie, niet de schaal). Koppel later voor de berekening; alleen complete componenten (groen) zijn kiesbaar bij vlakdelen.</p>
+                <p class="hint" id="fm-material-block-hint">Kies uit de catalogus en voeg toe aan de picklist. Materiaal koppelen = modus 3; finale oppervlakten (+/−) = modus 4.</p>
               </div>
-              <label class="block-label">Verdieping
-                <select id="fm-room-level">
-                  <option value="SOUTERRAIN">Souterrain</option>
-                  <option value="GROUND">Begane vloer</option>
-                  <option value="BEL_ETAGE">Bel-etage</option>
-                  <option value="FIRST">1e verdieping</option>
-                  <option value="SECOND">2e verdieping</option>
-                  <option value="THIRD">3e verdieping</option>
-                  <option value="ROOF">Zolder</option>
-                  <option value="OTHER">Overig</option>
-                </select>
-              </label>
-              <p class="hint" id="fm-room-pending-hint">Gebruik Teken ruimte in Gereedschap, klik hoekpunten, sluit daarna af en sla op.</p>
+
+              <div id="fm-assign-mat-block" class="fm-assign-mat-block hidden">
+                <p class="hint">Selecteer één of meer componenten in de lijst (checkbox). Kies een materiaal uit de project-picklist en klik <strong>Toewijzen</strong>. Eerste toewijzing vraagt geen bevestiging; vervanging wel.</p>
+                <p class="hint" id="fm-assign-regel2-hint">Verwerkingsregel 2: bij kozijnmateriaal wordt kierdichting (omtrek) automatisch gezet volgens de picklist-instelling.</p>
+                <label class="block-label">Picklist (dit project)
+                  <select id="fm-assign-picklist" disabled>
+                    <option value="">— stel eerst een picklist samen —</option>
+                  </select>
+                </label>
+                <div class="actions">
+                  <button type="button" id="fm-assign-mat-btn" disabled>Toewijzen aan selectie</button>
+                  <button type="button" id="fm-assign-clear-sel-btn" class="secondary">Selectie wissen</button>
+                </div>
+                <p class="hint" id="fm-assign-sel-hint">0 componenten geselecteerd</p>
+              </div>
+
               <div id="fm-kier-suggest" class="fm-kier-suggest hidden">
                 <label class="inline-check">
                   <input type="checkbox" id="fm-kier-suggest-cb" />
@@ -423,25 +442,43 @@
                 </label>
                 <button type="button" id="fm-kier-suggest-new" class="secondary">Nieuw materiaal…</button>
               </div>
-              <div class="fm-component-actions">
-                <div class="fm-action-group" role="group" aria-label="Tekenen">
-                  <span class="fm-action-group-label">Tekenen</span>
-                  <div class="fm-action-group-btns">
-                    <button type="button" id="fm-room-draw-btn">Teken</button>
-                    <button type="button" id="fm-room-close-btn" class="secondary" disabled>Sluit</button>
-                    <button type="button" id="fm-room-simplify-btn" class="secondary" disabled title="Dunt de omtrek (minder ankers)">Vereenvoudig</button>
-                    <button type="button" id="fm-discover-btn-side" class="secondary">Ontdek</button>
+              <div id="fm-draw-ops-cluster" class="fm-draw-ops-cluster">
+                <label class="block-label" id="fm-room-label-wrap">Omschrijving
+                  <input id="fm-room-label" placeholder="bijv. slaapkamer 1" />
+                </label>
+                <p class="hint" id="fm-room-pending-hint">Gebruik Teken ruimte in Gereedschap, klik hoekpunten, sluit daarna af en sla op.</p>
+                <div class="fm-component-actions" id="fm-component-actions">
+                  <div class="fm-action-group" role="group" aria-label="Tekenen">
+                    <span class="fm-action-group-label">Tekenen</span>
+                    <div class="fm-action-group-btns">
+                      <button type="button" id="fm-room-draw-btn">Teken</button>
+                      <button type="button" id="fm-room-close-btn" class="secondary" disabled>Sluit</button>
+                      <button type="button" id="fm-room-simplify-btn" class="secondary" disabled title="Dunt de omtrek (minder ankers)">Vereenvoudig</button>
+                      <button type="button" id="fm-discover-btn-side" class="secondary">Ontdek</button>
+                    </div>
                   </div>
-                </div>
-                <div class="fm-action-group" role="group" aria-label="Bewerkingen">
-                  <span class="fm-action-group-label">Bewerkingen</span>
-                  <div class="fm-action-group-btns">
-                    <button type="button" id="fm-room-duplicate-btn" class="secondary" disabled title="Kopieën rond het origineel (zelfde materiaal)">Dupliceer…</button>
-                    <button type="button" id="fm-room-clear-btn" class="secondary" disabled title="Huidige markering / bewerking annuleren">Wissen</button>
-                    <button type="button" id="fm-room-delete-btn" class="secondary fm-btn-danger" disabled title="Opgeslagen component permanent verwijderen">Verwijderen</button>
+                  <div class="fm-action-group" role="group" aria-label="Bewerkingen">
+                    <span class="fm-action-group-label">Bewerkingen</span>
+                    <div class="fm-action-group-btns">
+                      <button type="button" id="fm-room-duplicate-btn" class="secondary" disabled title="Kopieën rond het origineel (zelfde materiaal)">Dupliceer…</button>
+                      <button type="button" id="fm-room-clear-btn" class="secondary" disabled title="Huidige markering / bewerking annuleren">Wissen</button>
+                      <button type="button" id="fm-room-delete-btn" class="secondary fm-btn-danger" disabled title="Opgeslagen component permanent verwijderen">Verwijderen</button>
+                    </div>
                   </div>
+                  <button type="button" id="fm-room-save-btn" class="fm-room-save-btn" disabled>Opslaan</button>
                 </div>
-                <button type="button" id="fm-room-save-btn" class="fm-room-save-btn" disabled>Opslaan</button>
+                <label class="block-label" id="fm-room-level-wrap">Verdieping
+                  <select id="fm-room-level">
+                    <option value="SOUTERRAIN">Souterrain</option>
+                    <option value="GROUND">Begane vloer</option>
+                    <option value="BEL_ETAGE">Bel-etage</option>
+                    <option value="FIRST">1e verdieping</option>
+                    <option value="SECOND">2e verdieping</option>
+                    <option value="THIRD">3e verdieping</option>
+                    <option value="ROOF">Zolder</option>
+                    <option value="OTHER">Overig</option>
+                  </select>
+                </label>
               </div>
             </fieldset>
 
@@ -456,6 +493,7 @@
                     <button type="button" class="secondary tool-mode-btn active" data-tool="off">Uit</button>
                     <button type="button" class="secondary tool-mode-btn" data-tool="length">Lengte (m)</button>
                     <button type="button" class="secondary tool-mode-btn" data-tool="room">Teken ruimte</button>
+                    <button type="button" class="secondary tool-mode-btn" data-tool="kozijn" title="Kozijnbalken als hartlijnen; breedte per lijn; vul glas">Kozijn</button>
                   </div>
                   <button type="button" id="fm-tool-clear-btn" class="secondary">Wissen</button>
                 </div>
@@ -470,6 +508,19 @@
                     <input id="fm-tool-area-mm2" type="text" readonly value="—" />
                   </label>
                 </div>
+                <div id="fm-kozijn-panel" class="fm-kozijn-panel hidden">
+                  <label class="discovery-inline">Balkbreedte (mm)
+                    <input id="fm-kozijn-width-mm" type="number" min="10" max="300" step="1" value="67" />
+                  </label>
+                  <p class="hint" id="fm-kozijn-closure">Sluitstatus: —</p>
+                  <p class="hint" id="fm-kozijn-area">Kozijnopp.: — · Opening: —</p>
+                  <div class="fm-action-group-btns">
+                    <button type="button" id="fm-kozijn-new-line" class="secondary">Nieuwe lijn</button>
+                    <button type="button" id="fm-kozijn-fill-glass" class="secondary" disabled title="Kies glasmateriaal, selecteer kozijn, vul alle ingesloten vlakken">Vul glas</button>
+                    <button type="button" id="fm-kozijn-save" disabled title="Kader of dwarsbalken opslaan">Opslaan kozijn</button>
+                  </div>
+                  <p class="hint">1) Kader tekenen → snap op <strong>start</strong> → Opslaan. 2) Dwarsbalken: kader → kader (groen); <strong>dubbelklik</strong> = opslaan. 3) Glasmateriaal + kozijn selecteren → <strong>Vul glas</strong>.</p>
+                </div>
                 <p class="hint" id="fm-tool-hint">Zet eerst de schaal, meet daarna een lengte of teken een ruimte — omtrek/oppervlakte volgen uit de polygoon.</p>
               </div>
             </details>
@@ -480,7 +531,7 @@
                 <span class="tools-panel-chevron" aria-hidden="true"></span>
               </summary>
               <div class="compose-panel-body">
-                <p class="hint" id="fm-compose-hint">Selecteer ≥2 gesloten componenten in de lijst hieronder. Grootste = buitencontour; overige moeten er volledig in passen. Zet per deel <strong>+</strong> of <strong>−</strong>, kies een materiaal hierboven, en klik <strong>Toepassen &amp; opslaan</strong>. Het netto-resultaat erft VG/VR; de originelen blijven in de lijst (groene markering) en zijn via <strong>Bronnen</strong> op het resultaat te vinden. De selectie wordt gewist.</p>
+                <p class="hint" id="fm-compose-hint"><strong>Optioneel.</strong> Standaard geldt verwerkingsregel 1 automatisch: gevel ⊃ kozijn ⊃ ruit (geen ± nodig). Regel 2 (kier rond kozijn) gebeurt bij stap 3. Gebruik deze stap alleen voor uitzonderingen — bijv. aangrenzende muurdelen verenigen (<strong>+</strong>/<strong>+</strong>) of een handmatige snede. Selecteer ≥2 gesloten componenten, zet <strong>+</strong>/<strong>−</strong>, klik <strong>Toepassen &amp; opslaan</strong>. Aftrekken mag alleen binnen een <strong>+</strong>-contour. Originelen blijven in de lijst (Bronnen).</p>
                 <ul id="fm-compose-parts" class="compose-parts-list" aria-label="Tekens per component"></ul>
                 <div class="actions actions-stack">
                   <button type="button" id="fm-set-apply-btn">Toepassen &amp; opslaan</button>
@@ -496,12 +547,23 @@
                   <span id="fm-saved-heading-text">Opgeslagen componenten</span>
                   <span id="fm-room-count" class="region-count-badge">0</span>
                 </span>
-                <label class="saved-vr-filter hidden" for="fm-room-vr-filter">
-                  <span class="saved-vr-filter-label">VR</span>
-                  <select id="fm-room-vr-filter" aria-label="Filter op verblijfsruimte (alle plattegrond-VR’s)">
-                    <option value="">Alle VR's</option>
-                  </select>
-                </label>
+                <span class="saved-list-filters">
+                  <label class="saved-vr-filter hidden" for="fm-room-vr-filter">
+                    <span class="saved-vr-filter-label">VR</span>
+                    <select id="fm-room-vr-filter" aria-label="Filter op verblijfsruimte (alle plattegrond-VR’s)">
+                      <option value="">Alle VR's</option>
+                    </select>
+                  </label>
+                  <label class="saved-groep-filter hidden" for="fm-room-groep-filter">
+                    <span class="saved-vr-filter-label">Groep</span>
+                    <select id="fm-room-groep-filter" aria-label="Filter op gevelgroep">
+                      <option value="">Alle</option>
+                      <option value="1">1</option>
+                      <option value="2">2</option>
+                      <option value="3">3</option>
+                    </select>
+                  </label>
+                </span>
               </h3>
               <p class="hint" id="fm-rooms-hint">Elke component toont oppervlakte (m²) en omtrek (m) bij ingestelde schaal.</p>
               <ul id="fm-room-list" class="drawing-list"></ul>
@@ -511,6 +573,47 @@
       </section>
     </section>
   </main>
-  <script type="module" src="/floormap.js?v=0.72-tools-sidebar"></script>
+
+  <!-- Always-on-top processtappen (gevel); buiten sidebar zodat scrollen niet verstopt. -->
+  <aside id="fm-work-mode" class="fm-process-dock hidden" aria-label="Processtappen gevel" hidden>
+    <header class="fm-process-dock-head" id="fm-process-dock-drag" title="Versleep om te verplaatsen">
+      <p class="fm-work-mode-q">Processtappen</p>
+      <button
+        type="button"
+        id="fm-process-dock-collapse"
+        class="fm-process-dock-collapse"
+        aria-expanded="true"
+        aria-controls="fm-process-dock-body"
+        title="Inklappen"
+      >−</button>
+    </header>
+    <div class="fm-process-dock-body" id="fm-process-dock-body">
+      <p class="hint fm-process-dock-hint">Kern van de gevel-flow — altijd bereikbaar.</p>
+      <div class="fm-work-mode-btns" role="radiogroup" aria-label="Kies processtap">
+        <button type="button" class="fm-work-mode-btn" data-mode="picklist" aria-pressed="false">
+          <span class="fm-work-mode-num">1</span>
+          <span class="fm-work-mode-txt">Picklist voor dit project samenstellen</span>
+        </button>
+        <button type="button" class="fm-work-mode-btn active" data-mode="draw" aria-pressed="true">
+          <span class="fm-work-mode-num">2</span>
+          <span class="fm-work-mode-txt">Componenten tekenen</span>
+        </button>
+        <button type="button" class="fm-work-mode-btn" data-mode="assign" aria-pressed="false">
+          <span class="fm-work-mode-num">3</span>
+          <span class="fm-work-mode-txt">Materiaal koppelen</span>
+        </button>
+        <button type="button" class="fm-work-mode-btn" data-mode="compose" aria-pressed="false">
+          <span class="fm-work-mode-num">4</span>
+          <span class="fm-work-mode-txt">Compositie (+/−) — optioneel</span>
+        </button>
+        <button type="button" class="fm-work-mode-btn fm-work-mode-btn--jump" data-mode="ga" aria-pressed="false" title="Open de GA-berekening voor dit project">
+          <span class="fm-work-mode-num">5</span>
+          <span class="fm-work-mode-txt">GA-berekening</span>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <script type="module" src="/floormap.js?v=0.92-regel2-kier"></script>
 </body>
 </html>

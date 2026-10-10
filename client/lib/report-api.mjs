@@ -37,9 +37,39 @@ import {
   resolveSpectrumForReport,
   spectrumDisplayLabel,
 } from "./geluidbelasting-spectra.mjs";
+import {
+  CR_DB,
+  combineRprime,
+  computeVrGa,
+  partialRas,
+  roomCorrectionDb,
+  round1,
+} from "./ga-calc.mjs";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Compass order for gevelvlakken in the rapport (DGMR-stijl). */
+const ORI_REPORT_ORDER = ["N", "NO", "O", "ZO", "Z", "ZW", "W", "NW"];
+const ORI_GEVEL_LABEL = {
+  N: "noordgevel",
+  NO: "noordoostgevel",
+  O: "oostgevel",
+  ZO: "zuidoostgevel",
+  Z: "zuidgevel",
+  ZW: "zuidwestgevel",
+  W: "westgevel",
+  NW: "noordwestgevel",
+};
+const REPORT_BANDS_HZ = [63, 125, 250, 500, 1000, 2000];
+const REPORT_BAND_KEYS = [
+  "r_63_hz",
+  "r_125_hz",
+  "r_250_hz",
+  "r_500_hz",
+  "r_1000_hz",
+  "r_2000_hz",
+];
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(__dirname, "..", "..");
@@ -47,7 +77,7 @@ const DEFAULT_PROJECTS_ROOT = path.join(APP_ROOT, "data", "projecten");
 const LOGO_PATH = path.join(__dirname, "..", "public", "assets", "stilte-logo.jpg");
 const FIRM_NAME = "Stilte advies en meten";
 /** Bump when report HTML template changes — forces a new content hash vs old files. */
-const REPORT_TEMPLATE_VERSION = "2026-08-24-kier-vr-sort";
+const REPORT_TEMPLATE_VERSION = "2026-10-10-formules-og";
 
 let cachedLogoDataUri = null;
 
@@ -110,16 +140,29 @@ function esc(s) {
     .replace(/"/g, "&quot;");
 }
 
-/** VR 1, 2, 3A, 3B, 4 — numeric prefix first, then the rest of vr_nr. */
-function compareVrNr(a, b) {
+/** Leading integer from VG/VR labels («3», «3A», «VG 2»). */
+function leadingNr(raw) {
+  const s = String(raw ?? "").trim();
+  const m = s.match(/(\d+)/);
+  return m ? Number(m[1]) : Number.POSITIVE_INFINITY;
+}
+
+/** VG then VR (numeric), for report tables and detail blocks. */
+function compareVgThenVr(a, b) {
+  const vgA = leadingNr(a?.vg_nr);
+  const vgB = leadingNr(b?.vg_nr);
+  if (vgA !== vgB) return vgA - vgB;
   const sa = String(a?.vr_nr || "").trim();
   const sb = String(b?.vr_nr || "").trim();
-  const na = sa.match(/^(\d+)/);
-  const nb = sb.match(/^(\d+)/);
-  const ia = na ? Number(na[1]) : Number.POSITIVE_INFINITY;
-  const ib = nb ? Number(nb[1]) : Number.POSITIVE_INFINITY;
+  const ia = leadingNr(sa);
+  const ib = leadingNr(sb);
   if (ia !== ib) return ia - ib;
   return sa.localeCompare(sb, "nl", { numeric: true, sensitivity: "base" });
+}
+
+/** @deprecated use compareVgThenVr — kept for call sites that only have vr_nr. */
+function compareVrNr(a, b) {
+  return compareVgThenVr(a, b);
 }
 
 function isLengthVlak(v) {
@@ -141,10 +184,13 @@ function vlakQtyCell(v) {
 
 /** Strip volatile timestamp line so identical report data yields the same hash. */
 function canonicalContent(html) {
-  return html.replace(/data-generated-at="[^"]*"/g, 'data-generated-at=""').replace(
-    /Gegenereerd: [^<]+/g,
-    "Gegenereerd:",
-  );
+  // Strip volatile timestamp in footer (last span in .page-foot) for identical-hash compare.
+  return html
+    .replace(/data-generated-at="[^"]*"/g, 'data-generated-at=""')
+    .replace(
+      /(<footer class="page-foot">[\s\S]*?<span>[^<]*<\/span>\s*<span>)[^<]*(<\/span>)/,
+      "$1$2",
+    );
 }
 
 function sha256(text) {
@@ -349,16 +395,26 @@ async function loadReportModel(client, buildingId, variantId) {
                   ELSE NULL
                 END AS length_m,
                 COALESCE(v.orientatie, '') AS orientatie,
-                v.cl_db,
-                v.cg_db,
+                COALESCE(gg.cl_db, v.cl_db) AS cl_db,
+                COALESCE(gg.cg_db, v.cg_db) AS cg_db,
                 v.meenemen_gak,
+                v.gevelgroep_id::text AS gevelgroep_id,
+                COALESCE(gg.groep_nr::text, '') AS gevelgroep_nr,
+                COALESCE(gg.label, '') AS gevelgroep_label,
                 v.facade_subsection_id::text AS facade_subsection_id,
                 COALESCE(m.id::text, '') AS material_id,
                 COALESCE(m.catalog_id, '') AS catalog_id,
                 COALESCE(m.name, '') AS material_name,
                 COALESCE(m.master_category, '') AS master_category,
                 COALESCE(m.source, '') AS material_source,
-                m.ra_dba,
+                COALESCE(
+                  m.ra_dba,
+                  CASE
+                    WHEN COALESCE(matsrc.src->>'ra_dba', '') ~ '^-?\\d'
+                    THEN (matsrc.src->>'ra_dba')::double precision
+                    ELSE NULL
+                  END
+                ) AS ra_dba,
                 m.rw_db,
                 m.c_db,
                 m.ctr_db,
@@ -372,6 +428,8 @@ async function loadReportModel(client, buildingId, variantId) {
          FROM app_gevelwering.vlak v
          LEFT JOIN app_gevelwering.drawing_subsection s
            ON s.id = v.facade_subsection_id
+         LEFT JOIN app_gevelwering.gevelgroep gg
+           ON gg.id = v.gevelgroep_id
          LEFT JOIN LATERAL (
            SELECT CASE
              WHEN COALESCE(v.analysis->>'quantity_kind', 'area') = 'length'
@@ -431,6 +489,7 @@ async function loadReportModel(client, buildingId, variantId) {
       const { room_analysis: _ra, ...roomRest } = r;
       vrs.push({
         ...roomRest,
+        verblijfsgebied_id: g.verblijfsgebied_id,
         vg_omschrijving: g.omschrijving,
         vlakken: vlQ.rows,
         expected_orientaties: expectedOrientaties.length ? expectedOrientaties : fromVlakken,
@@ -438,7 +497,7 @@ async function loadReportModel(client, buildingId, variantId) {
     }
   }
 
-  vrs.sort(compareVrNr);
+  vrs.sort(compareVgThenVr);
 
   return {
     building,
@@ -446,6 +505,85 @@ async function loadReportModel(client, buildingId, variantId) {
     verblijfsgebieden: vgQ.rows,
     verblijfsruimten: vrs,
   };
+}
+
+/** Parse numeric DB/JSON fields; null/"" must not become 0 via Number(null). */
+function parseReportNum(v) {
+  if (v == null || v === "") return NaN;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+/**
+ * VG-samenvatting à la DGMR: Stot/Vtot over VR’s, GA;k oppervlaktegewogen
+ * (NEN 5077 transmissiegemiddelde van GA;k,i met Si = vloeroppervlak).
+ * VR’s zonder opgeslagen GA;k worden niet in het gewogen gemiddelde meegenomen
+ * (Number(null)===0 zou anders ~0 dB injecteren en de VG-toetsing vernietigen).
+ */
+function aggregateVerblijfsgebieden(verblijfsgebieden, verblijfsruimten, lb, grens) {
+  const byVg = new Map();
+  for (const r of verblijfsruimten || []) {
+    const id = r.verblijfsgebied_id;
+    if (!id) continue;
+    if (!byVg.has(id)) byVg.set(id, []);
+    byVg.get(id).push(r);
+  }
+  return (verblijfsgebieden || []).map((g) => {
+    const rooms = byVg.get(g.verblijfsgebied_id) || [];
+    let stot = 0;
+    let vtot = 0;
+    let sumTau = 0;
+    let sumSGak = 0;
+    let roomsWithGak = 0;
+    for (const r of rooms) {
+      const s = parseReportNum(r.vloer_m2);
+      const v = parseReportNum(r.volume_m3);
+      if (Number.isFinite(s) && s > 0) stot += s;
+      if (Number.isFinite(v) && v > 0) vtot += v;
+      const gak = parseReportNum(r.gak_dba);
+      if (Number.isFinite(s) && s > 0 && Number.isFinite(gak)) {
+        roomsWithGak += 1;
+        sumSGak += s;
+        sumTau += s * 10 ** (-gak / 10);
+      }
+    }
+    const gak =
+      roomsWithGak > 0 && sumSGak > 0 && sumTau > 0
+        ? -10 * Math.log10(sumTau / sumSGak)
+        : null;
+    const ok = voldoet(lb, gak, grens);
+    const nr =
+      rooms.map((r) => String(r.vg_nr || "").trim()).find(Boolean) ||
+      String(g.omschrijving || "").match(/\bVG\s*(\d+)/i)?.[1] ||
+      "";
+    const oms = String(g.omschrijving || "").trim();
+    let label = oms || "Verblijfsgebied";
+    if (nr && oms && !new RegExp(`\\bVG\\s*${nr}\\b`, "i").test(oms)) {
+      label = `VG ${nr} · ${oms}`;
+    } else if (nr && !oms) {
+      label = `VG ${nr}`;
+    }
+    return {
+      verblijfsgebied_id: g.verblijfsgebied_id,
+      vg_nr: nr,
+      sort_order: g.sort_order,
+      label,
+      stot_m2: stot > 0 ? stot : null,
+      vtot_m3: vtot > 0 ? vtot : null,
+      gak_dba: gak,
+      voldoet: ok,
+      vr_count: rooms.length,
+      vr_with_gak: roomsWithGak,
+    };
+  }).sort((a, b) => {
+    const ia = leadingNr(a.vg_nr);
+    const ib = leadingNr(b.vg_nr);
+    if (ia !== ib) return ia - ib;
+    const soA = Number(a.sort_order);
+    const soB = Number(b.sort_order);
+    if (Number.isFinite(soA) && Number.isFinite(soB) && soA !== soB) return soA - soB;
+    return String(a.label).localeCompare(String(b.label), "nl", { numeric: true });
+  });
 }
 
 function grensForFunctie(functie) {
@@ -471,6 +609,255 @@ function spectrumBandCells(m) {
     m.r_4000_hz,
   ];
   return bands.map((b) => `<td class="num">${esc(fmtNum(b, 0))}</td>`).join("");
+}
+
+function oriGevelLabel(code) {
+  const c = String(code || "").trim().toUpperCase();
+  return ORI_GEVEL_LABEL[c] || (c && c !== "_" ? `${c.toLowerCase()}gevel` : "gevel");
+}
+
+function compareOriReport(a, b) {
+  const ia = ORI_REPORT_ORDER.indexOf(String(a || "").toUpperCase());
+  const ib = ORI_REPORT_ORDER.indexOf(String(b || "").toUpperCase());
+  const aa = ia < 0 ? 99 : ia;
+  const bb = ib < 0 ? 99 : ib;
+  if (aa !== bb) return aa - bb;
+  return String(a || "").localeCompare(String(b || ""), "nl");
+}
+
+function truthyMeenemen(v) {
+  return !(v === false || v === "f" || v === "false" || v === 0 || v === "0");
+}
+
+/** Group vlakken like ga-calc: gevelgroep, else ori+CL+Cg. */
+function groupVlakkenByFacade(vlakken) {
+  const map = new Map();
+  for (const v of vlakken || []) {
+    const ori = String(v.orientatie || "").trim().toUpperCase() || "_";
+    const cl = Number(v.cl_db) || 0;
+    const cg = Number(v.cg_db) || 0;
+    const gg = String(v.gevelgroep_id || "").trim();
+    const key = gg ? `g:${gg}` : `${ori}\0${cl}\0${cg}`;
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        orientatie: ori,
+        cl_db: cl,
+        cg_db: cg,
+        gevelgroep_id: gg || null,
+        gevelgroep_nr: String(v.gevelgroep_nr || "").trim(),
+        gevelgroep_label: String(v.gevelgroep_label || "").trim(),
+        members: [],
+      });
+    }
+    map.get(key).members.push(v);
+  }
+  return [...map.values()].sort((a, b) => {
+    const o = compareOriReport(a.orientatie, b.orientatie);
+    if (o !== 0) return o;
+    const na = Number(a.gevelgroep_nr) || 0;
+    const nb = Number(b.gevelgroep_nr) || 0;
+    if (na !== nb) return na - nb;
+    return a.cl_db - b.cl_db || a.cg_db - b.cg_db;
+  });
+}
+
+function bandPartial(R, sRef, q) {
+  const r = Number(R);
+  if (!Number.isFinite(r) || !(sRef > 0) || !(q > 0)) return null;
+  return r + 10 * Math.log10(sRef / q);
+}
+
+/**
+ * DGMR-stijl «Vlak N: …gevel» met CL/Cg, elementtabel (S/lengte/RA/partiële banden),
+ * Totaal S + R′ + GA per oriëntatie/gevelgroep.
+ */
+function renderFacadeVlakSections(room, lb) {
+  const groups = groupVlakkenByFacade(room.vlakken);
+  if (!groups.length) {
+    return `<p class="missing">Geen gevelvlakken</p>`;
+  }
+  const V = Number(room.volume_m3);
+  const T = Number(room.t0_s) > 0 ? Number(room.t0_s) : 0.5;
+  const bandHeaders = REPORT_BANDS_HZ.map((hz) => `<th class="num">${hz}</th>`).join("");
+
+  return groups
+    .map((g, idx) => {
+      const els = [];
+      for (const v of g.members) {
+        const kind = String(v.quantity_kind || "area") === "length" ? "length" : "area";
+        const q =
+          kind === "length"
+            ? parseReportNum(v.length_m)
+            : parseReportNum(v.area_m2);
+        const ra = parseReportNum(v.ra_dba);
+        if (!(q > 0) || !Number.isFinite(ra)) continue;
+        els.push({ v, kind, q, ra });
+      }
+      const sOri = els.reduce((a, e) => a + (e.kind === "area" ? e.q : 0), 0);
+      const ruimte = sOri > 0 ? roomCorrectionDb(V, T, sOri) : null;
+      const rasList = els
+        .map((e) => (sOri > 0 ? partialRas({ ra_dba: e.ra, quantity: e.q }, sOri) : null))
+        .filter((x) => x != null && Number.isFinite(x));
+      const rPrime = combineRprime(rasList);
+      // DGMR-vlakrij: GA = R′ + ruimte + Cg − Cr (CL niet in de rij; wel in ruimtesom).
+      const gaOri =
+        rPrime != null && ruimte != null
+          ? rPrime + ruimte + g.cg_db - CR_DB
+          : null;
+
+      const rPrimeBands = REPORT_BAND_KEYS.map((key) => {
+        const parts = els
+          .map((e) => bandPartial(e.v[key], sOri, e.q))
+          .filter((x) => x != null && Number.isFinite(x));
+        return combineRprime(parts);
+      });
+      const gaBands = rPrimeBands.map((rp) =>
+        rp != null && ruimte != null ? rp + ruimte + g.cg_db - CR_DB : null,
+      );
+
+      const rows = els
+        .map((e) => {
+          const id = String(e.v.catalog_id || "").trim() || "—";
+          const name =
+            String(e.v.material_name || e.v.omschrijving || "").trim() || "element";
+          const sCell =
+            e.kind === "area" ? esc(fmtNum(e.q, 2)) : '<span class="missing">—</span>';
+          const lenCell =
+            e.kind === "length" ? esc(fmtNum(e.q, 2)) : '<span class="missing">—</span>';
+          const ras = sOri > 0 ? partialRas({ ra_dba: e.ra, quantity: e.q }, sOri) : null;
+          const bandCells = REPORT_BAND_KEYS.map((key) => {
+            const p = bandPartial(e.v[key], sOri, e.q);
+            return `<td class="num">${esc(fmtNum(p, 1))}</td>`;
+          }).join("");
+          return `<tr>
+          <td>${esc(id)}</td>
+          <td>${esc(name)}</td>
+          <td class="num">${sCell}</td>
+          <td class="num">${lenCell}</td>
+          <td class="num">${esc(fmtNum(e.ra, 1))}</td>
+          ${bandCells}
+          <td class="num"><strong>${esc(fmtNum(ras, 1))}</strong></td>
+        </tr>`;
+        })
+        .join("\n");
+
+      const rPrimeBandCells = rPrimeBands
+        .map((v) => `<td class="num">${esc(fmtNum(v, 1))}</td>`)
+        .join("");
+      const gaBandCells = gaBands
+        .map((v) => `<td class="num">${esc(fmtNum(v, 1))}</td>`)
+        .join("");
+
+      const ggBit =
+        g.gevelgroep_nr && Number(g.gevelgroep_nr) > 1
+          ? ` · groep ${esc(g.gevelgroep_nr)}${
+              g.gevelgroep_label && g.gevelgroep_label !== "Standaard"
+                ? ` (${esc(g.gevelgroep_label)})`
+                : ""
+            }`
+          : "";
+      const title = `Vlak ${idx + 1}: ${oriGevelLabel(g.orientatie)}${ggBit}`;
+
+      return `
+      <div class="facade-vlak">
+        <p class="vlak-head">${title}</p>
+        <div class="corr-grid">
+          <div class="row"><span class="lab">Geluidniveaucorrectie CL</span><span class="val">${esc(fmtNum(g.cl_db, 1))}</span><span class="unit">dB</span><span class="muted"> (eigen waarde)</span></div>
+          <div class="row"><span class="lab">Gevelstructuurcorrectie Cg</span><span class="val">${esc(fmtNum(g.cg_db, 1))}</span><span class="unit">dB</span><span class="muted"> (eigen waarde)</span></div>
+        </div>
+        <table class="spectrum facade-table">
+          <thead>
+            <tr>
+              <th>Id</th>
+              <th>Omschrijving</th>
+              <th class="num">S [m²]</th>
+              <th class="num">Lengte [m]</th>
+              <th class="num">RA/DneA</th>
+              <th colspan="${REPORT_BANDS_HZ.length}" class="center">Partiële geluidsisolatie per octaafband [dB(A)]</th>
+              <th class="num">Totaal</th>
+            </tr>
+            <tr class="subhead">
+              <th></th><th></th><th></th><th></th><th class="num">[dB(A)]</th>
+              ${bandHeaders}
+              <th class="num">[dB(A)]</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows || `<tr><td colspan="${5 + REPORT_BANDS_HZ.length + 1}" class="missing">Geen elementen met RA</td></tr>`}
+            <tr class="tot">
+              <td colspan="2"><strong>Totaal</strong></td>
+              <td class="num"><strong>${esc(fmtNum(sOri > 0 ? sOri : null, 2))}</strong></td>
+              <td></td>
+              <td class="num"><strong>R′</strong></td>
+              ${rPrimeBandCells}
+              <td class="num"><strong>${esc(fmtNum(rPrime, 1))}</strong></td>
+            </tr>
+            <tr class="tot">
+              <td colspan="4"></td>
+              <td class="num"><strong>GA</strong></td>
+              ${gaBandCells}
+              <td class="num"><strong>${esc(fmtNum(gaOri, 1))}</strong></td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="note">R′ = energetische som van partiële RA’s (RAs). GA = R′ + ruimtecorrectie + Cg − Cr (${CR_DB} dB).</p>
+      </div>`;
+    })
+    .join("\n");
+}
+
+function renderVrDetailBlock(r, lb, grens) {
+  const label = r.vr_nr ? `VR ${esc(r.vr_nr)} · ${esc(r.omschrijving)}` : esc(r.omschrijving);
+  // Live herberekening voor consistentie met GA-UI (facades / R′); opgeslagen waarden blijven in kop.
+  const gaLive = computeVrGa({
+    volume_m3: Number(r.volume_m3),
+    t0_s: Number(r.t0_s) > 0 ? Number(r.t0_s) : 0.5,
+    geluidsbelasting_dba: lb,
+    vlakken: (r.vlakken || []).map((v) => ({
+      label: v.material_name || v.omschrijving || v.catalog_id || "",
+      orientatie: v.orientatie,
+      gevelgroep_id: v.gevelgroep_id,
+      gevelgroep_label: v.gevelgroep_label,
+      ra_dba: Number(v.ra_dba),
+      quantity_kind: v.quantity_kind,
+      area_m2: v.area_m2,
+      length_m: v.length_m,
+      meenemen_gak: truthyMeenemen(v.meenemen_gak),
+      cl_db: Number(v.cl_db) || 0,
+      cg_db: Number(v.cg_db) || 0,
+    })),
+  });
+  const gaShow = r.ga_dba != null && Number.isFinite(Number(r.ga_dba)) ? r.ga_dba : gaLive.ga_dba;
+  const lbiShow =
+    r.lbi_dba != null && Number.isFinite(Number(r.lbi_dba)) ? r.lbi_dba : gaLive.lbi_dba;
+  const gakShow =
+    r.gak_dba != null && Number.isFinite(Number(r.gak_dba)) ? r.gak_dba : gaLive.gak_dba;
+  const okShow = voldoet(lb, gakShow, grens);
+
+  return `
+      <h3>Verblijfsruimte: ${label}</h3>
+      <div class="vr-grid">
+        <div>
+          <div class="row"><span class="lab">Vloeroppervlak</span><span class="val">${esc(fmtNum(r.vloer_m2, 2))}</span><span class="unit">m²</span></div>
+          <div class="row"><span class="lab">Vertrekhoogte</span><span class="val">${esc(fmtNum(r.hoogte_m, 2))}</span><span class="unit">m</span></div>
+          <div class="row"><span class="lab">Volume</span><span class="val">${esc(fmtNum(r.volume_m3, 2))}</span><span class="unit">m³</span></div>
+          <div class="row"><span class="lab">Nagalmtijd T₀</span><span class="val">${esc(fmtNum(r.t0_s != null ? r.t0_s : 0.5, 2))}</span><span class="unit">s</span></div>
+        </div>
+        <div>
+          <div class="row"><span class="lab">Maximale geluidsbelasting</span><span class="val">${esc(fmtNum(lb, 1))}</span><span class="unit">dB</span></div>
+          <div class="row"><span class="lab">Geluidwering GA</span><span class="val">${esc(fmtNum(gaShow, 1))}</span><span class="unit">dB</span></div>
+          <div class="row"><span class="lab">Binnenniveau Lbi</span><span class="val">${esc(fmtNum(lbiShow, 1))}</span><span class="unit">dB</span></div>
+          <div class="row"><span class="lab">Karakteristieke geluidwering GA;k</span><span class="val">${esc(fmtNum(gakShow, 1))}</span><span class="unit">dB</span></div>
+          <div class="row"><span class="lab">Voldoet</span><span class="val ${okShow === true ? "ok" : okShow === false ? "fail" : ""}">${okShow == null ? "—" : okShow ? "Ja" : "Nee"}</span><span class="unit"></span></div>
+        </div>
+      </div>
+      ${
+        !gaLive.ok && gaLive.reason
+          ? `<p class="note missing">Gevelbijdrage: ${esc(gaLive.reason)}</p>`
+          : ""
+      }
+      ${renderFacadeVlakSections(r, lb)}`;
 }
 
 /** Tabel «Geluidbelasting» — Spectrum 2 (Atr) geschaald naar project-Lb. */
@@ -529,8 +916,71 @@ function renderGeluidbelastingSection(variant, lb) {
     ${note}`;
 }
 
+/** Losse laatste pagina: gebruikte formules (opdrachtgever-vriendelijk). */
+function renderFormulesAppendix() {
+  return `
+    <section class="formules-page" aria-label="Gebruikte formules">
+      <h2>Gebruikte formules</h2>
+      <p class="note">
+        Rekenmethode NPR&nbsp;5272 / NEN&nbsp;5077 / EN&nbsp;12354-3.
+        Cr = ${CR_DB}&nbsp;dB (reflectieterm).
+      </p>
+      <ol>
+        <li>
+          <strong>Partiële geluidsisolatie</strong><br />
+          <code>RAs<sub>i</sub> = RA<sub>i</sub> + 10·log<sub>10</sub>(S / Q<sub>i</sub>)</code>
+          — Q<sub>i</sub> = oppervlak [m²] of lengte [m] (kier)
+        </li>
+        <li>
+          <strong>Gecombineerde geluidsisolatie R′</strong><br />
+          <code>R′ = −10·log<sub>10</sub>(Σ 10<sup>−RAs<sub>i</sub>/10</sup>)</code>
+        </li>
+        <li>
+          <strong>Ruimtecorrectie</strong><br />
+          <code>Ruimte = 10·log<sub>10</sub>(V / (6·T·S))</code>
+          — V volume [m³], T nagalmtijd [s], S geveloppervlak [m²]
+        </li>
+        <li>
+          <strong>Niveauverschil per gevelvlak</strong><br />
+          <code>D<sub>2m,nT</sub> = R′ + Ruimte + Cg</code>
+        </li>
+        <li>
+          <strong>GA per gevelvlak</strong><br />
+          <code>GA<sub>vlak</sub> = D<sub>2m,nT</sub> − Cr</code>
+        </li>
+        <li>
+          <strong>Correctie geluidbelasting (CL)</strong><br />
+          <code>D<sub>2m,ref</sub> = D<sub>2m,nT</sub> + CL</code>
+          — CL corrigeert t.o.v. de referentiegeluidbelasting L<sub>ref</sub>
+        </li>
+        <li>
+          <strong>GA van de verblijfsruimte</strong><br />
+          <code>D<sub>2m,tot</sub> = −10·log<sub>10</sub>(Σ 10<sup>−D<sub>2m,ref</sub>/10</sup>)</code><br />
+          <code>GA = D<sub>2m,tot</sub> − Cr</code>
+        </li>
+        <li>
+          <strong>Binnenniveau</strong><br />
+          <code>Lbi = Lb − GA</code>
+        </li>
+        <li>
+          <strong>Karakteristieke gevelwering</strong><br />
+          <code>GA;k = GA − 10·log<sub>10</sub>(max(V/Stot,&nbsp;3) / (6·T))</code>
+          — Stot = som S van de meegenomen geveloppervlakken
+        </li>
+        <li>
+          <strong>Karakteristiek binnenniveau en toets</strong><br />
+          <code>Lbi;k = Lb − GA;k</code>
+          — voldoet indien Lbi;k ≤ grenswaarde gebruiksfunctie
+        </li>
+      </ol>
+      <p class="note">
+        Cg = gevelstructuurcorrectie; CL = geluidniveaucorrectie. Beide gelden per gevelgroep.
+      </p>
+    </section>`;
+}
+
 function renderReportHtml(model, opts) {
-  const { building, variant, verblijfsruimten } = model;
+  const { building, variant, verblijfsgebieden, verblijfsruimten } = model;
   const status = opts.status || "concept";
   const generatedAt = opts.generatedAt || new Date().toISOString();
   const generatedLabel = new Date(generatedAt).toLocaleString("nl-NL");
@@ -541,17 +991,49 @@ function renderReportHtml(model, opts) {
     .join(", ");
   const title = building.label || "Gevelwering";
 
-  const vrRows = verblijfsruimten
-    .map((r) => {
-      const ok = voldoet(lb, r.gak_dba, grens);
-      const label = r.vr_nr ? `VR ${esc(r.vr_nr)} · ${esc(r.omschrijving)}` : esc(r.omschrijving);
+  const vgSummaries = aggregateVerblijfsgebieden(
+    verblijfsgebieden,
+    verblijfsruimten,
+    lb,
+    grens,
+  );
+  const vgRows = vgSummaries
+    .map((g) => {
       const toets =
-        ok == null
+        g.voldoet == null
           ? '<td class="center missing">—</td>'
-          : ok
+          : g.voldoet
             ? '<td class="center ok">Ja</td>'
             : '<td class="center fail">Nee</td>';
       return `<tr>
+        <td>${esc(g.label)}</td>
+        <td class="num">${esc(fmtNum(g.stot_m2, 2))}</td>
+        <td class="num">${esc(fmtNum(g.vtot_m3, 2))}</td>
+        <td class="num">${esc(fmtNum(g.gak_dba, 1))}</td>
+        ${toets}
+      </tr>`;
+    })
+    .join("\n");
+
+  /** Resultaten GA;k per VG (DGMR: VR-rijen + totaalregel), daarna VR-details met gevelvlakken. */
+  const resultsAndDetails = vgSummaries
+    .map((g) => {
+      const rooms = verblijfsruimten.filter(
+        (r) => r.verblijfsgebied_id === g.verblijfsgebied_id,
+      );
+      const vrRows = rooms
+        .map((r) => {
+          const ok = voldoet(lb, r.gak_dba, grens);
+          const label = r.vr_nr
+            ? `VR ${esc(r.vr_nr)} · ${esc(r.omschrijving)}`
+            : esc(r.omschrijving);
+          const toets =
+            ok == null
+              ? '<td class="center missing">—</td>'
+              : ok
+                ? '<td class="center ok">Ja</td>'
+                : '<td class="center fail">Nee</td>';
+          return `<tr>
         <td>${label}</td>
         <td class="num">${esc(fmtNum(r.vloer_m2, 2))}</td>
         <td class="num">${esc(fmtNum(r.ga_dba, 1))}</td>
@@ -559,89 +1041,42 @@ function renderReportHtml(model, opts) {
         <td class="num">${esc(fmtNum(r.gak_dba, 1))}</td>
         ${toets}
       </tr>`;
-    })
-    .join("\n");
-
-  const detailBlocks = verblijfsruimten
-    .map((r) => {
-      const ok = voldoet(lb, r.gak_dba, grens);
-      const lbik =
-        r.gak_dba != null && Number.isFinite(Number(r.gak_dba))
-          ? fmtNum(lb - Number(r.gak_dba), 1)
-          : "—";
-      const label = r.vr_nr ? `VR ${esc(r.vr_nr)} · ${esc(r.omschrijving)}` : esc(r.omschrijving);
-      const oris = Array.isArray(r.expected_orientaties) ? r.expected_orientaties : [];
-      const oriTxt = oris.length ? oris.join(", ") : "—";
-      const vlakRows = (r.vlakken || [])
-        .map((v) => {
-          const matLabel = v.material_name || v.catalog_id
-            ? `${esc(v.material_name || "—")}${
-                v.catalog_id ? ` <span class="muted">(${esc(v.catalog_id)})</span>` : ""
-              }`
-            : '<span class="missing">geen materiaal</span>';
-          const cat = v.master_category
-            ? `<div class="muted">${esc(v.master_category)}</div>`
-            : isLengthVlak(v)
-              ? `<div class="muted">kierdichting</div>`
-              : "";
-          return `<tr>
-          <td>${esc(vlakOmschrijving(v))}${cat}</td>
-          <td>${matLabel}</td>
-          ${vlakQtyCell(v)}
-          <td class="num">${esc(fmtNum(v.ra_dba, 1))}</td>
-          <td class="num">${esc(fmtNum(v.rw_db, 0))}</td>
-          ${spectrumBandCells(v)}
-          <td class="num">${esc(fmtNum(v.c_db, 0))}</td>
-          <td class="num">${esc(fmtNum(v.ctr_db, 0))}</td>
-          <td class="num">${esc(fmtNum(v.cl_db, 1))}</td>
-          <td class="num">${esc(fmtNum(v.cg_db, 1))}</td>
-          <td class="center">${v.meenemen_gak ? "ja" : "nee"}</td>
-        </tr>`;
         })
         .join("\n");
+      const vgOk = g.voldoet;
+      const vgToets =
+        vgOk == null
+          ? '<td class="center missing">—</td>'
+          : vgOk
+            ? '<td class="center ok">Ja</td>'
+            : '<td class="center fail">Nee</td>';
+      const details = rooms.map((r) => renderVrDetailBlock(r, lb, grens)).join("\n");
       return `
-      <h3>Verblijfsruimte: ${label}</h3>
-      <div class="vr-grid">
-        <div>
-          <div class="row"><span class="lab">Vloeroppervlak</span><span class="val">${esc(fmtNum(r.vloer_m2, 2))}</span><span class="unit">m²</span></div>
-          <div class="row"><span class="lab">Vertrekhoogte</span><span class="val">${esc(fmtNum(r.hoogte_m, 2))}</span><span class="unit">m</span></div>
-          <div class="row"><span class="lab">Volume</span><span class="val">${esc(fmtNum(r.volume_m3, 2))}</span><span class="unit">m³</span></div>
-          <div class="row"><span class="lab">Nagalmtijd T₀</span><span class="val">${esc(fmtNum(r.t0_s, 2))}</span><span class="unit">s</span></div>
-          <div class="row"><span class="lab">Geveloriëntaties (VR)</span><span class="val">${esc(oriTxt)}</span><span class="unit"></span></div>
-        </div>
-        <div>
-          <div class="row"><span class="lab">Max. geluidsbelasting</span><span class="val">${esc(fmtNum(lb, 1))}</span><span class="unit">dB</span></div>
-          <div class="row"><span class="lab">Geluidwering GA</span><span class="val">${esc(fmtNum(r.ga_dba, 1))}</span><span class="unit">dB</span></div>
-          <div class="row"><span class="lab">Binnenniveau Lbi</span><span class="val">${esc(fmtNum(r.lbi_dba, 1))}</span><span class="unit">dB</span></div>
-          <div class="row"><span class="lab">Karakteristieke GA;k</span><span class="val">${esc(fmtNum(r.gak_dba, 1))}</span><span class="unit">dB</span></div>
-          <div class="row"><span class="lab">Lbi;k</span><span class="val">${esc(lbik)}</span><span class="unit">dB</span></div>
-          <div class="row"><span class="lab">Voldoet</span><span class="val ${ok === true ? "ok" : ok === false ? "fail" : ""}">${ok == null ? "—" : ok ? "Ja" : "Nee"}</span><span class="unit"></span></div>
-        </div>
-      </div>
-      <p class="vlak-head">Vlakken / materialen</p>
-      <p class="corr">CL/Cg per geveloriëntatie (in D2m,nT) · oriëntaties op VR-niveau</p>
-      <table class="spectrum">
-        <thead><tr>
-          <th>Omschrijving</th>
-          <th>Materiaal</th>
-          <th class="num">S / l</th>
-          <th class="num">RA</th>
-          <th class="num">Rw</th>
-          <th class="num">63</th>
-          <th class="num">125</th>
-          <th class="num">250</th>
-          <th class="num">500</th>
-          <th class="num">1k</th>
-          <th class="num">2k</th>
-          <th class="num">4k</th>
-          <th class="num">C</th>
-          <th class="num">Ctr</th>
-          <th class="num">CL</th>
-          <th class="num">Cg</th>
-          <th class="center">GA;k</th>
-        </tr></thead>
-        <tbody>${vlakRows || '<tr><td colspan="17" class="missing">Geen vlakken</td></tr>'}</tbody>
-      </table>`;
+    <h2>Resultaten GA;k — ${esc(g.label)}</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Verblijfsruimte</th>
+          <th class="num">Vloeroppervlak [m²]</th>
+          <th class="num">GA [dB]</th>
+          <th class="num">Lbi [dB]</th>
+          <th class="num">GA;k [dB]</th>
+          <th class="center">Voldoet</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${vrRows || '<tr><td colspan="6" class="missing">Geen verblijfsruimten</td></tr>'}
+        <tr class="tot">
+          <td><strong>Totaal verblijfsgebied</strong></td>
+          <td class="num"><strong>${esc(fmtNum(g.stot_m2, 2))}</strong></td>
+          <td></td>
+          <td></td>
+          <td class="num"><strong>${esc(fmtNum(g.gak_dba, 1))}</strong></td>
+          ${vgToets}
+        </tr>
+      </tbody>
+    </table>
+    ${details}`;
     })
     .join("\n");
 
@@ -666,19 +1101,28 @@ function renderReportHtml(model, opts) {
     h2 { margin: .85rem 0 .35rem; font-size: 10.5pt; border-bottom: 1px solid #bbb; }
     h3 { margin: .75rem 0 .3rem; font-size: 10pt; }
     table { width: 100%; border-collapse: collapse; font-size: 8.8pt; margin: .35rem 0 .65rem; }
-    table.spectrum { font-size: 7.4pt; }
+    table.spectrum { font-size: 7.2pt; }
+    table.facade-table th.subhead, tr.subhead th { background: #fafafa; font-weight: 500; font-size: 6.8pt; }
     th, td { border: 1px solid #bbb; padding: .18rem .28rem; vertical-align: top; }
     th { background: #f2f2f2; text-align: left; }
+    tr.tot td { background: #f7f7f7; }
     .num { text-align: right; white-space: nowrap; } .center { text-align: center; }
     .ok { color: #1b5e20; font-weight: 700; } .fail { color: #b71c1c; font-weight: 700; } .missing { color: #888; font-style: italic; }
     .muted { color: #666; font-size: 7.5pt; font-weight: 400; }
     .note { font-size: 8.5pt; color: #444; margin: .2rem 0 .45rem; }
-    .vlak-head { margin: .45rem 0 .15rem; font-weight: 650; font-size: 9.5pt; }
-    .corr { font-size: 8.5pt; margin: .1rem 0 .35rem; color: #444; }
+    .vlak-head { margin: .65rem 0 .2rem; font-weight: 700; font-size: 9.5pt; }
+    .facade-vlak { margin: .35rem 0 .75rem; page-break-inside: avoid; }
+    .corr-grid { font-size: 9pt; margin: .15rem 0 .4rem; }
+    .corr-grid .row { display: grid; grid-template-columns: 12rem auto auto 1fr; gap: .35rem; align-items: baseline; }
     .vr-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .25rem 1.25rem; font-size: 9.5pt; margin: .35rem 0 .55rem; }
     .vr-grid .row { display: grid; grid-template-columns: 1fr auto auto; gap: .35rem; }
     .lab { color: #444; } .val { font-weight: 650; text-align: right; } .unit { color: #444; min-width: 1.6rem; }
     .page-foot { display: flex; justify-content: space-between; margin-top: 1.25rem; padding-top: .4rem; border-top: 1px solid #bbb; font-size: 8.5pt; color: #444; }
+    .formules-page { page-break-before: always; break-before: page; }
+    .formules-page h2 { margin-top: 0; }
+    .formules-page ol { margin: .35rem 0 .65rem; padding-left: 1.25rem; }
+    .formules-page li { margin: .28rem 0; }
+    .formules-page code { font-size: 9pt; }
   </style>
 </head>
 <body data-generated-at="${esc(generatedAt)}" data-report-template="${esc(REPORT_TEMPLATE_VERSION)}">
@@ -706,26 +1150,27 @@ function renderReportHtml(model, opts) {
     </dl>
     <div class="variant-bar">VARIANT: ${esc(variant.omschrijving)} · Lb ${esc(fmtNum(lb, 1))} dB · ${esc(spectrumDisplayLabel(variant.spectrum_kind))}</div>
     ${renderGeluidbelastingSection(variant, lb)}
-    <h2>Resultaten GA;k</h2>
+    <h2>Verblijfsgebieden</h2>
+    <p class="note">Samenvatting per verblijfsgebied: Stot/Vtot over alle VR’s; GA;k = transmissiegemiddelde over VR’s met opgeslagen GA;k (vloergewogen, NEN 5077).</p>
     <table>
       <thead>
         <tr>
-          <th>Verblijfsruimte</th>
-          <th class="num">Vloer [m²]</th>
-          <th class="num">GA [dB]</th>
-          <th class="num">Lbi [dB]</th>
+          <th>Omschrijving</th>
+          <th class="num">Stot [m²]</th>
+          <th class="num">Vtot [m³]</th>
           <th class="num">GA;k [dB]</th>
           <th class="center">Voldoet</th>
         </tr>
       </thead>
       <tbody>
-        ${vrRows || '<tr><td colspan="6" class="missing">Geen verblijfsruimten</td></tr>'}
+        ${vgRows || '<tr><td colspan="5" class="missing">Geen verblijfsgebieden</td></tr>'}
       </tbody>
     </table>
-    ${detailBlocks}
+    ${resultsAndDetails || '<h2>Resultaten GA;k</h2><p class="missing">Geen verblijfsruimten</p>'}
+    ${renderFormulesAppendix()}
     <footer class="page-foot">
       <span>Geluidwering gevels · ${esc(FIRM_NAME)}</span>
-      <span>Gegenereerd: ${esc(generatedLabel)}</span>
+      <span>${esc(generatedLabel)}</span>
     </footer>
   </article>
 </body>
@@ -735,6 +1180,106 @@ function renderReportHtml(model, opts) {
 export function handleReportApiOptions(req, res) {
   res.writeHead(204, { ...securityHeaders(req), ...corsHeaders(req) });
   res.end();
+}
+
+/**
+ * Core report write (HTML+PDF). Used by HTTP handler and local regen scripts.
+ * @param {{ buildingId: string, variantId?: string, status?: string, force?: boolean }} opts
+ */
+export async function generateReportFiles(opts) {
+  const buildingId = String(opts.buildingId || "").trim();
+  const variantId = String(opts.variantId || "").trim();
+  const status = String(opts.status || "concept").trim().toLowerCase() || "concept";
+  const force = Boolean(opts.force);
+  if (!UUID_RE.test(buildingId)) {
+    const err = new Error("building_id required");
+    err.code = "BAD_REQUEST";
+    throw err;
+  }
+  if (variantId && !UUID_RE.test(variantId)) {
+    const err = new Error("invalid variant_id");
+    err.code = "BAD_REQUEST";
+    throw err;
+  }
+
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    const model = await loadReportModel(client, buildingId, variantId || null);
+    const generatedAt = new Date().toISOString();
+    const html = renderReportHtml(model, { status, generatedAt });
+    const contentHash = sha256(canonicalContent(html));
+
+    const dir = await ensureReportsDir(model.building);
+    const identical = await findIdenticalReport(dir, contentHash);
+    if (identical && !force) {
+      const pdfFilename = pdfNameFromHtml(identical.filename);
+      const pdfPath = path.join(dir, pdfFilename);
+      if (!fs.existsSync(pdfPath)) {
+        try {
+          await htmlFileToPdf(identical.path, pdfPath);
+        } catch (pdfErr) {
+          console.error("PDF backfill for identical report failed:", pdfErr);
+        }
+      }
+      return {
+        ok: true,
+        identical: true,
+        skipped: true,
+        warning:
+          "Identiek rapport bestaat al — er is niets weggeschreven. Gebruik force=true om toch een nieuw bestand te maken.",
+        existing_filename: identical.filename,
+        pdf_filename: fs.existsSync(pdfPath) ? pdfFilename : null,
+        filename_pdf: fs.existsSync(pdfPath) ? pdfFilename : null,
+        relative_path: path.relative(projectsRoot(), identical.path),
+        project_folder: path.relative(projectsRoot(), projectDir(model.building)),
+        content_hash: contentHash,
+        status,
+        variant_id: model.variant.variant_id,
+      };
+    }
+
+    const filename =
+      `${stampNow()}_gevelwering_${slugify(model.variant.omschrijving, "variant")}_${slugify(status, "concept")}.html`;
+    const filePath = path.join(dir, filename);
+    await fsp.writeFile(filePath, html, "utf8");
+    await fsp.writeFile(`${filePath}.sha256`, `${contentHash}\n`, "utf8");
+
+    const pdfFilename = pdfNameFromHtml(filename);
+    const pdfPath = path.join(dir, pdfFilename);
+    try {
+      await htmlFileToPdf(filePath, pdfPath);
+    } catch (pdfErr) {
+      console.error("PDF generate error:", pdfErr);
+      const msg =
+        pdfErr?.code === "NO_CHROME"
+          ? pdfErr.message
+          : `PDF genereren mislukt: ${pdfErr instanceof Error ? pdfErr.message : String(pdfErr)}`;
+      const err = new Error(msg);
+      err.code = "PDF_FAILED";
+      err.html_filename = filename;
+      throw err;
+    }
+
+    return {
+      ok: true,
+      identical: false,
+      skipped: false,
+      filename,
+      pdf_filename: pdfFilename,
+      filename_pdf: pdfFilename,
+      relative_path: path.relative(projectsRoot(), pdfPath),
+      html_relative_path: path.relative(projectsRoot(), filePath),
+      project_folder: path.relative(projectsRoot(), projectDir(model.building)),
+      content_hash: contentHash,
+      byte_size: Buffer.byteLength(html, "utf8"),
+      pdf_byte_size: (await fsp.stat(pdfPath)).size,
+      status,
+      variant_id: model.variant.variant_id,
+    };
+  } finally {
+    client.release();
+  }
 }
 
 export async function handleReportGenerate(req, res) {
@@ -785,76 +1330,17 @@ export async function handleReportGenerate(req, res) {
       json(req, res, 403, { ok: false, error: "geen toegang tot dit project" });
       return;
     }
+  } catch (err) {
+    console.error("report generate auth error:", err);
+    json(req, res, 500, { ok: false, error: "rapport genereren mislukt" });
+    return;
+  } finally {
+    client.release();
+  }
 
-    const model = await loadReportModel(client, buildingId, variantId || null);
-    const generatedAt = new Date().toISOString();
-    const html = renderReportHtml(model, { status, generatedAt });
-    const contentHash = sha256(canonicalContent(html));
-
-    const dir = await ensureReportsDir(model.building);
-    const identical = await findIdenticalReport(dir, contentHash);
-    if (identical && !force) {
-      const pdfFilename = pdfNameFromHtml(identical.filename);
-      const pdfPath = path.join(dir, pdfFilename);
-      if (!fs.existsSync(pdfPath)) {
-        try {
-          await htmlFileToPdf(identical.path, pdfPath);
-        } catch (pdfErr) {
-          console.error("PDF backfill for identical report failed:", pdfErr);
-        }
-      }
-      json(req, res, 200, {
-        ok: true,
-        identical: true,
-        skipped: true,
-        warning:
-          "Identiek rapport bestaat al — er is niets weggeschreven. Gebruik force=true om toch een nieuw bestand te maken.",
-        existing_filename: identical.filename,
-        pdf_filename: fs.existsSync(pdfPath) ? pdfFilename : null,
-        filename_pdf: fs.existsSync(pdfPath) ? pdfFilename : null,
-        relative_path: path.relative(projectsRoot(), identical.path),
-        project_folder: path.relative(projectsRoot(), projectDir(model.building)),
-        content_hash: contentHash,
-      });
-      return;
-    }
-
-    const filename =
-      `${stampNow()}_gevelwering_${slugify(model.variant.omschrijving, "variant")}_${slugify(status, "concept")}.html`;
-    const filePath = path.join(dir, filename);
-    await fsp.writeFile(filePath, html, "utf8");
-    await fsp.writeFile(`${filePath}.sha256`, `${contentHash}\n`, "utf8");
-
-    const pdfFilename = pdfNameFromHtml(filename);
-    const pdfPath = path.join(dir, pdfFilename);
-    try {
-      await htmlFileToPdf(filePath, pdfPath);
-    } catch (pdfErr) {
-      console.error("PDF generate error:", pdfErr);
-      const msg =
-        pdfErr?.code === "NO_CHROME"
-          ? pdfErr.message
-          : `PDF genereren mislukt: ${pdfErr instanceof Error ? pdfErr.message : String(pdfErr)}`;
-      json(req, res, 500, { ok: false, error: msg, html_filename: filename });
-      return;
-    }
-
-    json(req, res, 201, {
-      ok: true,
-      identical: false,
-      skipped: false,
-      filename,
-      pdf_filename: pdfFilename,
-      filename_pdf: pdfFilename,
-      relative_path: path.relative(projectsRoot(), pdfPath),
-      html_relative_path: path.relative(projectsRoot(), filePath),
-      project_folder: path.relative(projectsRoot(), projectDir(model.building)),
-      content_hash: contentHash,
-      byte_size: Buffer.byteLength(html, "utf8"),
-      pdf_byte_size: (await fsp.stat(pdfPath)).size,
-      status,
-      variant_id: model.variant.variant_id,
-    });
+  try {
+    const result = await generateReportFiles({ buildingId, variantId, status, force });
+    json(req, res, result.identical ? 200 : 201, result);
   } catch (err) {
     if (err?.code === "NOT_FOUND") {
       json(req, res, 404, { ok: false, error: err.message });
@@ -864,10 +1350,12 @@ export async function handleReportGenerate(req, res) {
       json(req, res, 400, { ok: false, error: err.message });
       return;
     }
+    if (err?.code === "PDF_FAILED") {
+      json(req, res, 500, { ok: false, error: err.message, html_filename: err.html_filename });
+      return;
+    }
     console.error("report generate error:", err);
     json(req, res, 500, { ok: false, error: "rapport genereren mislukt" });
-  } finally {
-    client.release();
   }
 }
 
@@ -1477,6 +1965,20 @@ export async function handleReportInboxDelete(req, res) {
     if (!del.rows[0]) {
       json(req, res, 404, { ok: false, error: "inbox-item niet gevonden" });
       return;
+    }
+    // Spiegel in gedeelde Stilte-inbox meenemen (anders blijft portaal-teller staan).
+    try {
+      await client.query(
+        `DELETE FROM identity.customer_report_inbox
+         WHERE service = 'gevelwering'
+           AND (
+             id = $1::uuid
+             OR (building_id = $2::uuid AND filename = $3)
+           )`,
+        [inboxId, found.rows[0].building_id, filename],
+      );
+    } catch (syncErr) {
+      console.warn("shared inbox delete sync failed:", syncErr);
     }
   } finally {
     client.release();

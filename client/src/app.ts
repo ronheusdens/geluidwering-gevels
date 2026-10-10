@@ -346,12 +346,12 @@ function renderGlobalInboxList(unreadCount?: number): void {
   const unread =
     unreadCount ?? cachedInbox.filter((i) => i.unread).length;
   if (inboxBadgeEl) {
-    if (unread > 0) {
-      inboxBadgeEl.hidden = false;
-      inboxBadgeEl.textContent = String(unread);
-    } else {
-      inboxBadgeEl.hidden = true;
-    }
+    // Altijd tonen (ook 0): verbergen via [hidden] botste met display:inline-block
+    // en liet soms een oude teller staan bij een lege inbox.
+    inboxBadgeEl.hidden = false;
+    inboxBadgeEl.textContent = String(unread);
+    inboxBadgeEl.classList.toggle("is-zero", unread === 0);
+    inboxBadgeEl.setAttribute("aria-label", `${unread} ongelezen`);
   }
   if (inboxEmptyEl) inboxEmptyEl.classList.toggle("hidden", cachedInbox.length > 0);
 

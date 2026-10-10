@@ -19,6 +19,24 @@ export function vrLabelFromNr(vrNr: string, roomLabel?: string): string {
   return room || "Verblijfsruimte";
 }
 
+/**
+ * Consistente badge/filter: «VR 03 (VG 2)» — altijd VR eerst, VG tussen haakjes.
+ */
+export function formatVrVgLabel(
+  vrNr: string | null | undefined,
+  vgNr: string | number | null | undefined,
+): string {
+  const vr = String(vrNr ?? "").trim();
+  const vg =
+    vgNr != null && String(vgNr).trim() !== "" && Number.isFinite(Number(vgNr))
+      ? String(Number(vgNr))
+      : "";
+  if (vr && vg) return `VR ${vr} (VG ${vg})`;
+  if (vr) return `VR ${vr}`;
+  if (vg) return `VG ${vg}`;
+  return "geen VG/VR";
+}
+
 export function parseVgNrFromText(text: string): number | null {
   const m = String(text || "").trim().match(/^VG\s+(\d+)\b/i);
   if (!m) return null;
@@ -72,8 +90,7 @@ export function formatVrListLine(r: RoomLabelLike, volumeM3?: number): string {
 
 export function formatRoomSummary(r: RoomLabelLike): string {
   const bits = [
-    r.vg_nr != null ? `VG ${r.vg_nr}` : null,
-    r.vr_nr ? `VR ${r.vr_nr}` : null,
+    r.vr_nr || r.vg_nr != null ? formatVrVgLabel(r.vr_nr, r.vg_nr) : null,
     r.label || null,
     levelLabel(r.level_hint),
     r.area_m2 != null ? `${Number(r.area_m2).toFixed(2)} m²` : null,

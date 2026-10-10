@@ -83,6 +83,16 @@ async function syncSessionCookie(token) {
 }
 
 // src/shared/bpp-session.ts
+var MfaChallengeError = class extends Error {
+  constructor(challenge) {
+    super(
+      challenge.needs_totp_setup ? "Authenticator koppelen vereist (Microsoft Authenticator)" : "Authenticator-code vereist"
+    );
+    __publicField(this, "challenge");
+    this.name = "MfaChallengeError";
+    this.challenge = challenge;
+  }
+};
 var BppSession = class {
   constructor(opts) {
     __publicField(this, "ws", null);
@@ -204,22 +214,48 @@ var BppSession = class {
     const bootRet = await this.invokeString("API_Bootstrap", []);
     if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap mislukt: ${bootRet}`);
   }
+  applyAuth(info) {
+    this.auth = info;
+    this.storeAuth(info);
+    this.cb.onLogin(info);
+    return info;
+  }
   async bootstrapAndLogin(username, password) {
     await this.whenOpen();
     await this.loadSharedApi();
     const ret = await this.invokeString("API_Login", [username, password]);
     if (ret.startsWith("ERROR")) throw new Error(ret);
     const parsed = JSON.parse(ret);
+    if (parsed.needs_totp || parsed.needs_totp_setup) {
+      if (!parsed.challenge) throw new Error("MFA challenge ontbreekt");
+      throw new MfaChallengeError({
+        needs_totp: parsed.needs_totp,
+        needs_totp_setup: parsed.needs_totp_setup,
+        challenge: parsed.challenge,
+        username: parsed.username || username,
+        totp_secret: parsed.totp_secret,
+        otpauth_uri: parsed.otpauth_uri,
+        authenticator_app: parsed.authenticator_app,
+        authenticator_hint: parsed.authenticator_hint
+      });
+    }
     if (!parsed.ok || !parsed.token) throw new Error("Inloggen mislukt");
-    const info = {
+    return this.applyAuth({
       token: parsed.token,
       username: parsed.username || username,
       display_name: parsed.display_name || username
-    };
-    this.auth = info;
-    this.storeAuth(info);
-    this.cb.onLogin(info);
-    return info;
+    });
+  }
+  async verifyTotp(challenge, code) {
+    const ret = await this.invokeString("API_VerifyTotp", [challenge, code]);
+    if (ret.startsWith("ERROR")) throw new Error(ret.replace(/^ERROR:\s*/, ""));
+    const parsed = JSON.parse(ret);
+    if (!parsed.ok || !parsed.token) throw new Error("Authenticator-bevestiging mislukt");
+    return this.applyAuth({
+      token: parsed.token,
+      username: parsed.username || "admin",
+      display_name: parsed.display_name || parsed.username || "admin"
+    });
   }
   storeAuth(info) {
     storeAuth(this.authKey, info);
@@ -274,6 +310,8 @@ var BppSession = class {
             const ret = await this.invokeString("API_ValidateSession", [stored.token]);
             if (gen !== this.connectGen) return;
             if (ret.startsWith("ERROR")) {
+              this.auth = null;
+              this.storeAuth(null);
               this.cb.onLogout();
               this.cb.onStatus("Sessie verlopen \u2014 log in", "err");
             } else {
@@ -285,12 +323,18 @@ var BppSession = class {
             this.cb.onLogout();
             this.cb.onStatus("Verbonden \u2014 log in", "ok");
           }
+        } catch (err) {
           if (gen !== this.connectGen) return;
+          this.cb.onStatus(err instanceof Error ? err.message : String(err), "err");
+          if (!this.auth) this.cb.onLogout();
+          return;
+        }
+        if (gen !== this.connectGen) return;
+        try {
           await this.cb.onReady?.();
         } catch (err) {
           if (gen !== this.connectGen) return;
           this.cb.onStatus(err instanceof Error ? err.message : String(err), "err");
-          this.cb.onLogout();
         }
       })();
     });
@@ -571,6 +615,10 @@ async function loadCustomerProjects(customerId) {
           <p class="hint">${esc(drawingLine)}</p>
           <div class="admin-project-fields">
             <label class="block-label">
+              Projectnaam
+              <input type="text" class="admin-project-label" maxlength="200" value="${esc(p.label || "")}" placeholder="bijv. Woning 51" autocomplete="off" />
+            </label>
+            <label class="block-label">
               Projectnummer (werknummer)
               <input type="text" class="admin-project-number" maxlength="80" value="${refVal}" placeholder="bijv. 2026.0123" autocomplete="off" />
             </label>
@@ -593,6 +641,7 @@ async function loadCustomerProjects(customerId) {
       const card = btn.closest(".admin-project-card");
       const select = card?.querySelector(".admin-project-status");
       const numberEl = card?.querySelector(".admin-project-number");
+      const labelEl = card?.querySelector(".admin-project-label");
       if (!card || !select || !session.auth?.token) return;
       btn.disabled = true;
       setStatus("Project bijwerken\u2026", "busy");
@@ -601,13 +650,14 @@ async function loadCustomerProjects(customerId) {
           session.auth.token,
           card.dataset.buildingId || "",
           select.value,
-          (numberEl?.value || "").trim()
+          (numberEl?.value || "").trim(),
+          (labelEl?.value || "").trim()
         ]);
         if (ret2.startsWith("ERROR")) {
           setStatus(ret2, "err");
           return;
         }
-        setStatus("Projectnummer en status bijgewerkt", "ok");
+        setStatus("Projectnaam, nummer en status bijgewerkt", "ok");
         await loadCustomers();
         if (customerSelectEl.value) await loadCustomerProjects(customerSelectEl.value);
       } catch (err) {

@@ -20,6 +20,31 @@ export type AuthInfo = {
   display_name: string;
 };
 
+/** Two-pass (TOTP) challenge for account admin. */
+export type MfaChallenge = {
+  needs_totp?: boolean;
+  needs_totp_setup?: boolean;
+  challenge: string;
+  username?: string;
+  totp_secret?: string;
+  otpauth_uri?: string;
+  authenticator_app?: string;
+  authenticator_hint?: string;
+};
+
+export class MfaChallengeError extends Error {
+  readonly challenge: MfaChallenge;
+  constructor(challenge: MfaChallenge) {
+    super(
+      challenge.needs_totp_setup
+        ? "Authenticator koppelen vereist (Microsoft Authenticator)"
+        : "Authenticator-code vereist",
+    );
+    this.name = "MfaChallengeError";
+    this.challenge = challenge;
+  }
+}
+
 type Waiter = {
   resolve: (env: Envelope) => void;
   reject: (err: Error) => void;
@@ -182,6 +207,13 @@ export class BppSession {
     if (!bootRet.startsWith("OK")) throw new Error(`API_Bootstrap mislukt: ${bootRet}`);
   }
 
+  private applyAuth(info: AuthInfo): AuthInfo {
+    this.auth = info;
+    this.storeAuth(info);
+    this.cb.onLogin(info);
+    return info;
+  }
+
   async bootstrapAndLogin(username: string, password: string): Promise<AuthInfo> {
     await this.whenOpen();
     await this.loadSharedApi();
@@ -192,17 +224,50 @@ export class BppSession {
       token?: string;
       username?: string;
       display_name?: string;
+      needs_totp?: boolean;
+      needs_totp_setup?: boolean;
+      challenge?: string;
+      totp_secret?: string;
+      otpauth_uri?: string;
+      authenticator_app?: string;
+      authenticator_hint?: string;
     };
+    if (parsed.needs_totp || parsed.needs_totp_setup) {
+      if (!parsed.challenge) throw new Error("MFA challenge ontbreekt");
+      throw new MfaChallengeError({
+        needs_totp: parsed.needs_totp,
+        needs_totp_setup: parsed.needs_totp_setup,
+        challenge: parsed.challenge,
+        username: parsed.username || username,
+        totp_secret: parsed.totp_secret,
+        otpauth_uri: parsed.otpauth_uri,
+        authenticator_app: parsed.authenticator_app,
+        authenticator_hint: parsed.authenticator_hint,
+      });
+    }
     if (!parsed.ok || !parsed.token) throw new Error("Inloggen mislukt");
-    const info: AuthInfo = {
+    return this.applyAuth({
       token: parsed.token,
       username: parsed.username || username,
       display_name: parsed.display_name || username,
+    });
+  }
+
+  async verifyTotp(challenge: string, code: string): Promise<AuthInfo> {
+    const ret = await this.invokeString("API_VerifyTotp", [challenge, code]);
+    if (ret.startsWith("ERROR")) throw new Error(ret.replace(/^ERROR:\s*/, ""));
+    const parsed = JSON.parse(ret) as {
+      ok?: boolean;
+      token?: string;
+      username?: string;
+      display_name?: string;
     };
-    this.auth = info;
-    this.storeAuth(info);
-    this.cb.onLogin(info);
-    return info;
+    if (!parsed.ok || !parsed.token) throw new Error("Authenticator-bevestiging mislukt");
+    return this.applyAuth({
+      token: parsed.token,
+      username: parsed.username || "admin",
+      display_name: parsed.display_name || parsed.username || "admin",
+    });
   }
 
   storeAuth(info: AuthInfo | null): void {
@@ -266,6 +331,8 @@ export class BppSession {
             const ret = await this.invokeString("API_ValidateSession", [stored.token]);
             if (gen !== this.connectGen) return;
             if (ret.startsWith("ERROR")) {
+              this.auth = null;
+              this.storeAuth(null);
               this.cb.onLogout();
               this.cb.onStatus("Sessie verlopen — log in", "err");
             } else {
@@ -277,12 +344,20 @@ export class BppSession {
             this.cb.onLogout();
             this.cb.onStatus("Verbonden — log in", "ok");
           }
+        } catch (err) {
           if (gen !== this.connectGen) return;
+          this.cb.onStatus(err instanceof Error ? err.message : String(err), "err");
+          // Alleen uitloggen als we nog geen geldige sessie hebben — anders blijft
+          // een mislukte onReady (project laden) ten onrechte het login-scherm tonen.
+          if (!this.auth) this.cb.onLogout();
+          return;
+        }
+        if (gen !== this.connectGen) return;
+        try {
           await this.cb.onReady?.();
         } catch (err) {
           if (gen !== this.connectGen) return;
           this.cb.onStatus(err instanceof Error ? err.message : String(err), "err");
-          this.cb.onLogout();
         }
       })();
     });

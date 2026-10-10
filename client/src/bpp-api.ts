@@ -40,6 +40,8 @@ export type BppFloormapSection = {
   scale_aspect_yx: number | null;
   scale_source: string;
   room_count: number;
+  /** Document page rotation (degrees) applied with PDF page.rotate. */
+  view_rotate?: number;
 };
 
 export async function bppListFloormapSections(
@@ -240,6 +242,7 @@ export type BppVrFacadeComponent = {
   ra_dba?: number | null;
   boolean_op?: string | null;
   orientatie?: string | null;
+  gevelgroep_nr?: number | null;
   from_seal?: boolean;
   source_subsection_id?: string | null;
   constituents?: BppVrFacadeConstituent[];

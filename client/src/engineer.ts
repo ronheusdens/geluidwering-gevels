@@ -12,6 +12,7 @@ import {
   shoelaceArea,
 } from "./geom";
 import { BppSession, type AuthInfo } from "./shared/bpp-session";
+import { fetchArrayBufferWithProgress, startConnLoadProgress } from "./shared/conn-load-progress";
 import { statusLabel, type ProjectStatus } from "./shared/dom-helpers";
 
 type QueueProject = {
@@ -349,9 +350,9 @@ async function loadQueue(keepStatus?: { text: string; kind: "busy" | "ok" | "err
   if (projects.length === 0) {
     if (queueHintEl) {
       queueHintEl.textContent =
-        "Geen actieve projecten (status: gegevens aangeleverd / in uitvoering / bijna afgerond). Zet de status in admin of laat de opdrachtgever tekeningen indienen. Of gebruik Bestand → Openen.";
+        "Geen projecten met tekeningen/status in uitvoering of afgerond. Zet de status in admin of laat de opdrachtgever tekeningen indienen. Of gebruik Bestand → Openen.";
     }
-    setStatus(keepStatus?.text ?? "Geen actieve projecten", keepStatus?.kind ?? "ok");
+    setStatus(keepStatus?.text ?? "Geen projecten", keepStatus?.kind ?? "ok");
     return;
   }
   for (const p of projects) {
@@ -373,7 +374,12 @@ async function loadQueue(keepStatus?: { text: string; kind: "busy" | "ok" | "err
     queueSelectEl.value = prev;
   }
   if (queueHintEl) {
-    queueHintEl.textContent = `${projects.length} project(en) — kies er één en klik Openen (of dubbelklik).`;
+    const finished = projects.filter((p) => p.project_status === "PROJECT_FINISHED").length;
+    const active = projects.length - finished;
+    queueHintEl.textContent =
+      finished > 0
+        ? `${active} actief · ${finished} afgerond — kies er één en klik Openen (of dubbelklik).`
+        : `${projects.length} project(en) — kies er één en klik Openen (of dubbelklik).`;
   }
   setStatus(keepStatus?.text ?? `${projects.length} project(en)`, keepStatus?.kind ?? "ok");
 }
@@ -1230,7 +1236,7 @@ function renderRegionList(): void {
   }
   for (const r of regions) {
     const li = document.createElement("li");
-    li.className = "drawing-list-item region-list-item";
+    li.className = "drawing-list-item region-list-item region-list-item--compact";
     li.dataset.regionId = r.id;
     if (r.id === selectedRegionId) li.classList.add("selected");
 
@@ -1244,9 +1250,15 @@ function renderRegionList(): void {
     });
     li.appendChild(handle);
 
+    const main = document.createElement("div");
+    main.className = "region-list-main";
+
+    const top = document.createElement("div");
+    top.className = "region-list-top";
+
     const info = document.createElement("button");
     info.type = "button";
-    info.className = "drawing-list-select";
+    info.className = "drawing-list-select region-list-select-compact";
     const scaleNote =
       regionSupportsScale(r.region_kind) &&
       r.metres_per_norm_unit != null &&
@@ -1254,6 +1266,7 @@ function renderRegionList(): void {
         ? " · geschaald"
         : "";
     info.textContent = `p${r.page_index + 1} · ${r.label}${scaleNote}`;
+    info.title = "Selecteer sectie / ga naar pagina";
     info.addEventListener("click", () => {
       selectedRegionId = r.id;
       if (r.page_index !== pdfPageNum - 1 && pdfDoc) {
@@ -1270,7 +1283,31 @@ function renderRegionList(): void {
       updateToolHint();
       drawRegionsOverlay();
     });
-    li.appendChild(info);
+    top.appendChild(info);
+
+    const actions = document.createElement("span");
+    actions.className = "drawing-list-actions region-list-actions-compact";
+    if (regionSupportsScale(r.region_kind) && activeProject) {
+      const analyze = document.createElement("a");
+      analyze.className = "secondary-link";
+      analyze.href = `/floormap.html?building_id=${encodeURIComponent(activeProject.building_id)}&section_id=${encodeURIComponent(r.id)}`;
+      analyze.textContent = r.region_kind === "FLOORMAP" ? "Ruimten" : "Componenten";
+      analyze.title =
+        r.region_kind === "FLOORMAP" ? "Ruimten analyseren" : "Componenten analyseren";
+      actions.appendChild(analyze);
+    }
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "secondary region-list-delete";
+    btn.textContent = "×";
+    btn.title = "Sectie verwijderen";
+    btn.setAttribute("aria-label", `Verwijder ${r.label}`);
+    btn.addEventListener("click", () => {
+      void deleteRegion(r.id);
+    });
+    actions.appendChild(btn);
+    top.appendChild(actions);
+    main.appendChild(top);
 
     const editRow = document.createElement("div");
     editRow.className = "region-edit-row";
@@ -1289,6 +1326,7 @@ function renderRegionList(): void {
     labelInput.className = "region-list-label";
     labelInput.value = r.label;
     labelInput.placeholder = "Omschrijving";
+    labelInput.title = "Enter = opslaan";
     labelInput.addEventListener("click", (ev) => ev.stopPropagation());
     labelInput.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter") {
@@ -1296,43 +1334,17 @@ function renderRegionList(): void {
         void updateSavedRegion(r, labelInput.value, kindSel.value as DrawingRegion["region_kind"]);
       }
     });
+    labelInput.addEventListener("change", () => {
+      void updateSavedRegion(r, labelInput.value, kindSel.value as DrawingRegion["region_kind"]);
+    });
     kindSel.addEventListener("click", (ev) => ev.stopPropagation());
     kindSel.addEventListener("change", () => {
       void updateSavedRegion(r, labelInput.value, kindSel.value as DrawingRegion["region_kind"]);
     });
-    const saveBtn = document.createElement("button");
-    saveBtn.type = "button";
-    saveBtn.className = "secondary";
-    saveBtn.textContent = "Opslaan";
-    saveBtn.title = "Omschrijving of soort bijwerken";
-    saveBtn.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      void updateSavedRegion(r, labelInput.value, kindSel.value as DrawingRegion["region_kind"]);
-    });
     editRow.appendChild(labelInput);
     editRow.appendChild(kindSel);
-    editRow.appendChild(saveBtn);
-    li.appendChild(editRow);
-
-    const actions = document.createElement("span");
-    actions.className = "drawing-list-actions";
-    if (regionSupportsScale(r.region_kind) && activeProject) {
-      const analyze = document.createElement("a");
-      analyze.className = "secondary-link";
-      analyze.href = `/floormap.html?building_id=${encodeURIComponent(activeProject.building_id)}&section_id=${encodeURIComponent(r.id)}`;
-      analyze.textContent =
-        r.region_kind === "FLOORMAP" ? "Ruimten analyseren" : "Componenten analyseren";
-      actions.appendChild(analyze);
-    }
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "secondary";
-    btn.textContent = "Verwijderen";
-    btn.addEventListener("click", () => {
-      void deleteRegion(r.id);
-    });
-    actions.appendChild(btn);
-    li.appendChild(actions);
+    main.appendChild(editRow);
+    li.appendChild(main);
 
     li.addEventListener("dragstart", (ev) => {
       regionDragId = r.id;
@@ -1408,27 +1420,44 @@ async function loadActiveDocument(): Promise<void> {
   }
 
   docHintEl.textContent = "Sleep een rechthoek om een sectie te markeren, of klik Secties ontdekken.";
-  const res = await fetch(`/api/drawings/download?document_id=${encodeURIComponent(activeDocumentId)}`, {
-    credentials: "include",
-    headers: apiAuthHeaders(auth()!.token),
-  });
-  if (!res.ok) {
-    docHintEl.textContent = `PDF laden mislukt (HTTP ${res.status})`;
-    return;
+  const load = startConnLoadProgress(
+    { bar: connBarEl, status: connStatusEl },
+    `Tekening binnenlezen… ${doc.filename}`,
+  );
+  try {
+    load.setLabel("Tekening downloaden…");
+    const buf = await fetchArrayBufferWithProgress(
+      `/api/drawings/download?document_id=${encodeURIComponent(activeDocumentId)}`,
+      {
+        credentials: "include",
+        headers: apiAuthHeaders(auth()!.token),
+      },
+      (received, total) => load.setBytes(received, total),
+    );
+    const pdfjsLib = window.pdfjsLib;
+    if (!pdfjsLib) {
+      docHintEl.textContent = "PDF.js niet geladen";
+      setStatus("PDF.js niet geladen", "err");
+      return;
+    }
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    load.setLabel("PDF decoderen…");
+    load.setFraction(null);
+    pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
+    pdfTotalPages = pdfDoc.numPages;
+    regionPageInput.value = String(pdfPageNum);
+    load.setLabel("Pagina renderen…");
+    await renderPdfPage();
+    drawRegionsOverlay();
+    load.done();
+    setStatus(`Tekening geladen — ${doc.filename}`, "ok");
+  } catch (err) {
+    load.done();
+    const msg = err instanceof Error ? err.message : String(err);
+    docHintEl.textContent = msg.replace(/^Download mislukt/, "PDF laden mislukt");
+    setStatus(docHintEl.textContent, "err");
   }
-  const buf = await res.arrayBuffer();
-  const pdfjsLib = window.pdfjsLib;
-  if (!pdfjsLib) {
-    docHintEl.textContent = "PDF.js niet geladen";
-    return;
-  }
-  pdfjsLib.GlobalWorkerOptions.workerSrc =
-    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-  pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
-  pdfTotalPages = pdfDoc.numPages;
-  regionPageInput.value = String(pdfPageNum);
-  await renderPdfPage();
-  drawRegionsOverlay();
 }
 
 async function renderPdfPage(): Promise<void> {
@@ -2262,8 +2291,18 @@ queueOpenBtn?.addEventListener("click", () => {
   openSelectedQueueProject();
 });
 
+/** Open on double-click (dblclick + click.detail for browsers that under-fire dblclick on <select>). */
 queueSelectEl?.addEventListener("dblclick", () => {
   openSelectedQueueProject();
+});
+queueSelectEl?.addEventListener("click", (ev) => {
+  if (ev.detail >= 2) openSelectedQueueProject();
+});
+queueSelectEl?.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") {
+    ev.preventDefault();
+    openSelectedQueueProject();
+  }
 });
 
 queueSelectEl?.addEventListener("change", () => {

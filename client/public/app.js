@@ -326,12 +326,10 @@ function renderGlobalInboxList(unreadCount) {
   inboxListEl.innerHTML = "";
   const unread = unreadCount ?? cachedInbox.filter((i) => i.unread).length;
   if (inboxBadgeEl) {
-    if (unread > 0) {
-      inboxBadgeEl.hidden = false;
-      inboxBadgeEl.textContent = String(unread);
-    } else {
-      inboxBadgeEl.hidden = true;
-    }
+    inboxBadgeEl.hidden = false;
+    inboxBadgeEl.textContent = String(unread);
+    inboxBadgeEl.classList.toggle("is-zero", unread === 0);
+    inboxBadgeEl.setAttribute("aria-label", `${unread} ongelezen`);
   }
   if (inboxEmptyEl) inboxEmptyEl.classList.toggle("hidden", cachedInbox.length > 0);
   for (const item of cachedInbox) {

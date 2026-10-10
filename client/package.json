@@ -1,12 +1,13 @@
 {
   "name": "app-gevelwering-client",
   "private": true,
-  "version": "0.72",
+  "version": "0.74",
   "type": "module",
   "scripts": {
     "build": "esbuild src/app.ts src/admin.ts src/engineer.ts src/floormap.ts src/materials.ts src/ga.ts src/handleiding.ts --bundle --outdir=public --format=esm --target=es2020 && npm run build:discover-server",
     "build:discover-server": "esbuild src/facade-discover-node-entry.ts --bundle --platform=node --format=esm --outfile=lib/facade-discover-core.mjs",
     "test:discover": "esbuild src/test-facade-discover.ts --bundle --platform=node --format=cjs --outfile=/tmp/test-facade-discover.js && node /tmp/test-facade-discover.js",
+    "test:kozijn": "esbuild src/test-kozijn-frame.ts --bundle --platform=node --format=cjs --outfile=/tmp/test-kozijn-frame.js && node /tmp/test-kozijn-frame.js",
     "serve": "node serve.mjs",
     "start": "npm run build && node serve.mjs"
   },
